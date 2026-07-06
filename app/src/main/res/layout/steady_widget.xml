@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:background="#1E2937"
+    android:padding="8dp">
+
+    <TextView
+        android:id="@+id/widget_title"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Steady • Morning"
+        android:textColor="#22C55E"
+        android:textSize="14sp"
+        android:textStyle="bold" />
+
+    <!-- Current group - 2x larger, easy tap targets (min ~48dp effective) -->
+    <TextView android:id="@+id/current_row_0" android:layout_width="match_parent" android:layout_height="wrap_content" android:textColor="#FFFFFF" android:textSize="18sp" android:padding="10dp" android:minHeight="48dp" android:background="#1E3A5F" android:layout_marginBottom="4dp" />
+    <TextView android:id="@+id/current_row_1" android:layout_width="match_parent" android:layout_height="wrap_content" android:textColor="#FFFFFF" android:textSize="18sp" android:padding="10dp" android:minHeight="48dp" android:background="#1E3A5F" android:layout_marginBottom="4dp" />
+    <TextView android:id="@+id/current_row_2" android:layout_width="match_parent" android:layout_height="wrap_content" android:textColor="#FFFFFF" android:textSize="18sp" android:padding="10dp" android:minHeight="48dp" android:background="#1E3A5F" android:layout_marginBottom="6dp" />
+
+    <!-- Missed from previous group -->
+    <TextView android:id="@+id/missed_header" android:layout_width="match_parent" android:layout_height="wrap_content" android:textColor="#FCA5A5" android:textSize="11sp" android:padding="4dp" android:textStyle="bold" />
+    <TextView android:id="@+id/missed_row_0" android:layout_width="match_parent" android:layout_height="wrap_content" android:textColor="#E2E8F0" android:textSize="12sp" android:padding="6dp" />
+
+    <!-- Upcoming group preview -->
+    <TextView android:id="@+id/upcoming_header" android:layout_width="match_parent" android:layout_height="wrap_content" android:textColor="#93C5FD" android:textSize="11sp" android:padding="4dp" android:textStyle="bold" />
+    <TextView android:id="@+id/upcoming_row_0" android:layout_width="match_parent" android:layout_height="wrap_content" android:textColor="#E2E8F0" android:textSize="12sp" android:padding="6dp" />
+
+    <Button
+        android:id="@+id/open_btn"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Open Steady"
+        android:textSize="11sp"
+        android:padding="4dp"
+        android:backgroundTint="#22C55E"
+        android:textColor="#000000" />
+</LinearLayout>

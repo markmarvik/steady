@@ -1,25 +1,22 @@
 package com.steady.habittracker
 
 import android.os.Bundle
+import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
@@ -28,68 +25,120 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.viewmodel.compose.viewModel
+import com.steady.habittracker.data.AndroidHabitRepository
 import com.steady.habittracker.data.AppData
 import com.steady.habittracker.data.Habit
-import com.steady.habittracker.data.HabitRepository
-import kotlinx.coroutines.launch
+import com.steady.habittracker.ui.HistoryScreen
+import com.steady.habittracker.ui.LogEntryDialog
+import com.steady.habittracker.ui.ManageScreen
+import com.steady.habittracker.ui.OnboardingScreen
+import com.steady.habittracker.ui.SkipPromptDialog
+import com.steady.habittracker.ui.SteadyViewModel
+import com.steady.habittracker.ui.TabButton
+import com.steady.habittracker.ui.TodayScreen
 import java.text.SimpleDateFormat
-import java.util.*
+import java.util.Date
+import java.util.Locale
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
 
 class MainActivity : ComponentActivity() {
 
-    private lateinit var repository: HabitRepository
-
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        repository = HabitRepository(this)
+
+        // Create repo once (Android specific). ViewModel will hold reference.
+        val repository = AndroidHabitRepository(this)
+
+        // Schedule any configured reminders (best effort on launch / after boot handled by receiver)
+        try {
+            val scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO)
+            scope.launch {
+                val data = repository.appDataFlow.first()
+                com.steady.habittracker.reminders.AlarmScheduler.scheduleAll(this@MainActivity, data.reminders)
+            }
+        } catch (_: Exception) {}
 
         setContent {
-            MaterialTheme(
-                colorScheme = darkColorScheme(
-                    primary = Color(0xFF22C55E),
-                    background = Color(0xFF0F172A),
-                    surface = Color(0xFF1E2937)
-                )
-            ) {
-                SteadyApp(repository)
-            }
+            val viewModel: SteadyViewModel = viewModel(
+                factory = object : androidx.lifecycle.ViewModelProvider.Factory {
+                    @Suppress("UNCHECKED_CAST")
+                    override fun <T : androidx.lifecycle.ViewModel> create(modelClass: Class<T>): T {
+                        return SteadyViewModel(repository) as T
+                    }
+                }
+            )
+            // Theme is resolved inside SteadyApp using appData.colorScheme (dynamic)
+            SteadyApp(viewModel = viewModel, repository = repository)
         }
     }
 }
 
 @Composable
-fun SteadyApp(repository: HabitRepository) {
-    val scope = rememberCoroutineScope()
-    var appData by remember { mutableStateOf(AppData()) }
-    var selectedTab by remember { mutableIntStateOf(0) } // 0 = Today, 1 = History
-    var showAddDialog by remember { mutableStateOf(false) }
+fun SteadyApp(viewModel: SteadyViewModel, repository: AndroidHabitRepository) {
+    val appData by viewModel.appData.collectAsState()
+    var selectedTab by remember { mutableIntStateOf(0) }
+    var promptHabitId by remember { mutableStateOf<String?>(null) }
+    var progressExpanded by remember { mutableStateOf(false) }
+    var showSettings by remember { mutableStateOf(false) }
 
-    // Load data
-    LaunchedEffect(Unit) {
-        repository.appDataFlow.collect { data ->
-            appData = data
+    val completionRate by viewModel.completionRate.collectAsState()
+    val streak by viewModel.streak.collectAsState()
+    val todayEntries by viewModel.todayEntries.collectAsState()
+    val weeklyRates by viewModel.weeklyRates.collectAsState()
+    val groupWeeklyRates by viewModel.groupWeeklyRates.collectAsState()
+    val today = viewModel.today
+    val period by viewModel.currentPeriod.collectAsState()
+
+    val doneCount = todayEntries.count { (_, e) -> e.value >= 0.5 }
+    val total = appData.habits.size.coerceAtLeast(1)
+
+    val promptHabit = promptHabitId?.let { id -> appData.habits.find { it.id == id } }
+
+    // For NOTE / richer type log dialogs (gratitude, duration, counters etc.)
+    var logHabit by remember { mutableStateOf<Habit?>(null) }
+
+    val context = LocalContext.current
+    val accent = getAccentColor(appData.colorScheme)
+
+    // SAF launcher for JSON backup export (works for empty data: groups/habits structure only)
+    val exportLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("application/json")
+    ) { uri ->
+        uri?.let { u ->
+            try {
+                val json = Json { prettyPrint = true }
+                val payload = json.encodeToString(appData)
+                context.contentResolver.openOutputStream(u)?.use { os ->
+                    os.write(payload.toByteArray(Charsets.UTF_8))
+                }
+                Toast.makeText(context, "Backup exported", Toast.LENGTH_SHORT).show()
+            } catch (e: Exception) {
+                Toast.makeText(context, "Export failed: ${e.message}", Toast.LENGTH_LONG).show()
+            }
         }
     }
 
-    val today = remember { getTodayString() }
-    val todayCompletions = appData.completions[today] ?: emptyList()
-    val completionRate = if (appData.habits.isNotEmpty()) {
-        todayCompletions.size.toFloat() / appData.habits.size
-    } else 0f
-
+    if (!appData.onboarded) {
+        // Onboarding gate (full screen for first run)
+        OnboardingScreen(onComplete = { viewModel.completeOnboarding() })
+    } else {
+    // Dynamic theme wrapper (accent from settings)
+    MaterialTheme(
+        colorScheme = darkColorScheme(
+            primary = accent,
+            background = Color(0xFF0F172A),
+            surface = Color(0xFF1E2937)
+        )
+    ) {
     Scaffold(
-        containerColor = Color(0xFF0F172A),
-        floatingActionButton = {
-            if (selectedTab == 0) {
-                FloatingActionButton(
-                    onClick = { showAddDialog = true },
-                    containerColor = Color(0xFF22C55E)
-                ) {
-                    Icon(Icons.Default.Add, contentDescription = "Add habit")
-                }
-            }
-        }
+        containerColor = Color(0xFF0F172A)
+        // No FAB: removed per request (adds only via Manage now)
     ) { padding ->
         Column(
             modifier = Modifier
@@ -97,7 +146,7 @@ fun SteadyApp(repository: HabitRepository) {
                 .padding(padding)
                 .padding(16.dp)
         ) {
-            // Header
+            // Header with gear for Settings
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -109,41 +158,74 @@ fun SteadyApp(repository: HabitRepository) {
                     fontWeight = FontWeight.Bold,
                     color = Color.White
                 )
-                Text(
-                    SimpleDateFormat("EEE, MMM d", Locale.getDefault()).format(Date()),
-                    color = Color(0xFF64748B),
-                    fontSize = 14.sp
-                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(horizontalAlignment = Alignment.End) {
+                        Text(
+                            SimpleDateFormat("EEE, MMM d", Locale.getDefault()).format(Date()),
+                            color = Color(0xFF64748B),
+                            fontSize = 13.sp
+                        )
+                        if (streak > 0) {
+                            Text("🔥 $streak day streak", color = accent, fontSize = 12.sp)
+                        }
+                    }
+                    Spacer(Modifier.width(8.dp))
+                    IconButton(onClick = { showSettings = true }) {
+                        Icon(Icons.Default.Settings, contentDescription = "Settings", tint = Color(0xFF94A3B8))
+                    }
+                }
             }
 
-            Spacer(Modifier.height(24.dp))
+            Spacer(Modifier.height(16.dp))
 
-            // Progress Card
+            // Enhanced Progress Card: circle + weekly tracker + trend arrow + expandable per-group
+            val yesterdayRate = weeklyRates.getOrNull(5)?.second ?: 0f  // 7 days reversed: index 6=today, 5=yest
+            val trendDelta = ((completionRate - yesterdayRate) * 100).toInt()
+            val trendPositive = completionRate >= yesterdayRate
+
             Card(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { progressExpanded = !progressExpanded },
                 colors = CardDefaults.cardColors(containerColor = Color(0xFF1E2937)),
                 shape = RoundedCornerShape(24.dp)
             ) {
                 Column(
-                    modifier = Modifier.padding(20.dp),
+                    modifier = Modifier.padding(18.dp),
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
-                    Text(
-                        "TODAY'S PROGRESS",
-                        fontSize = 12.sp,
-                        color = Color(0xFF22C55E),
-                        letterSpacing = 1.sp
-                    )
-                    
-                    Spacer(Modifier.height(12.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            "TODAY • ${period.lowercase().replaceFirstChar { it.uppercase() }}",
+                            fontSize = 11.sp,
+                            color = accent,
+                            letterSpacing = 1.sp
+                        )
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text("${doneCount}/${total}", color = Color(0xFF94A3B8), fontSize = 12.sp)
+                            if (weeklyRates.isNotEmpty()) {
+                                Spacer(Modifier.width(8.dp))
+                                Text(
+                                    if (trendDelta == 0) "•" else if (trendPositive) "▲${if (trendDelta>0) "+" else ""}${trendDelta}%" else "▼${trendDelta}%",
+                                    color = if (trendPositive) Color(0xFF4ADE80) else Color(0xFFF87171),
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                            }
+                        }
+                    }
 
-                    // Progress Ring
+                    Spacer(Modifier.height(8.dp))
+
                     Box(
                         contentAlignment = Alignment.Center,
-                        modifier = Modifier.size(140.dp)
+                        modifier = Modifier.size(120.dp)
                     ) {
-                        Canvas(modifier = Modifier.size(140.dp)) {
-                            val strokeWidth = 14.dp.toPx()
+                        Canvas(modifier = Modifier.size(120.dp)) {
+                            val strokeWidth = 12.dp.toPx()
                             drawArc(
                                 color = Color(0xFF334155),
                                 startAngle = -90f,
@@ -153,7 +235,7 @@ fun SteadyApp(repository: HabitRepository) {
                                 size = Size(size.width, size.height)
                             )
                             drawArc(
-                                color = Color(0xFF22C55E),
+                                color = accent,
                                 startAngle = -90f,
                                 sweepAngle = completionRate * 360f,
                                 useCenter = false,
@@ -164,299 +246,188 @@ fun SteadyApp(repository: HabitRepository) {
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
                             Text(
                                 "${(completionRate * 100).toInt()}%",
-                                fontSize = 36.sp,
+                                fontSize = 28.sp,
                                 fontWeight = FontWeight.Bold,
                                 color = Color.White
                             )
-                            Text(
-                                "${todayCompletions.size}/${appData.habits.size}",
-                                color = Color(0xFF64748B),
-                                fontSize = 14.sp
-                            )
+                            Text("today", color = Color(0xFF64748B), fontSize = 11.sp)
+                        }
+                    }
+
+                    // Weekly tracker: 7 small circles
+                    if (weeklyRates.isNotEmpty()) {
+                        Spacer(Modifier.height(10.dp))
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            weeklyRates.forEachIndexed { idx, (date, rate) ->
+                                val c = when {
+                                    rate >= 0.85f -> accent
+                                    rate >= 0.5f -> Color(0xFF4ADE80)
+                                    rate > 0f -> Color(0xFF166534)
+                                    else -> Color(0xFF334155)
+                                }
+                                val label = try { java.time.LocalDate.parse(date).dayOfWeek.name.take(1) } catch (_: Exception) { "?" }
+                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                    Canvas(Modifier.size(14.dp)) {
+                                        drawCircle(color = c, radius = 7.dp.toPx())
+                                    }
+                                    Text(label, color = Color(0xFF64748B), fontSize = 8.sp)
+                                }
+                            }
+                        }
+                    }
+
+                    // Expanded: per-group weekly circles
+                    if (progressExpanded && groupWeeklyRates.isNotEmpty()) {
+                        Spacer(Modifier.height(12.dp))
+                        Text("This week by group", color = Color(0xFF94A3B8), fontSize = 10.sp)
+                        Spacer(Modifier.height(6.dp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceEvenly
+                        ) {
+                            groupWeeklyRates.forEach { (gName, gRate) ->
+                                val gc = when {
+                                    gRate >= 0.85f -> accent
+                                    gRate >= 0.5f -> Color(0xFF4ADE80)
+                                    gRate > 0f -> Color(0xFF166534)
+                                    else -> Color(0xFF334155)
+                                }
+                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                    Canvas(Modifier.size(22.dp)) {
+                                        drawCircle(color = gc, radius = 11.dp.toPx())
+                                    }
+                                    Text(gName.take(10), color = Color(0xFFCBD5E1), fontSize = 9.sp)
+                                    Text("${(gRate*100).toInt()}%", color = Color(0xFF94A3B8), fontSize = 9.sp)
+                                }
+                            }
                         }
                     }
                 }
             }
 
-            Spacer(Modifier.height(20.dp))
+            Spacer(Modifier.height(14.dp))
 
-            // Tabs
+            // Tabs (Today / History / Manage) — 3 tabs kept
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .background(Color(0xFF1E2937), RoundedCornerShape(50))
                     .padding(4.dp)
             ) {
-                TabButton("Today", selectedTab == 0) { selectedTab = 0 }
-                TabButton("History", selectedTab == 1) { selectedTab = 1 }
+                TabButton("Today", selectedTab == 0, modifier = Modifier.weight(1f)) { selectedTab = 0 }
+                TabButton("History", selectedTab == 1, modifier = Modifier.weight(1f)) { selectedTab = 1 }
+                TabButton("Manage", selectedTab == 2, modifier = Modifier.weight(1f)) { selectedTab = 2 }
             }
 
-            Spacer(Modifier.height(16.dp))
+            Spacer(Modifier.height(12.dp))
 
             when (selectedTab) {
                 0 -> TodayScreen(
                     appData = appData,
-                    todayCompletions = todayCompletions,
-                    onToggleHabit = { habitId ->
-                        scope.launch {
-                            val newCompletions = appData.completions.toMutableMap()
-                            val list = newCompletions.getOrPut(today) { mutableListOf() } as MutableList
-                            
-                            if (list.contains(habitId)) list.remove(habitId) else list.add(habitId)
-                            
-                            val newData = appData.copy(completions = newCompletions)
-                            repository.saveData(newData)
-                        }
-                    },
-                    onDeleteHabit = { habitId ->
-                        scope.launch {
-                            val newHabits = appData.habits.filter { it.id != habitId }
-                            val newCompletions = appData.completions.mapValues { (_, list) ->
-                                list.filter { it != habitId }
-                            }
-                            repository.saveData(appData.copy(habits = newHabits, completions = newCompletions))
-                        }
-                    }
+                    todayEntries = todayEntries,
+                    onToggle = viewModel::toggleCheckbox,
+                    onLogEntry = viewModel::logEntry,  // kept for compatibility in some paths
+                    onRequestLog = { h -> logHabit = h },
+                    onSkip = viewModel::skipHabit,
+                    onShowSkipPrompt = { id -> promptHabitId = id }
                 )
-                1 -> HistoryScreen(appData)
+                1 -> HistoryScreen(appData = appData)
+                2 -> ManageScreen(
+                    appData = appData,
+                    onAddGroup = { n, h, p -> viewModel.addGroup(n, h, p) },
+                    onAddHabit = { name, why, gid, type -> viewModel.addHabit(name, why, gid, type) },
+                    onDeleteHabit = viewModel::deleteHabit,  // now archives
+                    onSetReminder = viewModel::setReminder,
+                    onToggleReminder = viewModel::toggleReminder,
+                    onArchiveGroup = { viewModel.deleteGroup(it) },
+                    onExportCsv = { exportLauncher.launch("steady_backup_${java.time.LocalDate.now()}.json") },
+                    onImportCsv = { /* TODO: can add OpenDocument for JSON restore later */ },
+                    onUpdateHabit = viewModel::updateHabit,
+                    onUnarchiveGroup = { viewModel.unarchiveGroup(it) },
+                    onUnarchiveHabit = { viewModel.unarchiveHabit(it) }
+                )
             }
         }
     }
+    } // end Scaffold
+    } // end else (non-onboarding)
 
-    if (showAddDialog) {
-        AddHabitDialog(
-            onDismiss = { showAddDialog = false },
-            onAdd = { name, why ->
-                scope.launch {
-                    val newHabit = Habit(
-                        id = "custom_${System.currentTimeMillis()}",
-                        name = name,
-                        why = why
+    // Settings dialog (color scheme picker)  -- shown for onboarded users too
+
+    if (showSettings) {
+        AlertDialog(
+            onDismissRequest = { showSettings = false },
+            title = { Text("Settings") },
+            text = {
+                Column {
+                    Text("Color scheme", fontWeight = FontWeight.SemiBold, color = Color(0xFFCBD5E1))
+                    Spacer(Modifier.height(8.dp))
+                    val schemes = listOf(
+                        "default" to "Default (Green)",
+                        "blue" to "Ocean Blue",
+                        "orange" to "Sunset Orange",
+                        "purple" to "Royal Purple",
+                        "slate" to "Slate Minimal"
                     )
-                    val newData = appData.copy(habits = appData.habits + newHabit)
-                    repository.saveData(newData)
-                    showAddDialog = false
+                    schemes.forEach { (key, label) ->
+                        TextButton(onClick = {
+                            viewModel.setColorScheme(key)
+                            showSettings = false
+                        }) {
+                            Text(label, color = if (appData.colorScheme == key) accent else Color(0xFF94A3B8))
+                        }
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    Text("Changes apply instantly. More options coming.", fontSize = 11.sp, color = Color(0xFF475569))
                 }
+            },
+            confirmButton = {
+                TextButton(onClick = { showSettings = false }) { Text("Close") }
+            }
+        )
+    }
+
+    // Skip prompt
+    promptHabit?.let { h ->
+        SkipPromptDialog(
+            habit = h,
+            skipCount = viewModel.getRecentSkipCount(h.id),
+            onDismiss = { promptHabitId = null },
+            onEdit = { /* open edit - for now just clear */ promptHabitId = null },
+            onArchive = { viewModel.deleteHabit(h.id); promptHabitId = null },
+            onLockIn = {
+                // lock by updating canSkip=false
+                val locked = h.copy(canSkip = false)
+                viewModel.updateHabit(locked)
+                promptHabitId = null
+            }
+        )
+    }
+
+    // Log dialog for NOTE (gratitude), DURATION, COUNTER, SCALE etc. - shows popup + opens keyboard
+    logHabit?.let { h ->
+        LogEntryDialog(
+            habit = h,
+            onDismiss = { logHabit = null },
+            onLog = { value, note ->
+                viewModel.logEntry(h.id, value, note)
+                logHabit = null
             }
         )
     }
 }
 
-@Composable
-fun TabButton(text: String, selected: Boolean, onClick: () -> Unit) {
-    Box(
-        modifier = Modifier
-            .weight(1f)
-            .clip(RoundedCornerShape(50))
-            .background(if (selected) Color(0xFF22C55E) else Color.Transparent)
-            .clickable { onClick() }
-            .padding(vertical = 10.dp),
-        contentAlignment = Alignment.Center
-    ) {
-        Text(
-            text,
-            color = if (selected) Color.Black else Color.White,
-            fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal
-        )
-    }
+// Accent resolver (used for dynamic theme + progress)
+private fun getAccentColor(scheme: String): Color = when (scheme) {
+    "blue" -> Color(0xFF3B82F6)
+    "orange" -> Color(0xFFF97316)
+    "purple" -> Color(0xFF8B5CF6)
+    "slate" -> Color(0xFF64748B)
+    else -> Color(0xFF22C55E) // default green
 }
 
-@Composable
-fun TodayScreen(
-    appData: AppData,
-    todayCompletions: List<String>,
-    onToggleHabit: (String) -> Unit,
-    onDeleteHabit: (String) -> Unit
-) {
-    if (appData.habits.isEmpty()) {
-        Text("No habits yet. Add some!", color = Color.Gray)
-        return
-    }
-
-    LazyColumn(
-        verticalArrangement = Arrangement.spacedBy(8.dp)
-    ) {
-        items(appData.habits) { habit ->
-            val isCompleted = todayCompletions.contains(habit.id)
-            
-            Card(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable { onToggleHabit(habit.id) },
-                colors = CardDefaults.cardColors(
-                    containerColor = if (isCompleted) Color(0xFF166534) else Color(0xFF1E2937)
-                ),
-                shape = RoundedCornerShape(20.dp)
-            ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(16.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .size(28.dp)
-                            .background(
-                                if (isCompleted) Color(0xFF22C55E) else Color(0xFF475569),
-                                RoundedCornerShape(8.dp)
-                            ),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        if (isCompleted) {
-                            Icon(
-                                Icons.Default.Check,
-                                contentDescription = null,
-                                tint = Color.Black,
-                                modifier = Modifier.size(18.dp)
-                            )
-                        }
-                    }
-                    
-                    Spacer(Modifier.width(16.dp))
-                    
-                    Column(Modifier.weight(1f)) {
-                        Text(
-                            habit.name,
-                            color = Color.White,
-                            fontSize = 16.sp,
-                            fontWeight = FontWeight.SemiBold
-                        )
-                        if (habit.why.isNotBlank()) {
-                            Text(
-                                habit.why,
-                                color = Color(0xFF64748B),
-                                fontSize = 12.sp,
-                                lineHeight = 16.sp
-                            )
-                        }
-                    }
-                    
-                    IconButton(onClick = { onDeleteHabit(habit.id) }) {
-                        Icon(
-                            Icons.Default.Delete,
-                            contentDescription = "Delete",
-                            tint = Color(0xFF64748B)
-                        )
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-fun HistoryScreen(appData: AppData) {
-    val calendar = Calendar.getInstance()
-    val history = mutableListOf<Pair<String, Float>>()
-    
-    repeat(14) { i ->
-        val date = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(calendar.time)
-        val completed = appData.completions[date]?.size ?: 0
-        val total = appData.habits.size.coerceAtLeast(1)
-        val rate = completed.toFloat() / total
-        history.add(date to rate)
-        calendar.add(Calendar.DAY_OF_YEAR, -1)
-    }
-    history.reverse()
-
-    Text(
-        "Last 14 Days",
-        color = Color(0xFF22C55E),
-        fontSize = 14.sp,
-        modifier = Modifier.padding(bottom = 12.dp)
-    )
-
-    LazyColumn {
-        items(history) { (date, rate) ->
-            val color = when {
-                rate >= 0.85 -> Color(0xFF22C55E)
-                rate >= 0.5 -> Color(0xFF4ADE80)
-                rate > 0 -> Color(0xFF166534)
-                else -> Color(0xFF334155)
-            }
-            
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(vertical = 6.dp),
-                    verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    date,
-                    color = Color(0xFF94A3B8),
-                    fontSize = 13.sp,
-                    modifier = Modifier.width(100.dp)
-                )
-                
-                Box(
-                    modifier = Modifier
-                        .height(8.dp)
-                        .weight(1f)
-                        .clip(RoundedCornerShape(4.dp))
-                        .background(color)
-                )
-                
-                Text(
-                    "${(rate * 100).toInt()}%",
-                    color = Color.White,
-                    fontSize = 13.sp,
-                    modifier = Modifier.width(50.dp),
-                    textAlign = androidx.compose.ui.text.style.TextAlign.End
-                )
-            }
-        }
-    }
-}
-
-@Composable
-fun AddHabitDialog(
-    onDismiss: () -> Unit,
-    onAdd: (name: String, why: String) -> Unit
-) {
-    var name by remember { mutableStateOf("") }
-    var why by remember { mutableStateOf("") }
-
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("New Habit") },
-        text = {
-            Column {
-                OutlinedTextField(
-                    value = name,
-                    onValueChange = { name = it },
-                    label = { Text("Habit name") },
-                    modifier = Modifier.fillMaxWidth()
-                )
-                Spacer(Modifier.height(8.dp))
-                OutlinedTextField(
-                    value = why,
-                    onValueChange = { why = it },
-                    label = { Text("Why it matters (optional)") },
-                    modifier = Modifier.fillMaxWidth(),
-                    minLines = 2
-                )
-            }
-        },
-        confirmButton = {
-            TextButton(
-                onClick = {
-                    if (name.isNotBlank()) {
-                        onAdd(name, why)
-                    }
-                }
-            ) {
-                Text("Add")
-            }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) {
-                Text("Cancel")
-            }
-        }
-    )
-}
-
-fun getTodayString(): String {
-    return SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date())
-}
+// UI composables have been extracted to ui/ package
+// (keeps MainActivity small and focused)

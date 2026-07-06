@@ -8,6 +8,7 @@ plugins {
 android {
     namespace = "com.steady.habittracker"
     compileSdk = 35
+    buildToolsVersion = "34.0.0"   // pinned to avoid Gradle auto-pulling unexpected build-tools versions
 
     defaultConfig {
         applicationId = "com.steady.habittracker"
@@ -63,6 +64,9 @@ dependencies {
     
     // Kotlinx Serialization
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
+    
+    // kotlinx-datetime (portable date/time for Android + future KMP/iOS)
+    implementation("org.jetbrains.kotlinx:kotlinx-datetime:0.6.1")
     
     // Lifecycle ViewModel
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.7")

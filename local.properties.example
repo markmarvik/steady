@@ -1,0 +1,4 @@
+# Copy this file to local.properties and adjust the path.
+# This file is gitignored (it's machine-specific).
+
+sdk.dir=/home/tux/android-sdk
