@@ -37,15 +37,25 @@ class AndroidHabitRepository(private val context: Context) : HabitRepository {
     
     private val DATA_KEY = stringPreferencesKey("app_data")
 
+    // Simple in-memory cache to avoid re-parsing the full (potentially large) JSON blob on every flow emission.
+    // Addresses part of #18 perf concern for growing history. Decode only on actual content change.
+    private var lastJson: String? = null
+    private var cachedParsed: AppData? = null
+
     override val appDataFlow: Flow<AppData> = context.dataStore.data
         .map { preferences ->
             val jsonString = preferences[DATA_KEY] ?: ""
             val data = if (jsonString.isBlank()) {
                 getDefaultData()
+            } else if (jsonString == lastJson && cachedParsed != null) {
+                cachedParsed!!
             } else {
                 try {
                     val parsed = json.decodeFromString<AppData>(jsonString)
-                    migrateIfNeeded(parsed)
+                    val migrated = migrateIfNeeded(parsed)
+                    lastJson = jsonString
+                    cachedParsed = migrated
+                    migrated
                 } catch (e: Exception) {
                     getDefaultData()
                 }
@@ -55,18 +65,22 @@ class AndroidHabitRepository(private val context: Context) : HabitRepository {
         }
 
     override suspend fun saveData(data: AppData) {
+        // Update cache immediately so subsequent flow emissions / reads are fast (perf #18)
+        val encoded = json.encodeToString(data)
+        lastJson = encoded
+        cachedParsed = data
         context.dataStore.edit { preferences ->
-            preferences[DATA_KEY] = json.encodeToString(data)
+            preferences[DATA_KEY] = encoded
         }
     }
 
     /**
-     * Migrate older schemas to v4.
-     * Adds: archived, canSkip, parentId, skipped, onboarded, colorScheme.
-     * Legacy users get onboarded=true to avoid re-showing welcome.
+     * Migrate older schemas to v5.
+     * Adds schedules + activeScheduleId for advanced time scheduling (24h circle, multiple schedules,
+     * weekday + specific-date rules, shift presets).
      */
     private fun migrateIfNeeded(data: AppData): AppData {
-        if (data.schemaVersion >= 4 && data.groups.isNotEmpty() && data.habits.isNotEmpty()) {
+        if (data.schemaVersion >= 5 && data.groups.isNotEmpty() && data.habits.isNotEmpty()) {
             return data
         }
         // Start from current or fresh
@@ -82,7 +96,8 @@ class AndroidHabitRepository(private val context: Context) : HabitRepository {
                             h.name.contains("hygiene", true) || h.name.contains("shower", true)
             h.copy(
                 archived = h.archived,
-                canSkip = if (isHygiene) false else h.canSkip
+                canSkip = if (isHygiene) false else h.canSkip,
+                isSupplement = h.isSupplement
             )
         }
         val upgradedEntries = d.entries.mapValues { (_, m) ->
@@ -93,9 +108,12 @@ class AndroidHabitRepository(private val context: Context) : HabitRepository {
             groups = upgradedGroups,
             habits = upgradedHabits,
             entries = upgradedEntries,
-            schemaVersion = 4,
-            onboarded = if (d.onboarded) d.onboarded else true, // legacy users treated as onboarded
-            colorScheme = if (d.colorScheme.isNotBlank()) d.colorScheme else "default"
+            schemaVersion = 5,
+            onboarded = if (d.onboarded) d.onboarded else true,
+            colorScheme = if (d.colorScheme.isNotBlank()) d.colorScheme else "default",
+            backgroundMode = if (d.backgroundMode.isNotBlank()) d.backgroundMode else "dark",
+            schedules = d.schedules.ifEmpty { emptyList() },
+            activeScheduleId = d.activeScheduleId
         )
     }
 
@@ -142,7 +160,7 @@ class AndroidHabitRepository(private val context: Context) : HabitRepository {
             Habit("h_light", "Morning Sunlight / Light exposure", "Aligns circadian rhythm, boosts mood/energy.", "g_morn", HabitType.CHECKBOX, order = 0),
             Habit("h_breathe", "Box Breathing (6 min)", "Calms nervous system before day starts.", "g_morn", HabitType.DURATION_MIN, target = 6.0, unit = "min", order = 1),
             Habit("h_teeth", "Brush + Floss + Tongue scrape", "Dental + overall health foundation.", "g_morn", HabitType.CHECKBOX, order = 2, canSkip = false),
-            Habit("h_supp_am", "Morning Supplements (Omega-3, Multi)", "Foundational nutrition.", "g_supp", HabitType.COUNTER, target = 1.0, unit = "", order = 3),
+            Habit("h_supp_am", "Morning Supplements (Omega-3, Multi)", "Foundational nutrition.", "g_supp", HabitType.COUNTER, target = 1.0, unit = "", order = 3, isSupplement = true),
 
             // Focus/Work
             Habit("h_move", "Move Your Body", "20+ min walk or exercise for brain and longevity.", "g_focus", HabitType.CHECKBOX, order = 0),
@@ -153,7 +171,7 @@ class AndroidHabitRepository(private val context: Context) : HabitRepository {
             // Evening
             Habit("h_wind", "Wind Down Routine", "Protects sleep quality with consistent bedtime.", "g_even", HabitType.CHECKBOX, order = 0),
             Habit("h_hydrate", "Stay Hydrated", "Better energy, focus and recovery.", "g_even", HabitType.COUNTER, target = 2.5, unit = "L", order = 1),
-            Habit("h_mg", "Magnesium + Chamomile", "Nervous system + sleep prep.", "g_even", HabitType.CHECKBOX, order = 2),
+            Habit("h_mg", "Magnesium + Chamomile", "Nervous system + sleep prep.", "g_even", HabitType.CHECKBOX, order = 2, isSupplement = true),
             Habit("h_nSDR", "NSDR / 4-7-8 Breathing", "Non-sleep deep rest for recovery.", "g_even", HabitType.DURATION_MIN, target = 10.0, unit = "min", order = 3),
 
             // Mindset (journaling)
@@ -172,147 +190,67 @@ class AndroidHabitRepository(private val context: Context) : HabitRepository {
             habits = habits,
             entries = emptyMap(),
             reminders = reminders,
-            schemaVersion = 4,
+            schemaVersion = 5,
             onboarded = false,
-            colorScheme = "default"
+            colorScheme = "default",
+            backgroundMode = "dark",
+            schedules = emptyList(),
+            activeScheduleId = null
         )
     }
 
     // --- Convenience helpers used by UI / schedulers (not part of portable interface) ---
 
-    fun getToday(): String {
-        val today = java.time.LocalDate.now()
-        return today.toString()
-    }
+    fun getToday(): String = HabitDomain.getToday()
 
-    /** Returns sorted groups + habits in each for Today UI (non-archived only). */
-    fun groupHabits(data: AppData): List<Pair<Group, List<Habit>>> {
-        val sortedGroups = data.groups.filter { !it.archived }.sortedBy { it.order }
-        return sortedGroups.map { g ->
-            g to data.habits.filter { it.groupId == g.id && !it.archived }.sortedBy { it.order }
-        }
-    }
+    /** Returns sorted groups + habits in each for Today UI (non-archived only). Delegates to domain. */
+    fun groupHabits(data: AppData): List<Pair<Group, List<Habit>>> = HabitDomain.groupHabits(data)
 
     /** Compute current streak (consecutive days back from today with reasonable completion). */
-    fun computeStreak(data: AppData): Int {
-        if (data.habits.isEmpty()) return 0
-        val todayStr = getToday()
-        var streak = 0
-        var checkDate = java.time.LocalDate.parse(todayStr)
-        val totalHabits = data.habits.size
+    fun computeStreak(data: AppData): Int = HabitDomain.computeStreak(data)
 
-        while (true) {
-            val key = checkDate.toString()
-            val dayEntries = data.entries[key] ?: emptyMap()
-            val completedCount = dayEntries.count { (_, e) -> e.value >= 0.5 }
-            val rate = if (totalHabits > 0) completedCount.toFloat() / totalHabits else 0f
-            if (rate >= 0.6f || completedCount >= 3) { // lenient for mixed types
-                streak++
-                checkDate = checkDate.minusDays(1)
-                if (streak > 365) break
-            } else break
-        }
-        return streak
-    }
-
-    // --- Weekly / completion rate helpers for progress UI ---
+    // --- Weekly / completion rate helpers for progress UI (delegated) ---
 
     /** Overall completion rate (0f..1f) for a specific date key (yyyy-MM-dd). */
-    fun computeDayCompletion(data: AppData, dateStr: String): Float {
-        val dayMap = data.entries[dateStr] ?: emptyMap()
-        val done = dayMap.count { (_, e) -> e.value >= 0.5 }
-        val total = data.habits.size.coerceAtLeast(1)
-        return done.toFloat() / total
-    }
+    fun computeDayCompletion(data: AppData, dateStr: String): Float = HabitDomain.computeDayCompletion(data, dateStr)
 
     /** Last N days of overall rates, oldest first. Returns list of (date, rate). */
-    fun computeLastNDays(data: AppData, n: Int = 7): List<Pair<String, Float>> {
-        val result = mutableListOf<Pair<String, Float>>()
-        var d = java.time.LocalDate.now()
-        repeat(n) {
-            val key = d.toString()
-            result.add(key to computeDayCompletion(data, key))
-            d = d.minusDays(1)
-        }
-        return result.reversed()
-    }
+    fun computeLastNDays(data: AppData, n: Int = 7): List<Pair<String, Float>> = HabitDomain.computeLastNDays(data, n)
 
     /** 7-day average completion for a specific group (habits belonging to it). */
-    fun computeGroup7DayAvg(data: AppData, groupId: String): Float {
-        val groupHabits = data.habits.filter { it.groupId == groupId && !it.archived }
-        if (groupHabits.isEmpty()) return 0f
-        var sum = 0f
-        var count = 0
-        var d = java.time.LocalDate.now()
-        repeat(7) {
-            val key = d.toString()
-            val dayMap = data.entries[key] ?: emptyMap()
-            val done = groupHabits.count { h -> (dayMap[h.id]?.value ?: 0.0) >= 0.5 }
-            sum += done.toFloat() / groupHabits.size
-            count++
-            d = d.minusDays(1)
-        }
-        return if (count > 0) sum / count else 0f
-    }
+    fun computeGroup7DayAvg(data: AppData, groupId: String): Float = HabitDomain.computeGroup7DayAvg(data, groupId)
 
     /** Simple time-of-day group hint for widget / Today highlight. */
-    fun getCurrentPeriodHint(): String {
-        val hour = java.time.LocalTime.now().hour
-        return when (hour) {
-            in 5..11 -> "MORNING"
-            in 12..17 -> "WORK"
-            else -> "EVENING"
-        }
-    }
+    fun getCurrentPeriodHint(): String = HabitDomain.getCurrentPeriodHint()
 
-    // --- Active + hierarchy + archive helpers (v3) ---
+    /** Simple theme color resolver (used by app + widget). Supports AMOLED. Delegates to domain. */
+    fun resolveThemeColors(data: AppData): ThemeColors = HabitDomain.resolveThemeColors(data)
+
+    // --- Active + hierarchy + archive helpers (v3) (delegated where pure) ---
 
     /** Active (non-archived) groups, top-level first. */
-    fun getActiveGroups(data: AppData): List<Group> =
-        data.groups.filter { !it.archived }.sortedBy { it.order }
+    fun getActiveGroups(data: AppData): List<Group> = HabitDomain.getActiveGroups(data)
 
     /** Habits for a group (active only). Supports parent for subgroups. */
-    fun getActiveHabitsForGroup(data: AppData, groupId: String): List<Habit> =
-        data.habits.filter { it.groupId == groupId && !it.archived }.sortedBy { it.order }
+    fun getActiveHabitsForGroup(data: AppData, groupId: String): List<Habit> = HabitDomain.getActiveHabitsForGroup(data, groupId)
 
     /** Return nested view for a parent (e.g. Workouts and its plan subgroups). */
-    fun getSubGroups(data: AppData, parentId: String): List<Group> =
-        data.groups.filter { it.parentId == parentId && !it.archived }.sortedBy { it.order }
+    fun getSubGroups(data: AppData, parentId: String): List<Group> = HabitDomain.getSubGroups(data, parentId)
 
-    /** Archive instead of delete. Call save after. */
-    fun archiveHabit(current: AppData, habitId: String): AppData {
-        val newHabits = current.habits.map { if (it.id == habitId) it.copy(archived = true) else it }
-        return current.copy(habits = newHabits)
-    }
+    /** Archive instead of delete. Call save after. Now delegate to immutable helpers. */
+    fun archiveHabit(current: AppData, habitId: String): AppData = current.withArchivedHabit(habitId)
 
-    fun archiveGroup(current: AppData, groupId: String): AppData {
-        val newGroups = current.groups.map { if (it.id == groupId) it.copy(archived = true) else it }
-        val newHabits = current.habits.map { if (it.groupId == groupId) it.copy(archived = true) else it }
-        return current.copy(groups = newGroups, habits = newHabits)
-    }
+    fun archiveGroup(current: AppData, groupId: String): AppData = current.withArchivedGroup(groupId)
 
     /** Unarchive (restore). Does not touch entries. */
-    fun unarchiveHabit(current: AppData, habitId: String): AppData {
-        val newHabits = current.habits.map { if (it.id == habitId) it.copy(archived = false) else it }
-        return current.copy(habits = newHabits)
-    }
+    fun unarchiveHabit(current: AppData, habitId: String): AppData = current.withUnarchivedHabit(habitId)
 
-    fun unarchiveGroup(current: AppData, groupId: String): AppData {
-        val newGroups = current.groups.map { if (it.id == groupId) it.copy(archived = false) else it }
-        // Do not auto-unarchive habits (user can restore individually or we can add cascade option)
-        return current.copy(groups = newGroups)
-    }
+    fun unarchiveGroup(current: AppData, groupId: String): AppData = current.withUnarchivedGroup(groupId)
 
     // --- Skip tracking ---
 
     /** Count recent skips for a habit (distinct days in window). */
-    fun countRecentSkips(data: AppData, habitId: String, daysBack: Int = 7): Int {
-        val today = java.time.LocalDate.now()
-        return (0 until daysBack).count { offset ->
-            val d = today.minusDays(offset.toLong()).toString()
-            data.entries[d]?.get(habitId)?.skipped == true
-        }
-    }
+    fun countRecentSkips(data: AppData, habitId: String, daysBack: Int = 7): Int = HabitDomain.countRecentSkips(data, habitId, daysBack)
 
     // --- CSV backup (human + AI friendly) ---
     // Exports 3 simple CSVs (or caller can combine). Uses names + ISO times for readability.
@@ -326,10 +264,10 @@ class AndroidHabitRepository(private val context: Context) : HabitRepository {
     }
 
     fun exportHabitsCsv(data: AppData): String {
-        val header = "id,name,groupId,type,target,unit,canSkip,archived,why\n"
+        val header = "id,name,groupId,type,target,unit,canSkip,archived,why,isSupplement\n"
         val rows = data.habits.joinToString("\n") { h ->
             val why = h.why.replace(",", " ").replace("\n", " ")
-            listOf(h.id, h.name, h.groupId, h.type.name, h.target ?: "", h.unit, h.canSkip, h.archived, why).joinToString(",")
+            listOf(h.id, h.name, h.groupId, h.type.name, h.target ?: "", h.unit, h.canSkip, h.archived, why, h.isSupplement).joinToString(",")
         }
         return header + rows
     }
@@ -365,7 +303,8 @@ class AndroidHabitRepository(private val context: Context) : HabitRepository {
                 val id = p[0]
                 val existing = result.groups.find { it.id == id }
                 if (existing == null) {
-                    result = result.copy(groups = result.groups + Group(id, p[1], p.getOrNull(3) ?: "ANY", p.getOrNull(5)?.toIntOrNull() ?: 0, p.getOrNull(2)?.takeIf { it.isNotBlank() }))
+                    val ng = Group(id, p[1], p.getOrNull(3) ?: "ANY", p.getOrNull(5)?.toIntOrNull() ?: 0, p.getOrNull(2)?.takeIf { it.isNotBlank() })
+                    result = result.withAddedGroup(ng)
                 }
             }
         }
@@ -377,23 +316,80 @@ class AndroidHabitRepository(private val context: Context) : HabitRepository {
                 val id = p[0]
                 val g = p[2]
                 if (result.habits.none { it.id == id }) {
-                    result = result.copy(habits = result.habits + Habit(
+                    val nh = Habit(
                         id = id, name = p[1], groupId = g,
                         type = runCatching { HabitType.valueOf(p.getOrNull(3) ?: "CHECKBOX") }.getOrDefault(HabitType.CHECKBOX),
                         target = p.getOrNull(4)?.toDoubleOrNull(),
                         unit = p.getOrNull(5) ?: "",
-                        canSkip = p.getOrNull(6)?.toBooleanStrictOrNull() ?: true
-                    ))
+                        canSkip = p.getOrNull(6)?.toBooleanStrictOrNull() ?: true,
+                        isSupplement = p.getOrNull(8)?.toBooleanStrictOrNull() ?: false
+                    )
+                    result = result.withAddedHabit(nh)
                 }
             }
         }
 
-        // Entries are appended (historical). Simple append for now.
-        // (Full merge would parse date/hid/value/note/skipped/loggedAt)
-        // For this scope we keep entries as-is on import of habits/groups; advanced entry import can be added.
+        // Entries: merge by date + habitId. Support hand-edited past data.
+        entriesCsv?.lines()?.drop(1)?.filter { it.isNotBlank() }?.forEach { line ->
+            try {
+                // Naive but tolerant CSV split (notes may contain commas - user should quote or escape when editing)
+                val parts = line.split(",", limit = 8)
+                if (parts.size >= 6) {
+                    val date = parts[0]
+                    val hid = parts[2]
+                    val value = parts.getOrNull(5)?.toDoubleOrNull() ?: 1.0
+                    val note = parts.getOrNull(6) ?: ""
+                    val skipped = parts.getOrNull(7)?.toBooleanStrictOrNull() ?: false
+                    val loggedAt = try {
+                        java.time.Instant.parse(parts.getOrNull(1)).toEpochMilli()
+                    } catch (_: Exception) { System.currentTimeMillis() }
+
+                    val entry = HabitEntry(
+                        value = value,
+                        note = note,
+                        loggedAt = loggedAt,
+                        skipped = skipped
+                    )
+                    result = result.withUpdatedEntry(date, hid, entry)
+                }
+            } catch (ex: Exception) {
+                // Skip bad row, caller should log
+            }
+        }
 
         return result
     }
+
+    // --- Schedule helpers (v5) for 24h circle, multiple schedules, weekday/date rules, presets (delegated) ---
+
+    fun getActiveSchedule(data: AppData): Schedule? = HabitDomain.getActiveSchedule(data)
+
+    /** Returns true if the schedule's rules make it applicable today. */
+    fun isScheduleApplicableToday(data: AppData, schedule: Schedule): Boolean =
+        HabitDomain.isScheduleApplicableToday(data, schedule)
+
+    /** Resolve the group that should be "current" right now based on active schedule + time.
+     * Falls back to old timeHint + static period logic if no usable schedule.
+     */
+    fun resolveCurrentGroup(data: AppData, now: java.time.LocalTime = java.time.LocalTime.now()): Group? =
+        HabitDomain.resolveCurrentGroup(data, now)
+
+    fun addSchedule(current: AppData, schedule: Schedule): AppData = current.withAddedSchedule(schedule)
+
+    fun updateSchedule(current: AppData, schedule: Schedule): AppData = current.withUpdatedSchedule(schedule)
+
+    fun deleteSchedule(current: AppData, scheduleId: String): AppData = current.withoutSchedule(scheduleId)
+
+    fun setActiveSchedule(current: AppData, scheduleId: String?): AppData = current.withActiveSchedule(scheduleId)
+
+    /** Pure reorder/move delegated (#14). */
+    fun moveHabit(currentHabits: List<Habit>, habitId: String, newGroupId: String, newOrder: Int): List<Habit> =
+        HabitDomain.moveHabit(currentHabits, habitId, newGroupId, newOrder)
+
+    // Capture support (#8-12)
+    fun addCapture(current: AppData, capture: CaptureItem): AppData = current.withAddedCapture(capture)
+    fun updateCapture(current: AppData, capture: CaptureItem): AppData = current.withUpdatedCapture(capture)
+    fun deleteCapture(current: AppData, id: String): AppData = current.withoutCapture(id)
 }
 
 // Convenience typealias for existing call sites during transition (can be removed later)

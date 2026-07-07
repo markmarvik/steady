@@ -8,6 +8,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.input.KeyboardType
@@ -39,6 +40,9 @@ fun LogEntryDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
+        containerColor = MaterialTheme.colorScheme.surface,
+        titleContentColor = MaterialTheme.colorScheme.onSurface,
+        textContentColor = MaterialTheme.colorScheme.onSurface,
         title = { Text("Log: ${habit.name}") },
         text = {
             Column {
@@ -55,7 +59,7 @@ fun LogEntryDialog(
                             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                             modifier = Modifier.fillMaxWidth()
                         )
-                        if (isDur) Text("Tip: use decimal for partial mins, or set default in Manage", fontSize = 10.sp, color = Color(0xFF64748B))
+                        if (isDur) Text("Tip: use decimal for partial mins, or set default in Manage", fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                     HabitType.SCALE_1_5 -> {
                         Text("Rate 1-5")
@@ -71,7 +75,7 @@ fun LogEntryDialog(
                     }
                     HabitType.NOTE -> {
                         // value ignored for pure text; focus below
-                        Text("Enter your note / gratitude / reflection below", color = Color(0xFF94A3B8), fontSize = 12.sp)
+                        Text("Enter your note / gratitude / reflection below", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
                     }
                 }
 

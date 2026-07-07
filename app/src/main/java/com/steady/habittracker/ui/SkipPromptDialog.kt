@@ -16,6 +16,9 @@ fun SkipPromptDialog(
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
+        containerColor = MaterialTheme.colorScheme.surface,
+        titleContentColor = MaterialTheme.colorScheme.onSurface,
+        textContentColor = MaterialTheme.colorScheme.onSurface,
         title = { Text("Skipped ${habit.name} $skipCount+ times") },
         text = { Text("Modify, archive, or lock in (mark essential / no-skip)?") },
         confirmButton = { TextButton(onClick = onEdit) { Text("Edit") } },

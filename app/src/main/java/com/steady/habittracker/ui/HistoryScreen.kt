@@ -10,6 +10,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -34,58 +35,71 @@ fun HistoryScreen(appData: AppData) {
     }
     history.reverse()
 
-    Text(
-        "Last 14 Days",
-        color = Color(0xFF22C55E),
-        fontSize = 14.sp,
-        modifier = Modifier.padding(bottom = 8.dp)
-    )
+    Column(modifier = Modifier.fillMaxSize()) {
+        Text(
+            "Last 14 Days",
+            color = MaterialTheme.colorScheme.primary,
+            fontSize = 14.sp,
+            modifier = Modifier.padding(bottom = 8.dp)
+        )
 
-    LazyColumn {
-        items(history) { (date, rate) ->
-            val color = when {
-                rate >= 0.85 -> Color(0xFF22C55E)
-                rate >= 0.5 -> Color(0xFF4ADE80)
-                rate > 0 -> Color(0xFF166534)
-                else -> Color(0xFF334155)
-            }
-            
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(vertical = 5.dp),
-                    verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    date,
-                    color = Color(0xFF94A3B8),
-                    fontSize = 12.sp,
-                    modifier = Modifier.width(90.dp)
-                )
-                
-                Box(
+        LazyColumn(modifier = Modifier.weight(1f)) {
+            items(history) { (date, rate) ->
+                val color = when {
+                    rate >= 0.85 -> MaterialTheme.colorScheme.primary
+                    rate >= 0.5 -> MaterialTheme.colorScheme.primary.copy(alpha = 0.7f)
+                    rate > 0 -> MaterialTheme.colorScheme.primary.copy(alpha = 0.4f)
+                    else -> MaterialTheme.colorScheme.surfaceVariant
+                }
+
+                Row(
                     modifier = Modifier
-                        .height(7.dp)
-                        .weight(1f)
-                        .clip(RoundedCornerShape(3.dp))
-                        .background(color)
-                )
-                
-                Text(
-                    "${(rate * 100).toInt()}%",
-                    color = Color.White,
-                    fontSize = 12.sp,
-                    modifier = Modifier.width(44.dp),
-                    textAlign = TextAlign.End
-                )
+                        .fillMaxWidth()
+                        .padding(vertical = 5.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        date,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        fontSize = 12.sp,
+                        modifier = Modifier.width(90.dp)
+                    )
+
+                    Box(
+                        modifier = Modifier
+                            .height(7.dp)
+                            .weight(1f)
+                            .clip(RoundedCornerShape(3.dp))
+                            .background(color)
+                    )
+
+                    Text(
+                        "${(rate * 100).toInt()}%",
+                        color = MaterialTheme.colorScheme.onSurface,
+                        fontSize = 12.sp,
+                        modifier = Modifier.width(44.dp),
+                        textAlign = TextAlign.End
+                    )
+                }
+
+                // Minimal enhancement for #6: show a few logged items for the day (name + value)
+                val dayEntries = appData.entries[date] ?: emptyMap()
+                if (dayEntries.isNotEmpty()) {
+                    val logged = dayEntries.entries.take(3).joinToString(", ") { (hid, e) ->
+                        val h = appData.habits.find { it.id == hid }?.name ?: hid
+                        val v = if (e.value >= 0.5) (if (e.skipped) "skip" else "${e.value}".trimEnd('0','.')) else ""
+                        "$h${if (v.isNotBlank()) "=$v" else ""}"
+                    }
+                    Text("  " + logged, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 10.sp, modifier = Modifier.padding(start = 92.dp))
+                }
             }
         }
-    }
 
-    Spacer(Modifier.height(12.dp))
-    Text(
-        "Track richer entries (notes, values) on Today. History shows overall rate.",
-        color = Color(0xFF475569),
-        fontSize = 11.sp
-    )
+        Spacer(Modifier.height(12.dp))
+        Text(
+            "Tap Today to edit notes/values per day. Heatmap planned (#13).",
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            fontSize = 11.sp
+        )
+    }
 }

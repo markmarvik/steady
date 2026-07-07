@@ -1,7 +1,9 @@
 package com.steady.habittracker.ui
 
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -12,6 +14,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -31,16 +34,34 @@ fun TodayScreen(
     onLogEntry: (habitId: String, value: Double, note: String) -> Unit,  // direct for some cases
     onRequestLog: (Habit) -> Unit = { h -> onLogEntry(h.id, 1.0, "") },  // preferred for dialog popup + keyboard
     onSkip: (String) -> Unit,
-    onShowSkipPrompt: (habitId: String) -> Unit = {}
+    onShowSkipPrompt: (habitId: String) -> Unit = {},
+    onQuickCapture: (title: String, note: String) -> Unit = { _, _ -> }  // #10 quick capture for inbox
 ) {
     if (appData.habits.isEmpty() || appData.groups.isEmpty()) {
-        Text("No habits yet. Add via Manage tab!", color = Color.Gray, modifier = Modifier.padding(16.dp))
+        Text("No habits yet. Add via Manage tab!", color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(16.dp))
         return
     }
 
-    val grouped = appData.groups.filter { !it.archived }.sortedBy { it.order }.map { g ->
-        g to appData.habits.filter { it.groupId == g.id && !it.archived }.sortedBy { it.order }
+    // Quick capture entry point (#10) - taps into capture system + shows pending count
+    Row(modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp), horizontalArrangement = Arrangement.End) {
+        TextButton(onClick = { onQuickCapture("Quick idea " + (System.currentTimeMillis() % 1000), "captured from Today") }) {
+            Text("+ Capture", color = MaterialTheme.colorScheme.primary, fontSize = 12.sp)
+        }
+        if (appData.captures.isNotEmpty()) {
+            Text(" (${appData.captures.count { !it.processed }} inbox)", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 10.sp, modifier = Modifier.align(Alignment.CenterVertically))
+        }
     }
+
+    // Filter to only pending (not yet completed) items for a cleaner Today list (#2)
+    // Completed items (value >=0.5 or skipped) are hidden until next day (entries keyed by date).
+    val grouped = appData.groups.filter { !it.archived }.sortedBy { it.order }.map { g ->
+        val habitsForGroup = appData.habits.filter { it.groupId == g.id && !it.archived }.sortedBy { it.order }
+        val pending = habitsForGroup.filter { h ->
+            val e = todayEntries[h.id]
+            (e?.value ?: 0.0) < 0.5 && e?.skipped != true
+        }
+        g to pending
+    }.filter { it.second.isNotEmpty() }  // hide groups with nothing left to do today
 
     LazyColumn(
         verticalArrangement = Arrangement.spacedBy(12.dp)
@@ -59,13 +80,24 @@ fun TodayScreen(
                 val entry = todayEntries[habit.id]
                 val isDone = (entry?.value ?: 0.0) >= 0.5
                 val isSkipped = entry?.skipped == true
+                val isSimpleTapAdd = habit.type == HabitType.COUNTER &&
+                    ((habit.target ?: 0.0) <= 2.0 || habit.isSupplement || habit.name.contains("supp", ignoreCase = true) || habit.name.contains("magnesium", ignoreCase = true))
+
                 HabitRow(
                     habit = habit,
                     entry = entry,
                     isDone = isDone,
                     isSkipped = isSkipped,
                     onToggle = { onToggle(habit.id) },
-                    onLog = { onRequestLog(habit) },
+                    onLog = {
+                        if (isSimpleTapAdd) {
+                            // Simple tap-to-add for supplements (#5): log default immediately, no dialog/note
+                            val v = habit.target ?: 1.0
+                            onLogEntry(habit.id, v, "")
+                        } else {
+                            onRequestLog(habit)
+                        }
+                    },
                     onSkip = {
                         onSkip(habit.id)
                         if (!habit.canSkip) {
@@ -82,6 +114,7 @@ fun TodayScreen(
 }
 
 @Composable
+@OptIn(ExperimentalFoundationApi::class)
 private fun HabitRow(
     habit: Habit,
     entry: HabitEntry?,
@@ -93,17 +126,27 @@ private fun HabitRow(
     showSkipPrompt: () -> Unit
 ) {
     val container = when {
-        isSkipped -> Color(0xFF3F2A2A)
-        isDone && habit.type == HabitType.CHECKBOX -> Color(0xFF166534)
-        else -> Color(0xFF1E2937)
+        isSkipped -> MaterialTheme.colorScheme.surfaceVariant
+        isDone && habit.type == HabitType.CHECKBOX -> MaterialTheme.colorScheme.primary.copy(alpha = 0.25f)
+        else -> MaterialTheme.colorScheme.surface
     }
 
     Card(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable {
-                if (habit.type == HabitType.CHECKBOX) onToggle() else onLog()
-            },
+            .combinedClickable(
+                onClick = {
+                    if (habit.type == HabitType.CHECKBOX) onToggle() else onLog()
+                },
+                onLongClick = {
+                    if (habit.canSkip) {
+                        onSkip()
+                        showSkipPrompt()
+                    } else {
+                        onSkip()
+                    }
+                }
+            ),
         colors = CardDefaults.cardColors(containerColor = container),
         shape = RoundedCornerShape(18.dp)
     ) {
@@ -119,15 +162,15 @@ private fun HabitRow(
                 modifier = Modifier
                     .size(26.dp)
                     .background(
-                        if (showCheck) Color(0xFF22C55E) else Color(0xFF475569),
+                        if (showCheck) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
                         RoundedCornerShape(8.dp)
                     ),
                 contentAlignment = Alignment.Center
             ) {
                 if (showCheck) {
-                    Icon(Icons.Default.Check, null, tint = Color.Black, modifier = Modifier.size(16.dp))
+                    Icon(Icons.Default.Check, null, tint = MaterialTheme.colorScheme.onPrimary, modifier = Modifier.size(16.dp))
                 } else if (isSkipped) {
-                    Text("⏭", color = Color(0xFFFCA5A5), fontSize = 12.sp)
+                    Text("⏭", color = Color(0xFFF87171), fontSize = 12.sp) // keep a soft red for skip state
                 } else if (habit.type != HabitType.CHECKBOX) {
                     Text(
                         when (habit.type) {
@@ -146,48 +189,37 @@ private fun HabitRow(
 
             Column(Modifier.weight(1f)) {
                 Text(
-                    habit.name + if (!habit.canSkip) " (essential)" else "",
-                    color = if (isSkipped) Color(0xFFFCA5A5) else Color.White,
+                    habit.name +
+                        (if (!habit.canSkip) " (essential)" else "") +
+                        (if (habit.isSupplement) " [supp]" else ""),
+                    color = if (isSkipped) Color(0xFFF87171) else MaterialTheme.colorScheme.onSurface,
                     fontSize = 15.sp,
                     fontWeight = FontWeight.SemiBold
                 )
                 if (habit.why.isNotBlank()) {
-                    Text(habit.why, color = Color(0xFF64748B), fontSize = 11.sp, lineHeight = 14.sp)
+                    Text(habit.why, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp, lineHeight = 14.sp)
                 }
                 if (entry != null && entry.note.isNotBlank()) {
-                    Text("“${entry.note}”", color = Color(0xFF4ADE80), fontSize = 11.sp)
+                    Text("“${entry.note}”", color = MaterialTheme.colorScheme.primary, fontSize = 11.sp)
                 }
                 if (entry != null && habit.type != HabitType.CHECKBOX && entry.value > 0) {
-                    Text("${entry.value} ${habit.unit}", color = Color(0xFF94A3B8), fontSize = 11.sp)
+                    Text("${entry.value} ${habit.unit}", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp)
                 }
                 // Exact time
                 if (entry != null && entry.loggedAt > 0) {
                     val timeStr = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(entry.loggedAt))
-                    Text("at $timeStr", color = Color(0xFF475569), fontSize = 10.sp)
+                    Text("at $timeStr", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 10.sp)
                 }
             }
 
             if (habit.type != HabitType.CHECKBOX) {
                 TextButton(onClick = onLog) {
-                    Text("Log", color = Color(0xFF22C55E), fontSize = 12.sp)
+                    Text("Log", color = MaterialTheme.colorScheme.primary, fontSize = 12.sp)
                 }
             }
 
-            // SKIP instead of delete
-            TextButton(
-                onClick = {
-                    if (habit.canSkip) {
-                        onSkip()
-                        showSkipPrompt()
-                    } else {
-                        // hygiene - still allow? caller warned, or just skip with note
-                        onSkip()
-                    }
-                },
-                colors = ButtonDefaults.textButtonColors(contentColor = Color(0xFFF87171))
-            ) {
-                Text("Skip", fontSize = 12.sp)
-            }
+            // Skip is now long-press only (hold  ~1s+ on the row) per #1. No always-visible button.
+            // Long-press handled on the Card via combinedClickable.
         }
     }
 }

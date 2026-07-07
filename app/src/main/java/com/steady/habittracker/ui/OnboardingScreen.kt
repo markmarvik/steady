@@ -7,6 +7,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -32,14 +33,14 @@ fun OnboardingScreen(onComplete: () -> Unit) {
             "Welcome to Steady",
             fontSize = 28.sp,
             fontWeight = FontWeight.Bold,
-            color = Color.White,
+            color = MaterialTheme.colorScheme.onSurface,
             textAlign = TextAlign.Center
         )
         Spacer(Modifier.height(8.dp))
         Text(
             "Evidence-based habits. Simple daily tracking.",
             fontSize = 14.sp,
-            color = Color(0xFF94A3B8),
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = TextAlign.Center
         )
 
@@ -58,7 +59,7 @@ fun OnboardingScreen(onComplete: () -> Unit) {
         features.forEach { f ->
             Text(
                 f,
-                color = Color(0xFFCBD5E1),
+                color = MaterialTheme.colorScheme.onSurface,
                 fontSize = 14.sp,
                 modifier = Modifier
                     .fillMaxWidth()
@@ -70,7 +71,7 @@ fun OnboardingScreen(onComplete: () -> Unit) {
 
         Text(
             "We've started you with a proven set of high-ROI habits.\nCustomize freely in the Manage tab.",
-            color = Color(0xFF64748B),
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
             fontSize = 12.sp,
             textAlign = TextAlign.Center
         )
@@ -79,16 +80,16 @@ fun OnboardingScreen(onComplete: () -> Unit) {
 
         Button(
             onClick = onComplete,
-            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF22C55E)),
+            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
             modifier = Modifier.fillMaxWidth()
         ) {
-            Text("Start tracking", color = Color.Black, fontWeight = FontWeight.SemiBold)
+            Text("Start tracking", color = MaterialTheme.colorScheme.onPrimary, fontWeight = FontWeight.SemiBold)
         }
 
         Spacer(Modifier.height(12.dp))
         Text(
             "Tip: Add the Steady widget to your home screen for 1-tap logging.",
-            color = Color(0xFF475569),
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
             fontSize = 11.sp,
             textAlign = TextAlign.Center
         )

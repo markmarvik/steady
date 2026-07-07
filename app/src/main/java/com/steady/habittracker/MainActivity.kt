@@ -128,16 +128,53 @@ fun SteadyApp(viewModel: SteadyViewModel, repository: AndroidHabitRepository) {
         // Onboarding gate (full screen for first run)
         OnboardingScreen(onComplete = { viewModel.completeOnboarding() })
     } else {
-    // Dynamic theme wrapper (accent from settings)
-    MaterialTheme(
-        colorScheme = darkColorScheme(
+    // Full dynamic theming: background (dark/amoled/light) + accent (foreground highlight)
+    // All UI elements below should use MaterialTheme.colorScheme.* or derived values.
+    val isLight = appData.backgroundMode == "light"
+    val isAmoled = appData.backgroundMode == "amoled"
+
+    val bgColor = when {
+        isAmoled -> Color.Black
+        isLight -> Color(0xFFF8FAFC)
+        else -> Color(0xFF0F172A)
+    }
+    val surfaceColor = when {
+        isAmoled -> Color(0xFF0F0F0F)
+        isLight -> Color.White
+        else -> Color(0xFF1E2937)
+    }
+    val onSurfaceColor = if (isLight) Color(0xFF0F172A) else Color(0xFFE2E8F0)
+    val onSurfaceVariant = if (isLight) Color(0xFF475569) else Color(0xFF94A3B8)
+
+    val colorScheme = if (isLight) {
+        lightColorScheme(
             primary = accent,
-            background = Color(0xFF0F172A),
-            surface = Color(0xFF1E2937)
+            onPrimary = Color.Black,
+            background = bgColor,
+            onBackground = onSurfaceColor,
+            surface = surfaceColor,
+            onSurface = onSurfaceColor,
+            surfaceVariant = if (isAmoled) Color(0xFF1A1A1A) else Color(0xFF334155),
+            onSurfaceVariant = onSurfaceVariant,
+            outline = onSurfaceVariant
         )
-    ) {
+    } else {
+        darkColorScheme(
+            primary = accent,
+            onPrimary = Color.Black,
+            background = bgColor,
+            onBackground = onSurfaceColor,
+            surface = surfaceColor,
+            onSurface = onSurfaceColor,
+            surfaceVariant = if (isAmoled) Color(0xFF1A1A1A) else Color(0xFF334155),
+            onSurfaceVariant = onSurfaceVariant,
+            outline = onSurfaceVariant
+        )
+    }
+
+    MaterialTheme(colorScheme = colorScheme) {
     Scaffold(
-        containerColor = Color(0xFF0F172A)
+        containerColor = bgColor
         // No FAB: removed per request (adds only via Manage now)
     ) { padding ->
         Column(
@@ -156,13 +193,13 @@ fun SteadyApp(viewModel: SteadyViewModel, repository: AndroidHabitRepository) {
                     "Steady",
                     fontSize = 32.sp,
                     fontWeight = FontWeight.Bold,
-                    color = Color.White
+                    color = MaterialTheme.colorScheme.onSurface
                 )
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Column(horizontalAlignment = Alignment.End) {
                         Text(
                             SimpleDateFormat("EEE, MMM d", Locale.getDefault()).format(Date()),
-                            color = Color(0xFF64748B),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                             fontSize = 13.sp
                         )
                         if (streak > 0) {
@@ -171,7 +208,7 @@ fun SteadyApp(viewModel: SteadyViewModel, repository: AndroidHabitRepository) {
                     }
                     Spacer(Modifier.width(8.dp))
                     IconButton(onClick = { showSettings = true }) {
-                        Icon(Icons.Default.Settings, contentDescription = "Settings", tint = Color(0xFF94A3B8))
+                        Icon(Icons.Default.Settings, contentDescription = "Settings", tint = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
             }
@@ -187,7 +224,7 @@ fun SteadyApp(viewModel: SteadyViewModel, repository: AndroidHabitRepository) {
                 modifier = Modifier
                     .fillMaxWidth()
                     .clickable { progressExpanded = !progressExpanded },
-                colors = CardDefaults.cardColors(containerColor = Color(0xFF1E2937)),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
                 shape = RoundedCornerShape(24.dp)
             ) {
                 Column(
@@ -205,12 +242,12 @@ fun SteadyApp(viewModel: SteadyViewModel, repository: AndroidHabitRepository) {
                             letterSpacing = 1.sp
                         )
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text("${doneCount}/${total}", color = Color(0xFF94A3B8), fontSize = 12.sp)
+                            Text("${doneCount}/${total}", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
                             if (weeklyRates.isNotEmpty()) {
                                 Spacer(Modifier.width(8.dp))
                                 Text(
                                     if (trendDelta == 0) "•" else if (trendPositive) "▲${if (trendDelta>0) "+" else ""}${trendDelta}%" else "▼${trendDelta}%",
-                                    color = if (trendPositive) Color(0xFF4ADE80) else Color(0xFFF87171),
+                                    color = if (trendPositive) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
                                     fontSize = 11.sp,
                                     fontWeight = FontWeight.SemiBold
                                 )
@@ -220,6 +257,7 @@ fun SteadyApp(viewModel: SteadyViewModel, repository: AndroidHabitRepository) {
 
                     Spacer(Modifier.height(8.dp))
 
+                    val surfaceVariantColor = MaterialTheme.colorScheme.surfaceVariant
                     Box(
                         contentAlignment = Alignment.Center,
                         modifier = Modifier.size(120.dp)
@@ -227,7 +265,7 @@ fun SteadyApp(viewModel: SteadyViewModel, repository: AndroidHabitRepository) {
                         Canvas(modifier = Modifier.size(120.dp)) {
                             val strokeWidth = 12.dp.toPx()
                             drawArc(
-                                color = Color(0xFF334155),
+                                color = surfaceVariantColor,
                                 startAngle = -90f,
                                 sweepAngle = 360f,
                                 useCenter = false,
@@ -248,9 +286,9 @@ fun SteadyApp(viewModel: SteadyViewModel, repository: AndroidHabitRepository) {
                                 "${(completionRate * 100).toInt()}%",
                                 fontSize = 28.sp,
                                 fontWeight = FontWeight.Bold,
-                                color = Color.White
+                                color = MaterialTheme.colorScheme.onSurface
                             )
-                            Text("today", color = Color(0xFF64748B), fontSize = 11.sp)
+                            Text("today", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp)
                         }
                     }
 
@@ -264,16 +302,16 @@ fun SteadyApp(viewModel: SteadyViewModel, repository: AndroidHabitRepository) {
                             weeklyRates.forEachIndexed { idx, (date, rate) ->
                                 val c = when {
                                     rate >= 0.85f -> accent
-                                    rate >= 0.5f -> Color(0xFF4ADE80)
-                                    rate > 0f -> Color(0xFF166534)
-                                    else -> Color(0xFF334155)
+                                    rate >= 0.5f -> accent.copy(alpha = 0.7f)
+                                    rate > 0f -> accent.copy(alpha = 0.4f)
+                                    else -> MaterialTheme.colorScheme.surfaceVariant
                                 }
                                 val label = try { java.time.LocalDate.parse(date).dayOfWeek.name.take(1) } catch (_: Exception) { "?" }
                                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                                     Canvas(Modifier.size(14.dp)) {
                                         drawCircle(color = c, radius = 7.dp.toPx())
                                     }
-                                    Text(label, color = Color(0xFF64748B), fontSize = 8.sp)
+                                    Text(label, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 8.sp)
                                 }
                             }
                         }
@@ -282,7 +320,7 @@ fun SteadyApp(viewModel: SteadyViewModel, repository: AndroidHabitRepository) {
                     // Expanded: per-group weekly circles
                     if (progressExpanded && groupWeeklyRates.isNotEmpty()) {
                         Spacer(Modifier.height(12.dp))
-                        Text("This week by group", color = Color(0xFF94A3B8), fontSize = 10.sp)
+                        Text("This week by group", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 10.sp)
                         Spacer(Modifier.height(6.dp))
                         Row(
                             modifier = Modifier.fillMaxWidth(),
@@ -291,16 +329,16 @@ fun SteadyApp(viewModel: SteadyViewModel, repository: AndroidHabitRepository) {
                             groupWeeklyRates.forEach { (gName, gRate) ->
                                 val gc = when {
                                     gRate >= 0.85f -> accent
-                                    gRate >= 0.5f -> Color(0xFF4ADE80)
-                                    gRate > 0f -> Color(0xFF166534)
-                                    else -> Color(0xFF334155)
+                                    gRate >= 0.5f -> accent.copy(alpha = 0.7f)
+                                    gRate > 0f -> accent.copy(alpha = 0.4f)
+                                    else -> MaterialTheme.colorScheme.surfaceVariant
                                 }
                                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                                     Canvas(Modifier.size(22.dp)) {
                                         drawCircle(color = gc, radius = 11.dp.toPx())
                                     }
-                                    Text(gName.take(10), color = Color(0xFFCBD5E1), fontSize = 9.sp)
-                                    Text("${(gRate*100).toInt()}%", color = Color(0xFF94A3B8), fontSize = 9.sp)
+                                    Text(gName.take(10), color = MaterialTheme.colorScheme.onSurface, fontSize = 9.sp)
+                                    Text("${(gRate*100).toInt()}%", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 9.sp)
                                 }
                             }
                         }
@@ -314,7 +352,7 @@ fun SteadyApp(viewModel: SteadyViewModel, repository: AndroidHabitRepository) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(Color(0xFF1E2937), RoundedCornerShape(50))
+                    .background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(50))
                     .padding(4.dp)
             ) {
                 TabButton("Today", selectedTab == 0, modifier = Modifier.weight(1f)) { selectedTab = 0 }
@@ -332,13 +370,14 @@ fun SteadyApp(viewModel: SteadyViewModel, repository: AndroidHabitRepository) {
                     onLogEntry = viewModel::logEntry,  // kept for compatibility in some paths
                     onRequestLog = { h -> logHabit = h },
                     onSkip = viewModel::skipHabit,
-                    onShowSkipPrompt = { id -> promptHabitId = id }
+                    onShowSkipPrompt = { id -> promptHabitId = id },
+                    onQuickCapture = viewModel::addCapture  // #10 quick capture wired
                 )
                 1 -> HistoryScreen(appData = appData)
                 2 -> ManageScreen(
                     appData = appData,
                     onAddGroup = { n, h, p -> viewModel.addGroup(n, h, p) },
-                    onAddHabit = { name, why, gid, type -> viewModel.addHabit(name, why, gid, type) },
+                    onAddHabit = { name, why, gid, type, isSupp -> viewModel.addHabit(name, why, gid, type, isSupp) },
                     onDeleteHabit = viewModel::deleteHabit,  // now archives
                     onSetReminder = viewModel::setReminder,
                     onToggleReminder = viewModel::toggleReminder,
@@ -347,41 +386,76 @@ fun SteadyApp(viewModel: SteadyViewModel, repository: AndroidHabitRepository) {
                     onImportCsv = { /* TODO: can add OpenDocument for JSON restore later */ },
                     onUpdateHabit = viewModel::updateHabit,
                     onUnarchiveGroup = { viewModel.unarchiveGroup(it) },
-                    onUnarchiveHabit = { viewModel.unarchiveHabit(it) }
+                    onUnarchiveHabit = { viewModel.unarchiveHabit(it) },
+                    onApplySchedulePreset = viewModel::applySchedulePreset,
+                    onSetActiveSchedule = viewModel::setActiveSchedule,
+                    schedules = appData.schedules,
+                    activeScheduleId = appData.activeScheduleId
+                )
+            }
+
+            // Log dialog inside the themed scope so it uses dark custom colors (fixes white popup #4)
+            logHabit?.let { h ->
+                LogEntryDialog(
+                    habit = h,
+                    onDismiss = { logHabit = null },
+                    onLog = { value, note ->
+                        viewModel.logEntry(h.id, value, note)
+                        logHabit = null
+                    }
                 )
             }
         }
     }
-    } // end Scaffold
-    } // end else (non-onboarding)
 
-    // Settings dialog (color scheme picker)  -- shown for onboarded users too
-
+    // Settings now inside the MaterialTheme so all dialogs use correct bg/surface/foreground
     if (showSettings) {
         AlertDialog(
             onDismissRequest = { showSettings = false },
+            containerColor = MaterialTheme.colorScheme.surface,
+            titleContentColor = MaterialTheme.colorScheme.onSurface,
+            textContentColor = MaterialTheme.colorScheme.onSurface,
             title = { Text("Settings") },
             text = {
                 Column {
-                    Text("Color scheme", fontWeight = FontWeight.SemiBold, color = Color(0xFFCBD5E1))
-                    Spacer(Modifier.height(8.dp))
+                    Text("Background", fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurface)
+                    Spacer(Modifier.height(4.dp))
+                    val backgrounds = listOf(
+                        "dark" to "Dark",
+                        "amoled" to "AMOLED / OLED (pure black)",
+                        "light" to "Light"
+                    )
+                    backgrounds.forEach { (key, label) ->
+                        TextButton(onClick = {
+                            viewModel.setBackgroundMode(key)
+                            showSettings = false
+                        }) {
+                            Text(label, color = if (appData.backgroundMode == key) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    }
+
+                    Spacer(Modifier.height(12.dp))
+                    Text("Accent (highlight / foreground)", fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurface)
+                    Spacer(Modifier.height(4.dp))
                     val schemes = listOf(
-                        "default" to "Default (Green)",
-                        "blue" to "Ocean Blue",
-                        "orange" to "Sunset Orange",
-                        "purple" to "Royal Purple",
-                        "slate" to "Slate Minimal"
+                        "default" to "Green",
+                        "blue" to "Blue",
+                        "orange" to "Orange",
+                        "purple" to "Purple",
+                        "slate" to "Slate",
+                        "teal" to "Teal",
+                        "red" to "Red"
                     )
                     schemes.forEach { (key, label) ->
                         TextButton(onClick = {
                             viewModel.setColorScheme(key)
                             showSettings = false
                         }) {
-                            Text(label, color = if (appData.colorScheme == key) accent else Color(0xFF94A3B8))
+                            Text(label, color = if (appData.colorScheme == key) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                     }
                     Spacer(Modifier.height(8.dp))
-                    Text("Changes apply instantly. More options coming.", fontSize = 11.sp, color = Color(0xFF475569))
+                    Text("Changes apply instantly. OLED uses pure black for battery savings on AMOLED screens.", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             },
             confirmButton = {
@@ -390,7 +464,7 @@ fun SteadyApp(viewModel: SteadyViewModel, repository: AndroidHabitRepository) {
         )
     }
 
-    // Skip prompt
+    // Skip prompt (inside theme)
     promptHabit?.let { h ->
         SkipPromptDialog(
             habit = h,
@@ -399,33 +473,24 @@ fun SteadyApp(viewModel: SteadyViewModel, repository: AndroidHabitRepository) {
             onEdit = { /* open edit - for now just clear */ promptHabitId = null },
             onArchive = { viewModel.deleteHabit(h.id); promptHabitId = null },
             onLockIn = {
-                // lock by updating canSkip=false
                 val locked = h.copy(canSkip = false)
                 viewModel.updateHabit(locked)
                 promptHabitId = null
             }
         )
     }
-
-    // Log dialog for NOTE (gratitude), DURATION, COUNTER, SCALE etc. - shows popup + opens keyboard
-    logHabit?.let { h ->
-        LogEntryDialog(
-            habit = h,
-            onDismiss = { logHabit = null },
-            onLog = { value, note ->
-                viewModel.logEntry(h.id, value, note)
-                logHabit = null
-            }
-        )
-    }
+    } // end Scaffold
+    } // end MaterialTheme + else (non-onboarding)
 }
 
-// Accent resolver (used for dynamic theme + progress)
+// Accent resolver (used for dynamic theme + progress). Matches resolveThemeColors.
 private fun getAccentColor(scheme: String): Color = when (scheme) {
     "blue" -> Color(0xFF3B82F6)
     "orange" -> Color(0xFFF97316)
     "purple" -> Color(0xFF8B5CF6)
     "slate" -> Color(0xFF64748B)
+    "teal" -> Color(0xFF14B8A6)
+    "red" -> Color(0xFFEF4444)
     else -> Color(0xFF22C55E) // default green
 }
 

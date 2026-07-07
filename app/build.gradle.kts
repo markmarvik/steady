@@ -3,6 +3,8 @@ plugins {
     id("org.jetbrains.kotlin.android")
     id("org.jetbrains.kotlin.plugin.compose") version "2.0.21"
     id("org.jetbrains.kotlin.plugin.serialization") version "2.0.21"
+    // Detekt static analysis (#17 quality). ktlint can be added similarly later.
+    id("io.gitlab.arturbosch.detekt") version "1.23.6"
 }
 
 android {
@@ -47,6 +49,21 @@ android {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
         }
     }
+
+    testOptions {
+        unitTests.all {
+            it.useJUnitPlatform()
+        }
+    }
+}
+
+// Detekt configuration for #17. Run with: ./gradlew detekt
+// A basic config is used; extend detekt.yml for stricter rules over time.
+detekt {
+    config.setFrom(files("detekt.yml"))
+    buildUponDefaultConfig = true
+    allRules = false
+    ignoreFailures = true  // start lenient; flip to false after baseline or fixes
 }
 
 dependencies {
@@ -74,4 +91,10 @@ dependencies {
 
     debugImplementation("androidx.compose.ui:ui-tooling")
     debugImplementation("androidx.compose.ui:ui-test-manifest")
+
+    // Unit testing (JVM, for domain logic, repository calcs, pure functions)
+    // See issues #15, #14
+    testImplementation("org.junit.jupiter:junit-jupiter:5.10.2")
+    testRuntimeOnly("org.junit.jupiter:junit-jupiter-engine:5.10.2")
+    testImplementation("org.jetbrains.kotlin:kotlin-test:2.0.21")
 }

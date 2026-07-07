@@ -20,6 +20,9 @@ fun ReminderDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
+        containerColor = MaterialTheme.colorScheme.surface,
+        titleContentColor = MaterialTheme.colorScheme.onSurface,
+        textContentColor = MaterialTheme.colorScheme.onSurface,
         title = { Text("Reminder for ${group?.name ?: "Daily Review"}") },
         text = {
             Column {

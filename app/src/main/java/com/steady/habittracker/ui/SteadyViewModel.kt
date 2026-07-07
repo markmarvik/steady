@@ -9,6 +9,30 @@ import com.steady.habittracker.data.Habit
 import com.steady.habittracker.data.HabitEntry
 import com.steady.habittracker.data.HabitType
 import com.steady.habittracker.data.Reminder
+import com.steady.habittracker.data.Schedule
+import com.steady.habittracker.data.TimeBlock
+import com.steady.habittracker.data.withActiveSchedule
+import com.steady.habittracker.data.withAddedGroup
+import com.steady.habittracker.data.withAddedHabit
+import com.steady.habittracker.data.withAddedSchedule
+import com.steady.habittracker.data.withArchivedGroup
+import com.steady.habittracker.data.withArchivedHabit
+import com.steady.habittracker.data.withBackgroundMode
+import com.steady.habittracker.data.withColorScheme
+import com.steady.habittracker.data.withGroup
+import com.steady.habittracker.data.withHabit
+import com.steady.habittracker.data.withOnboarded
+import com.steady.habittracker.data.withReminder
+import com.steady.habittracker.data.withRemovedEntry
+import com.steady.habittracker.data.withToggledReminder
+import com.steady.habittracker.data.withUpdatedEntry
+import com.steady.habittracker.data.withUpdatedSchedule
+import com.steady.habittracker.data.withoutReminder
+import com.steady.habittracker.data.withoutSchedule
+import com.steady.habittracker.data.withUnarchivedGroup
+import com.steady.habittracker.data.withUnarchivedHabit
+import com.steady.habittracker.data.withAddedCapture
+import com.steady.habittracker.data.withUpdatedCapture
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.map
@@ -68,19 +92,17 @@ class SteadyViewModel(
         }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
-    // --- Logging (core action) ---
+    // --- Logging (core action) - now uses immutable helpers (#16) ---
     fun logEntry(habitId: String, value: Double, note: String = "") {
         viewModelScope.launch {
             val current = appData.value
-            val entries = current.entries.toMutableMap()
-            val dayMap = entries.getOrPut(today) { emptyMap() }.toMutableMap()
-            dayMap[habitId] = HabitEntry(
+            val entry = HabitEntry(
                 value = value,
                 note = note.trim(),
                 loggedAt = System.currentTimeMillis()
             )
-            entries[today] = dayMap
-            repository.saveData(current.copy(entries = entries))
+            val updated = current.withUpdatedEntry(today, habitId, entry)
+            repository.saveData(updated)
         }
     }
 
@@ -93,16 +115,13 @@ class SteadyViewModel(
     fun clearEntry(habitId: String) {
         viewModelScope.launch {
             val current = appData.value
-            val entries = current.entries.toMutableMap()
-            val dayMap = entries[today]?.toMutableMap() ?: return@launch
-            dayMap.remove(habitId)
-            if (dayMap.isEmpty()) entries.remove(today) else entries[today] = dayMap
-            repository.saveData(current.copy(entries = entries))
+            val updated = current.withRemovedEntry(today, habitId)
+            repository.saveData(updated)
         }
     }
 
     // --- Habit CRUD ---
-    fun addHabit(name: String, why: String, groupId: String, type: HabitType = HabitType.CHECKBOX, canSkip: Boolean = true) {
+    fun addHabit(name: String, why: String, groupId: String, type: HabitType = HabitType.CHECKBOX, canSkip: Boolean = true, isSupplement: Boolean = false) {
         if (name.isBlank()) return
         viewModelScope.launch {
             val current = appData.value
@@ -114,25 +133,25 @@ class SteadyViewModel(
                 groupId = groupId,
                 type = type,
                 order = order,
-                canSkip = canSkip
+                canSkip = canSkip,
+                isSupplement = isSupplement
             )
-            repository.saveData(current.copy(habits = current.habits + newHabit))
+            repository.saveData(current.withAddedHabit(newHabit))
         }
     }
 
     fun updateHabit(updated: Habit) {
         viewModelScope.launch {
             val current = appData.value
-            val newHabits = current.habits.map { if (it.id == updated.id) updated else it }
-            repository.saveData(current.copy(habits = newHabits))
+            repository.saveData(current.withHabit(updated))
         }
     }
 
     fun deleteHabit(habitId: String) {
-        // Archive (soft delete) to preserve history
+        // Archive (soft delete) to preserve history - use immutable helper
         viewModelScope.launch {
             val current = appData.value
-            val newData = repository.archiveHabit(current, habitId)  // from repo helper
+            val newData = current.withArchivedHabit(habitId)
             repository.saveData(newData)
         }
     }
@@ -148,11 +167,8 @@ class SteadyViewModel(
                 loggedAt = System.currentTimeMillis(),
                 skipped = true
             )
-            val entries = current.entries.toMutableMap()
-            val dayMap = entries.getOrPut(today) { emptyMap() }.toMutableMap()
-            dayMap[habitId] = entry
-            entries[today] = dayMap
-            repository.saveData(current.copy(entries = entries))
+            val updated = current.withUpdatedEntry(today, habitId, entry)
+            repository.saveData(updated)
         }
     }
 
@@ -162,15 +178,9 @@ class SteadyViewModel(
     fun moveHabit(habitId: String, newGroupId: String, newOrder: Int) {
         viewModelScope.launch {
             val current = appData.value
-            val habit = current.habits.find { it.id == habitId } ?: return@launch
-            val without = current.habits.filter { it.id != habitId }
-            val updated = habit.copy(groupId = newGroupId, order = newOrder)
-            val newList = (without + updated).sortedWith(compareBy<Habit> { if (it.groupId == newGroupId) 0 else 1 }.thenBy { it.order })
-            // reindex orders per group
-            val reindexed = newList.groupBy { it.groupId }.flatMap { (gid, list) ->
-                list.sortedBy { it.order }.mapIndexed { i, h -> h.copy(order = i) }
-            }
-            repository.saveData(current.copy(habits = reindexed))
+            // Use pure domain function (#14) for the list transformation - fully immutable result
+            val newHabits = com.steady.habittracker.data.moveHabit(current.habits, habitId, newGroupId, newOrder)
+            repository.saveData(current.copy(habits = newHabits))
         }
     }
 
@@ -186,21 +196,21 @@ class SteadyViewModel(
                 order = current.groups.size,
                 parentId = parentId
             )
-            repository.saveData(current.copy(groups = current.groups + newG))
+            repository.saveData(current.withAddedGroup(newG))
         }
     }
 
     fun updateGroup(group: Group) {
         viewModelScope.launch {
             val current = appData.value
-            repository.saveData(current.copy(groups = current.groups.map { if (it.id == group.id) group else it }))
+            repository.saveData(current.withGroup(group))
         }
     }
 
     fun deleteGroup(groupId: String) {
         viewModelScope.launch {
             val current = appData.value
-            val newData = repository.archiveGroup(current, groupId)
+            val newData = current.withArchivedGroup(groupId)
             repository.saveData(newData)
         }
     }
@@ -209,25 +219,21 @@ class SteadyViewModel(
     fun setReminder(reminder: Reminder) {
         viewModelScope.launch {
             val current = appData.value
-            val others = current.reminders.filter { it.id != reminder.id }
-            repository.saveData(current.copy(reminders = others + reminder))
+            repository.saveData(current.withReminder(reminder))
         }
     }
 
     fun deleteReminder(id: String) {
         viewModelScope.launch {
             val current = appData.value
-            repository.saveData(current.copy(reminders = current.reminders.filter { it.id != id }))
+            repository.saveData(current.withoutReminder(id))
         }
     }
 
     fun toggleReminder(id: String) {
         viewModelScope.launch {
             val current = appData.value
-            val updated = current.reminders.map {
-                if (it.id == id) it.copy(enabled = !it.enabled) else it
-            }
-            repository.saveData(current.copy(reminders = updated))
+            repository.saveData(current.withToggledReminder(id))
         }
     }
 
@@ -261,7 +267,7 @@ class SteadyViewModel(
         viewModelScope.launch {
             val current = appData.value
             if (!current.onboarded) {
-                repository.saveData(current.copy(onboarded = true))
+                repository.saveData(current.withOnboarded())
             }
         }
     }
@@ -270,8 +276,92 @@ class SteadyViewModel(
         viewModelScope.launch {
             val current = appData.value
             if (current.colorScheme != scheme) {
-                repository.saveData(current.copy(colorScheme = scheme))
+                repository.saveData(current.withColorScheme(scheme))
             }
+        }
+    }
+
+    fun setBackgroundMode(mode: String) {
+        viewModelScope.launch {
+            val current = appData.value
+            if (current.backgroundMode != mode) {
+                repository.saveData(current.withBackgroundMode(mode))
+            }
+        }
+    }
+
+    // --- Schedules (v5) ---
+    fun addSchedule(schedule: Schedule) {
+        viewModelScope.launch {
+            val current = appData.value
+            repository.saveData(current.withAddedSchedule(schedule))
+        }
+    }
+
+    fun updateSchedule(schedule: Schedule) {
+        viewModelScope.launch {
+            val current = appData.value
+            repository.saveData(current.withUpdatedSchedule(schedule))
+        }
+    }
+
+    fun deleteSchedule(scheduleId: String) {
+        viewModelScope.launch {
+            val current = appData.value
+            repository.saveData(current.withoutSchedule(scheduleId))
+        }
+    }
+
+    fun setActiveSchedule(scheduleId: String?) {
+        viewModelScope.launch {
+            val current = appData.value
+            repository.saveData(current.withActiveSchedule(scheduleId))
+        }
+    }
+
+    // --- Captures (quick inbox #8, #10) ---
+    fun addCapture(title: String, note: String = "", tags: List<String> = emptyList()) {
+        if (title.isBlank()) return
+        viewModelScope.launch {
+            val current = appData.value
+            val cap = com.steady.habittracker.data.CaptureItem(
+                id = "c_${UUID.randomUUID().toString().take(8)}",
+                title = title.trim(),
+                note = note.trim(),
+                tags = tags
+            )
+            repository.saveData(current.withAddedCapture(cap))
+        }
+    }
+
+    fun markCaptureProcessed(id: String, linkedHabitId: String? = null) {
+        viewModelScope.launch {
+            val current = appData.value
+            val existing = current.captures.find { it.id == id } ?: return@launch
+            val updated = existing.copy(processed = true, linkedHabitId = linkedHabitId)
+            repository.saveData(current.withUpdatedCapture(updated))
+        }
+    }
+
+    /** Convenience preset applier. Creates (or finds) a schedule with given blocks and activates it. */
+    fun applySchedulePreset(name: String, blocks: List<TimeBlock>, weekdays: Set<Int> = setOf(1,2,3,4,5,6,7)) {
+        viewModelScope.launch {
+            val current = appData.value
+            val existing = current.schedules.find { it.name == name }
+            val schedule = if (existing != null) {
+                existing.copy(timeBlocks = blocks, weekdays = weekdays, enabled = true)
+            } else {
+                Schedule(
+                    id = "sch_${UUID.randomUUID().toString().take(8)}",
+                    name = name,
+                    enabled = true,
+                    weekdays = weekdays,
+                    timeBlocks = blocks
+                )
+            }
+            var newData = if (existing != null) current.withUpdatedSchedule(schedule) else current.withAddedSchedule(schedule)
+            newData = newData.withActiveSchedule(schedule.id)
+            repository.saveData(newData)
         }
     }
 }
