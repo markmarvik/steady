@@ -79,12 +79,14 @@ data class Reminder(
 
 /**
  * One time block in a Schedule (used by the 24-hour circle).
+ * color: optional ARGB int for custom segment color (null = use theme accent). Persisted in JSON/export.
  */
 @Serializable
 data class TimeBlock(
     val start: String,   // "HH:mm" 24h format
     val end: String,
-    val groupId: String
+    val groupId: String,
+    val color: Int? = null
 )
 
 /**

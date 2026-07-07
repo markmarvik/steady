@@ -218,10 +218,11 @@ fun SteadyApp(viewModel: SteadyViewModel, repository: AndroidHabitRepository) {
                 }
             }
 
-            Spacer(Modifier.height(16.dp))
+            Spacer(Modifier.height(8.dp))
 
-            // Enhanced Progress Card: circle + weekly tracker + trend arrow + expandable per-group
-            val yesterdayRate = weeklyRates.getOrNull(5)?.second ?: 0f  // 7 days reversed: index 6=today, 5=yest
+            // Compact progress bar at top (always visible, works across all tabs, minimal screen space)
+            // Tap to expand details in a dialog (big circle no longer permanently occupies space)
+            val yesterdayRate = weeklyRates.getOrNull(5)?.second ?: 0f
             val trendDelta = ((completionRate - yesterdayRate) * 100).toInt()
             val trendPositive = completionRate >= yesterdayRate
 
@@ -230,120 +231,57 @@ fun SteadyApp(viewModel: SteadyViewModel, repository: AndroidHabitRepository) {
                     .fillMaxWidth()
                     .clickable { progressExpanded = !progressExpanded },
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                shape = RoundedCornerShape(24.dp)
+                shape = RoundedCornerShape(12.dp)
             ) {
-                Column(
-                    modifier = Modifier.padding(18.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
+                Column(Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
                             "TODAY • ${period.lowercase().replaceFirstChar { it.uppercase() }}",
-                            fontSize = 11.sp,
+                            fontSize = 10.sp,
                             color = accent,
                             letterSpacing = 1.sp
                         )
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text("${doneCount}/${total}", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
-                            if (weeklyRates.isNotEmpty()) {
-                                Spacer(Modifier.width(8.dp))
-                                Text(
-                                    if (trendDelta == 0) "•" else if (trendPositive) "▲${if (trendDelta>0) "+" else ""}${trendDelta}%" else "▼${trendDelta}%",
-                                    color = if (trendPositive) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
-                                    fontSize = 11.sp,
-                                    fontWeight = FontWeight.SemiBold
-                                )
-                            }
-                        }
-                    }
-
-                    Spacer(Modifier.height(8.dp))
-
-                    val surfaceVariantColor = MaterialTheme.colorScheme.surfaceVariant
-                    Box(
-                        contentAlignment = Alignment.Center,
-                        modifier = Modifier.size(120.dp)
-                    ) {
-                        Canvas(modifier = Modifier.size(120.dp)) {
-                            val strokeWidth = 12.dp.toPx()
-                            drawArc(
-                                color = surfaceVariantColor,
-                                startAngle = -90f,
-                                sweepAngle = 360f,
-                                useCenter = false,
-                                style = Stroke(width = strokeWidth, cap = StrokeCap.Round),
-                                size = Size(size.width, size.height)
-                            )
-                            drawArc(
-                                color = accent,
-                                startAngle = -90f,
-                                sweepAngle = completionRate * 360f,
-                                useCenter = false,
-                                style = Stroke(width = strokeWidth, cap = StrokeCap.Round),
-                                size = Size(size.width, size.height)
-                            )
-                        }
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Spacer(Modifier.weight(1f))
+                        Text("${(completionRate * 100).toInt()}%  ${doneCount}/${total}", color = MaterialTheme.colorScheme.onSurface, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                        if (trendDelta != 0) {
+                            Spacer(Modifier.width(6.dp))
                             Text(
-                                "${(completionRate * 100).toInt()}%",
-                                fontSize = 28.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.onSurface
+                                if (trendPositive) "▲${trendDelta}%" else "▼${trendDelta}%",
+                                color = if (trendPositive) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
+                                fontSize = 10.sp
                             )
-                            Text("today", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp)
+                        }
+                        if (streak > 0) {
+                            Spacer(Modifier.width(8.dp))
+                            Text("🔥$streak", color = accent, fontSize = 11.sp)
                         }
                     }
-
-                    // Weekly tracker: 7 small circles
+                    Spacer(Modifier.height(4.dp))
+                    LinearProgressIndicator(
+                        progress = { completionRate },
+                        modifier = Modifier.fillMaxWidth().height(6.dp),
+                        color = accent,
+                        trackColor = MaterialTheme.colorScheme.surfaceVariant
+                    )
+                    // Weekly dots (compact)
                     if (weeklyRates.isNotEmpty()) {
-                        Spacer(Modifier.height(10.dp))
+                        Spacer(Modifier.height(6.dp))
                         Row(
-                            horizontalArrangement = Arrangement.spacedBy(6.dp),
-                            verticalAlignment = Alignment.CenterVertically
+                            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                            modifier = Modifier.fillMaxWidth()
                         ) {
-                            weeklyRates.forEachIndexed { idx, (date, rate) ->
+                            weeklyRates.forEachIndexed { _, (date, rate) ->
                                 val c = when {
                                     rate >= 0.85f -> accent
                                     rate >= 0.5f -> accent.copy(alpha = 0.7f)
                                     rate > 0f -> accent.copy(alpha = 0.4f)
                                     else -> MaterialTheme.colorScheme.surfaceVariant
                                 }
-                                val label = try { java.time.LocalDate.parse(date).dayOfWeek.name.take(1) } catch (_: Exception) { "?" }
-                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                    Canvas(Modifier.size(14.dp)) {
-                                        drawCircle(color = c, radius = 7.dp.toPx())
-                                    }
-                                    Text(label, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 8.sp)
-                                }
-                            }
-                        }
-                    }
-
-                    // Expanded: per-group weekly circles
-                    if (progressExpanded && groupWeeklyRates.isNotEmpty()) {
-                        Spacer(Modifier.height(12.dp))
-                        Text("This week by group", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 10.sp)
-                        Spacer(Modifier.height(6.dp))
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceEvenly
-                        ) {
-                            groupWeeklyRates.forEach { (gName, gRate) ->
-                                val gc = when {
-                                    gRate >= 0.85f -> accent
-                                    gRate >= 0.5f -> accent.copy(alpha = 0.7f)
-                                    gRate > 0f -> accent.copy(alpha = 0.4f)
-                                    else -> MaterialTheme.colorScheme.surfaceVariant
-                                }
-                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                    Canvas(Modifier.size(22.dp)) {
-                                        drawCircle(color = gc, radius = 11.dp.toPx())
-                                    }
-                                    Text(gName.take(10), color = MaterialTheme.colorScheme.onSurface, fontSize = 9.sp)
-                                    Text("${(gRate*100).toInt()}%", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 9.sp)
+                                Canvas(Modifier.size(8.dp)) {
+                                    drawCircle(color = c, radius = 4.dp.toPx())
                                 }
                             }
                         }
@@ -351,7 +289,56 @@ fun SteadyApp(viewModel: SteadyViewModel, repository: AndroidHabitRepository) {
                 }
             }
 
-            Spacer(Modifier.height(14.dp))
+            // Expandable details dialog (big circle + per-group when user taps the compact bar)
+            if (progressExpanded) {
+                AlertDialog(
+                    onDismissRequest = { progressExpanded = false },
+                    containerColor = MaterialTheme.colorScheme.surface,
+                    titleContentColor = MaterialTheme.colorScheme.onSurface,
+                    textContentColor = MaterialTheme.colorScheme.onSurface,
+                    title = { Text("Progress Details") },
+                    text = {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            // Big circle (now only in dialog, scrollable when inside Today if desired)
+                            val surfaceVariantColor = MaterialTheme.colorScheme.surfaceVariant
+                            Box(contentAlignment = Alignment.Center, modifier = Modifier.size(110.dp)) {
+                                Canvas(modifier = Modifier.size(110.dp)) {
+                                    val strokeWidth = 10.dp.toPx()
+                                    drawArc(color = surfaceVariantColor, startAngle = -90f, sweepAngle = 360f, useCenter = false, style = Stroke(width = strokeWidth, cap = StrokeCap.Round), size = Size(size.width, size.height))
+                                    drawArc(color = accent, startAngle = -90f, sweepAngle = completionRate * 360f, useCenter = false, style = Stroke(width = strokeWidth, cap = StrokeCap.Round), size = Size(size.width, size.height))
+                                }
+                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                    Text("${(completionRate * 100).toInt()}%", fontSize = 24.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurface)
+                                    Text("today", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 10.sp)
+                                }
+                            }
+                            if (groupWeeklyRates.isNotEmpty()) {
+                                Spacer(Modifier.height(8.dp))
+                                Text("This week by group", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 10.sp)
+                                Spacer(Modifier.height(4.dp))
+                                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
+                                    groupWeeklyRates.forEach { (gName, gRate) ->
+                                        val gc = when {
+                                            gRate >= 0.85f -> accent
+                                            gRate >= 0.5f -> accent.copy(alpha = 0.7f)
+                                            gRate > 0f -> accent.copy(alpha = 0.4f)
+                                            else -> MaterialTheme.colorScheme.surfaceVariant
+                                        }
+                                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                            Canvas(Modifier.size(18.dp)) { drawCircle(color = gc, radius = 9.dp.toPx()) }
+                                            Text(gName.take(8), color = MaterialTheme.colorScheme.onSurface, fontSize = 8.sp)
+                                            Text("${(gRate*100).toInt()}%", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 8.sp)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    confirmButton = { TextButton(onClick = { progressExpanded = false }) { Text("Close") } }
+                )
+            }
+
+            Spacer(Modifier.height(10.dp))
 
             // Tabs (Today / History / Manage) — 3 tabs kept
             Row(

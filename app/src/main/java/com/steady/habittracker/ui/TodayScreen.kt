@@ -94,37 +94,6 @@ fun TodayScreen(
         )
     }
 
-    // Visible actionable captures inbox (unprocessed) at top of Today
-    val pendingCaptures = appData.captures.filter { !it.processed }
-    if (pendingCaptures.isNotEmpty()) {
-        Text("Quick Captures / Inbox", color = MaterialTheme.colorScheme.primary, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(bottom = 4.dp))
-        pendingCaptures.take(5).forEach { cap ->
-            Card(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(bottom = 4.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-                shape = RoundedCornerShape(10.dp)
-            ) {
-                Column(Modifier.padding(8.dp)) {
-                    Text(cap.title, color = MaterialTheme.colorScheme.onSurface, fontSize = 13.sp, fontWeight = FontWeight.Medium)
-                    if (cap.note.isNotBlank()) {
-                        Text(cap.note, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp)
-                    }
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 4.dp)) {
-                        TextButton(onClick = { onProcessCapture(cap.id) }) {
-                            Text("Mark Done", color = MaterialTheme.colorScheme.primary, fontSize = 11.sp)
-                        }
-                        TextButton(onClick = { onDeleteCapture(cap.id) }) {
-                            Text("Delete", color = MaterialTheme.colorScheme.error, fontSize = 11.sp)
-                        }
-                    }
-                }
-            }
-        }
-        Spacer(Modifier.height(8.dp))
-    }
-
     // Filter to only pending (not yet completed) items for a cleaner Today list (#2)
     // Completed items (value >=0.5 or skipped) are hidden until next day (entries keyed by date).
     val grouped = appData.groups.filter { !it.archived }.sortedBy { it.order }.map { g ->
@@ -136,9 +105,44 @@ fun TodayScreen(
         g to pending
     }.filter { it.second.isNotEmpty() }  // hide groups with nothing left to do today
 
+    val pendingCaptures = appData.captures.filter { !it.processed }
+
     LazyColumn(
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
+        // Quick captures / inbox integrated so it scrolls with the rest of Today
+        if (pendingCaptures.isNotEmpty()) {
+            item {
+                Text("Quick Captures / Inbox", color = MaterialTheme.colorScheme.primary, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(start = 4.dp).padding(bottom = 4.dp))
+            }
+            items(pendingCaptures.take(5)) { cap ->
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 4.dp)
+                        .padding(bottom = 4.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                    shape = RoundedCornerShape(10.dp)
+                ) {
+                    Column(Modifier.padding(8.dp)) {
+                        Text(cap.title, color = MaterialTheme.colorScheme.onSurface, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                        if (cap.note.isNotBlank()) {
+                            Text(cap.note, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp)
+                        }
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 4.dp)) {
+                            TextButton(onClick = { onProcessCapture(cap.id) }) {
+                                Text("Mark Done", color = MaterialTheme.colorScheme.primary, fontSize = 11.sp)
+                            }
+                            TextButton(onClick = { onDeleteCapture(cap.id) }) {
+                                Text("Delete", color = MaterialTheme.colorScheme.error, fontSize = 11.sp)
+                            }
+                        }
+                    }
+                }
+            }
+            item { Spacer(Modifier.height(4.dp)) }
+        }
+
         grouped.forEach { (group, habits) ->
             item {
                 Text(

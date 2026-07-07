@@ -1,9 +1,12 @@
 package com.steady.habittracker.ui
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -129,39 +132,8 @@ fun ManageScreen(
                         Text("Using legacy time hints (no advanced schedule active)", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp)
                     }
 
-                    // Quick presets row
-                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.padding(top = 4.dp)) {
-                        Button(onClick = {
-                            val morn = activeGroups.firstOrNull { it.timeHint == "MORNING" }?.id ?: activeGroups.getOrNull(0)?.id
-                            val work = activeGroups.firstOrNull { it.timeHint == "WORK" }?.id ?: activeGroups.getOrNull(1)?.id
-                            val even = activeGroups.firstOrNull { it.timeHint == "EVENING" }?.id ?: activeGroups.getOrNull(2)?.id
-                            val blocks = mutableListOf<TimeBlock>()
-                            if (morn != null) blocks += TimeBlock("05:00", "12:00", morn)
-                            if (work != null) blocks += TimeBlock("12:00", "18:00", work)
-                            if (even != null) blocks += TimeBlock("18:00", "23:00", even)
-                            if (blocks.isNotEmpty()) {
-                                onApplySchedulePreset("Standard Day", blocks)
-                            }
-                        }, colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)) {
-                            Text("Standard Day", fontSize = 11.sp)
-                        }
-                        Button(onClick = {
-                            val sleepG = activeGroups.firstOrNull { it.name.contains("sleep", ignoreCase = true) }?.id
-                                ?: activeGroups.firstOrNull { it.timeHint == "EVENING" }?.id ?: activeGroups.getOrNull(0)?.id
-                            val morn = activeGroups.firstOrNull { it.timeHint == "MORNING" }?.id ?: activeGroups.getOrNull(1)?.id
-                            val blocks = mutableListOf<TimeBlock>()
-                            if (sleepG != null) blocks += TimeBlock("23:00", "07:00", sleepG)
-                            if (morn != null) blocks += TimeBlock("07:00", "12:00", morn)
-                            if (blocks.isNotEmpty()) {
-                                onApplySchedulePreset("Sleep + Morning", blocks)
-                            }
-                        }, colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)) {
-                            Text("Sleep+Morning", fontSize = 11.sp)
-                        }
-                        OutlinedButton(onClick = { onSetActiveSchedule(null) }) {
-                            Text("Legacy", fontSize = 11.sp)
-                        }
-                    }
+                    // Focus on custom schedules (no hardcoded presets per UX feedback)
+                    Text("Create and edit your own 24-hour schedules below. Add blocks, assign groups (incl. Sleep), set custom colors.", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 10.sp)
 
                     val allActiveGroups = activeGroups
 
@@ -176,7 +148,12 @@ fun ManageScreen(
                             Text(if (isEditingSchedule) "Close Editor" else "Edit 24h Timeline", color = MaterialTheme.colorScheme.primary, fontSize = 12.sp)
                         }
                         if (activeSched != null && !isEditingSchedule) {
-                            OutlinedButton(onClick = { onSetActiveSchedule(null) }, modifier = Modifier.height(28.dp)) { Text("Deactivate", fontSize = 10.sp) }
+                            OutlinedButton(
+                                onClick = { onSetActiveSchedule(null) },
+                                modifier = Modifier.height(36.dp)
+                            ) {
+                                Text("Deactivate", fontSize = 12.sp)
+                            }
                         }
                     }
 
@@ -207,17 +184,38 @@ fun ManageScreen(
                                     editBlocks.forEachIndexed { idx, blk ->
                                         val sMin = parseHhMmToMin(blk.start) ?: 0
                                         val eMin = parseHhMmToMin(blk.end) ?: (24*60)
-                                        val startFrac = sMin / (24f * 60)
-                                        var endFrac = eMin / (24f * 60)
-                                        if (eMin <= sMin) endFrac = 1f
-                                        val bw = ((endFrac - startFrac).coerceAtLeast(0.02f)) * w
-                                        val bx = startFrac * w
-                                        drawRoundRect(
-                                            color = accent.copy(alpha = 0.7f),
-                                            topLeft = Offset(bx, 4f),
-                                            size = Size(bw, h - 8f),
-                                            cornerRadius = CornerRadius(3.dp.toPx())
-                                        )
+                                        val startFrac = (sMin / (24f * 60)).coerceIn(0f, 1f)
+                                        val endFrac = (eMin / (24f * 60)).coerceIn(0f, 1f)
+                                        val blockColor = blk.color?.let { Color(it) } ?: accent
+                                        if (sMin < eMin) {
+                                            // normal non-overnight
+                                            val bw = ((endFrac - startFrac).coerceAtLeast(0.02f)) * w
+                                            val bx = startFrac * w
+                                            drawRoundRect(
+                                                color = blockColor.copy(alpha = 0.75f),
+                                                topLeft = Offset(bx, 4f),
+                                                size = Size(bw, h - 8f),
+                                                cornerRadius = CornerRadius(3.dp.toPx())
+                                            )
+                                        } else {
+                                            // overnight: draw tail (start->24) + head (0->end)
+                                            // tail
+                                            val tailW = (1f - startFrac).coerceAtLeast(0.01f) * w
+                                            drawRoundRect(
+                                                color = blockColor.copy(alpha = 0.75f),
+                                                topLeft = Offset(startFrac * w, 4f),
+                                                size = Size(tailW, h - 8f),
+                                                cornerRadius = CornerRadius(3.dp.toPx())
+                                            )
+                                            // head from midnight
+                                            val headW = endFrac.coerceAtLeast(0.01f) * w
+                                            drawRoundRect(
+                                                color = blockColor.copy(alpha = 0.75f),
+                                                topLeft = Offset(0f, 4f),
+                                                size = Size(headW, h - 8f),
+                                                cornerRadius = CornerRadius(3.dp.toPx())
+                                            )
+                                        }
                                     }
                                 }
                                 Row(Modifier.fillMaxWidth().padding(top = 2.dp), horizontalArrangement = Arrangement.SpaceBetween) {
@@ -233,6 +231,17 @@ fun ManageScreen(
                         Text("Time Blocks (HH:mm; overnight ok)", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 10.sp)
                         // Use Column + regular for (body stays in @Composable context)
                         Column {
+                            // Color palette for custom segment colors (persisted)
+                            val colorPalette = listOf(
+                                0xFF22C55E.toInt(), // green
+                                0xFF3B82F6.toInt(), // blue
+                                0xFFF97316.toInt(), // orange
+                                0xFF8B5CF6.toInt(), // purple
+                                0xFF14B8A6.toInt(), // teal
+                                0xFFEF4444.toInt(), // red
+                                0xFFFBBF24.toInt(), // amber
+                                0xFFEC4899.toInt(), // pink
+                            )
                             for (index in editBlocks.indices) {
                                 val block = editBlocks[index]
                                 Row(
@@ -242,6 +251,22 @@ fun ManageScreen(
                                     OutlinedTextField(value = block.start, onValueChange = { nv -> if (nv.length <= 5) { val m = editBlocks.toMutableList(); m[index] = block.copy(start = nv); editBlocks = m } }, label = { Text("Start") }, modifier = Modifier.width(78.dp), singleLine = true, textStyle = androidx.compose.ui.text.TextStyle(fontSize = 11.sp))
                                     Spacer(Modifier.width(3.dp))
                                     OutlinedTextField(value = block.end, onValueChange = { nv -> if (nv.length <= 5) { val m = editBlocks.toMutableList(); m[index] = block.copy(end = nv); editBlocks = m } }, label = { Text("End") }, modifier = Modifier.width(78.dp), singleLine = true, textStyle = androidx.compose.ui.text.TextStyle(fontSize = 11.sp))
+                                    Spacer(Modifier.width(4.dp))
+                                    // Per-block color swatch (click to cycle)
+                                    val currentColor = block.color ?: MaterialTheme.colorScheme.primary.value.toInt()
+                                    Box(
+                                        modifier = Modifier
+                                            .size(22.dp)
+                                            .background(Color(currentColor), CircleShape)
+                                            .border(1.dp, MaterialTheme.colorScheme.outline, CircleShape)
+                                            .clickable {
+                                                val curIdx = colorPalette.indexOfFirst { it == (block.color ?: -1) }.coerceAtLeast(-1)
+                                                val nextColor = colorPalette[(curIdx + 1) % colorPalette.size]
+                                                val m = editBlocks.toMutableList()
+                                                m[index] = block.copy(color = nextColor)
+                                                editBlocks = m
+                                            }
+                                    )
                                     Spacer(Modifier.width(4.dp))
                                     val grp = allActiveGroups.find { it.id == block.groupId }
                                     Box(modifier = Modifier.weight(1f).background(MaterialTheme.colorScheme.surface, RoundedCornerShape(6.dp)).clickable {
@@ -269,7 +294,7 @@ fun ManageScreen(
                                     onAddGroup("Sleep", "SLEEP", null)
                                     sId = "g_sleep"
                                 }
-                                editBlocks = editBlocks + TimeBlock("23:00", "07:00", sId)
+                                editBlocks = editBlocks + TimeBlock("23:00", "07:00", sId, color = 0xFF64748B.toInt()) // nice slate for sleep
                             }, modifier = Modifier.height(30.dp)) { Text("+ Sleep 23-7", fontSize = 10.sp) }
                             Spacer(Modifier.weight(1f))
                             TextButton(onClick = { isEditingSchedule = false }) { Text("Cancel", fontSize = 10.sp) }
