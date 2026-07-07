@@ -32,6 +32,7 @@ import com.steady.habittracker.data.withoutSchedule
 import com.steady.habittracker.data.withUnarchivedGroup
 import com.steady.habittracker.data.withUnarchivedHabit
 import com.steady.habittracker.data.withAddedCapture
+import com.steady.habittracker.data.withoutCapture
 import com.steady.habittracker.data.withUpdatedCapture
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -93,7 +94,8 @@ class SteadyViewModel(
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     // --- Logging (core action) - now uses immutable helpers (#16) ---
-    fun logEntry(habitId: String, value: Double, note: String = "") {
+    // date param supports backfill for manual metrics (issue #19)
+    fun logEntry(habitId: String, value: Double, note: String = "", date: String = today) {
         viewModelScope.launch {
             val current = appData.value
             val entry = HabitEntry(
@@ -101,7 +103,7 @@ class SteadyViewModel(
                 note = note.trim(),
                 loggedAt = System.currentTimeMillis()
             )
-            val updated = current.withUpdatedEntry(today, habitId, entry)
+            val updated = current.withUpdatedEntry(date, habitId, entry)
             repository.saveData(updated)
         }
     }
@@ -144,6 +146,37 @@ class SteadyViewModel(
         viewModelScope.launch {
             val current = appData.value
             repository.saveData(current.withHabit(updated))
+        }
+    }
+
+    /** Create ad-hoc metric habit for sporadic logging (e.g. body weight). Creates "Metrics" group if needed. */
+    fun addMetricHabit(name: String) {
+        if (name.isBlank()) return
+        viewModelScope.launch {
+            var current = appData.value
+            val metricsGroup = current.groups.firstOrNull { it.name.equals("Metrics", ignoreCase = true) || it.name.equals("Health Metrics", ignoreCase = true) }
+            val gid = metricsGroup?.id ?: run {
+                val newG = com.steady.habittracker.data.Group(
+                    id = "g_metrics",
+                    name = "Metrics",
+                    timeHint = "ANY",
+                    order = (current.groups.maxOfOrNull { it.order } ?: 0) + 1
+                )
+                current = current.withAddedGroup(newG)
+                "g_metrics"
+            }
+            val newH = Habit(
+                id = "h_${UUID.randomUUID().toString().take(8)}",
+                name = name.trim(),
+                why = "Manual / sporadic metric (logged ad-hoc)",
+                groupId = gid,
+                type = HabitType.COUNTER,
+                target = null,
+                unit = "",
+                order = current.habits.filter { it.groupId == gid }.size
+            )
+            current = current.withAddedHabit(newH)
+            repository.saveData(current)
         }
     }
 
@@ -305,6 +338,15 @@ class SteadyViewModel(
         }
     }
 
+    fun updateScheduleBlocks(scheduleId: String, blocks: List<TimeBlock>) {
+        viewModelScope.launch {
+            val current = appData.value
+            val sched = current.schedules.find { it.id == scheduleId } ?: return@launch
+            val updated = sched.copy(timeBlocks = blocks)
+            repository.saveData(current.withUpdatedSchedule(updated))
+        }
+    }
+
     fun deleteSchedule(scheduleId: String) {
         viewModelScope.launch {
             val current = appData.value
@@ -340,6 +382,13 @@ class SteadyViewModel(
             val existing = current.captures.find { it.id == id } ?: return@launch
             val updated = existing.copy(processed = true, linkedHabitId = linkedHabitId)
             repository.saveData(current.withUpdatedCapture(updated))
+        }
+    }
+
+    fun deleteCapture(id: String) {
+        viewModelScope.launch {
+            val current = appData.value
+            repository.saveData(current.withoutCapture(id))
         }
     }
 

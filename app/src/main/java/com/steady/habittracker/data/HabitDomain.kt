@@ -151,7 +151,8 @@ object HabitDomain {
     /** Convenience today string (yyyy-MM-dd). */
     fun getToday(): String = LocalDate.now().toString()
 
-    /** Resolve current group from active schedule or legacy hint. */
+    /** Resolve current group from active schedule or legacy hint.
+     * Supports overnight blocks (e.g. Sleep 23:00-07:00). */
     fun resolveCurrentGroup(data: AppData, now: LocalTime = LocalTime.now()): Group? {
         val schedule = getActiveSchedule(data)
         if (schedule != null && isScheduleApplicableToday(data, schedule) && schedule.timeBlocks.isNotEmpty()) {
@@ -159,11 +160,17 @@ object HabitDomain {
             for (block in schedule.timeBlocks) {
                 val startMin = parseTimeToMinutes(block.start)
                 val endMin = parseTimeToMinutes(block.end)
-                if (minutesNow in startMin until endMin) {
+                val inBlock = if (startMin < endMin) {
+                    minutesNow in startMin until endMin
+                } else {
+                    // overnight block crosses midnight
+                    minutesNow >= startMin || minutesNow < endMin
+                }
+                if (inBlock) {
                     return data.groups.find { it.id == block.groupId && !it.archived }
                 }
             }
-            // If past last block, wrap or pick first
+            // If past last block, pick first (or next day's)
             return data.groups.find { it.id == schedule.timeBlocks.first().groupId && !it.archived }
         }
 

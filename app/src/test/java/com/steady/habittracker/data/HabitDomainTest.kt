@@ -130,4 +130,29 @@ class HabitDomainTest {
         val rate = HabitDomain.computeDayCompletion(data, LocalDate.now().toString())
         assertEquals(0f, rate)
     }
+
+    @Test
+    fun `resolveCurrentGroup supports overnight sleep block`() {
+        val groups = listOf(
+            Group("g_sleep", "Sleep", "SLEEP", 0),
+            Group("g_morn", "Morning", "MORNING", 1)
+        )
+        val habits = listOf(Habit("h_sleep", "Sleep", groupId = "g_sleep"))
+        val schedule = Schedule("s1", "WithSleep", timeBlocks = listOf(TimeBlock("23:00", "07:00", "g_sleep")))
+        val data = AppData(
+            groups = groups,
+            habits = habits,
+            schedules = listOf(schedule),
+            activeScheduleId = "s1"
+        )
+        // simulate night time
+        val night = java.time.LocalTime.of(2, 30)
+        val gNight = HabitDomain.resolveCurrentGroup(data, night)
+        assertEquals("g_sleep", gNight?.id)
+
+        val day = java.time.LocalTime.of(10, 0)
+        val gDay = HabitDomain.resolveCurrentGroup(data, day)
+        // falls to first after no match
+        assertNotNull(gDay)
+    }
 }

@@ -1,5 +1,7 @@
 package com.steady.habittracker.ui
 
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -8,6 +10,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material3.*
@@ -15,6 +18,9 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -51,6 +57,7 @@ fun ManageScreen(
     // Scheduling (daily group time assignment for widget + current group logic; key for reminders context)
     onApplySchedulePreset: (name: String, blocks: List<TimeBlock>) -> Unit = { _, _ -> },
     onSetActiveSchedule: (String?) -> Unit = {},
+    onUpdateScheduleBlocks: (scheduleId: String, blocks: List<TimeBlock>) -> Unit = { _, _ -> },
     schedules: List<Schedule> = emptyList(),
     activeScheduleId: String? = null
 ) {
@@ -63,6 +70,10 @@ fun ManageScreen(
     // Confirmation for archive (do not archive immediately; tap away / cancel = nothing)
     var confirmArchiveGroupId by remember { mutableStateOf<String?>(null) }
     var confirmArchiveHabitId by remember { mutableStateOf<String?>(null) }
+
+    // Hoisted 24h schedule editor state (must be at composable root, not inside Lazy item)
+    var isEditingSchedule by remember { mutableStateOf(false) }
+    var editBlocks by remember(activeScheduleId) { mutableStateOf( (schedules.firstOrNull { it.id == activeScheduleId }?.timeBlocks ?: emptyList()) ) }
 
     val activeGroups = appData.groups.filter { !it.archived }.sortedBy { it.order }
     val archivedGroups = appData.groups.filter { it.archived }.sortedBy { it.order }
@@ -110,16 +121,17 @@ fun ManageScreen(
                 // Daily group scheduling (advanced time blocks for current group/widget; key for reminders & 24h)
                 item {
                     Spacer(Modifier.height(12.dp))
-                    Text("Daily Scheduling (for widget + current period)", color = MaterialTheme.colorScheme.primary, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                    Text("Daily Scheduling — 24h Timeline + Sleep", color = MaterialTheme.colorScheme.primary, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
                     val activeSched = schedules.firstOrNull { it.id == activeScheduleId }
                     if (activeSched != null) {
-                        Text("Active: ${activeSched.name}", color = MaterialTheme.colorScheme.primary, fontSize = 11.sp)
+                        Text("Active: ${activeSched.name} (${activeSched.timeBlocks.size} blocks)", color = MaterialTheme.colorScheme.primary, fontSize = 11.sp)
                     } else {
                         Text("Using legacy time hints (no advanced schedule active)", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp)
                     }
+
+                    // Quick presets row
                     Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.padding(top = 4.dp)) {
                         Button(onClick = {
-                            // Build a simple standard day schedule using current groups if they exist
                             val morn = activeGroups.firstOrNull { it.timeHint == "MORNING" }?.id ?: activeGroups.getOrNull(0)?.id
                             val work = activeGroups.firstOrNull { it.timeHint == "WORK" }?.id ?: activeGroups.getOrNull(1)?.id
                             val even = activeGroups.firstOrNull { it.timeHint == "EVENING" }?.id ?: activeGroups.getOrNull(2)?.id
@@ -131,14 +143,156 @@ fun ManageScreen(
                                 onApplySchedulePreset("Standard Day", blocks)
                             }
                         }, colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)) {
-                            Text("Apply Standard Day", fontSize = 11.sp)
+                            Text("Standard Day", fontSize = 11.sp)
+                        }
+                        Button(onClick = {
+                            val sleepG = activeGroups.firstOrNull { it.name.contains("sleep", ignoreCase = true) }?.id
+                                ?: activeGroups.firstOrNull { it.timeHint == "EVENING" }?.id ?: activeGroups.getOrNull(0)?.id
+                            val morn = activeGroups.firstOrNull { it.timeHint == "MORNING" }?.id ?: activeGroups.getOrNull(1)?.id
+                            val blocks = mutableListOf<TimeBlock>()
+                            if (sleepG != null) blocks += TimeBlock("23:00", "07:00", sleepG)
+                            if (morn != null) blocks += TimeBlock("07:00", "12:00", morn)
+                            if (blocks.isNotEmpty()) {
+                                onApplySchedulePreset("Sleep + Morning", blocks)
+                            }
+                        }, colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)) {
+                            Text("Sleep+Morning", fontSize = 11.sp)
                         }
                         OutlinedButton(onClick = { onSetActiveSchedule(null) }) {
-                            Text("Use Legacy", fontSize = 11.sp)
+                            Text("Legacy", fontSize = 11.sp)
                         }
                     }
-                    Text("Advanced schedules control widget 'current group' and can influence reminders. Presets activate time-based group switching.", color = Color(0xFF475569), fontSize = 10.sp)
+
+                    val allActiveGroups = activeGroups
+
                     Spacer(Modifier.height(8.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                        TextButton(onClick = {
+                            if (!isEditingSchedule) {
+                                editBlocks = activeSched?.timeBlocks ?: emptyList()
+                            }
+                            isEditingSchedule = !isEditingSchedule
+                        }) {
+                            Text(if (isEditingSchedule) "Close Editor" else "Edit 24h Timeline", color = MaterialTheme.colorScheme.primary, fontSize = 12.sp)
+                        }
+                        if (activeSched != null && !isEditingSchedule) {
+                            OutlinedButton(onClick = { onSetActiveSchedule(null) }, modifier = Modifier.height(28.dp)) { Text("Deactivate", fontSize = 10.sp) }
+                        }
+                    }
+
+                    if (isEditingSchedule) {
+                        // Visual 24h timeline (Canvas)
+                        val timelineHeight = 48.dp
+                        Card(
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                            shape = RoundedCornerShape(8.dp)
+                        ) {
+                            Column(Modifier.padding(8.dp)) {
+                                Text("24h Timeline", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 10.sp)
+                                Spacer(Modifier.height(4.dp))
+                                val accent = MaterialTheme.colorScheme.primary
+                                Canvas(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(timelineHeight)
+                                        .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(4.dp))
+                                ) {
+                                    val w = size.width
+                                    val h = size.height
+                                    for (hIdx in 0..24 step 4) {
+                                        val x = (hIdx / 24f) * w
+                                        drawLine(color = Color.Gray.copy(alpha = 0.5f), start = Offset(x, 0f), end = Offset(x, h), strokeWidth = 1f)
+                                    }
+                                    editBlocks.forEachIndexed { idx, blk ->
+                                        val sMin = parseHhMmToMin(blk.start) ?: 0
+                                        val eMin = parseHhMmToMin(blk.end) ?: (24*60)
+                                        val startFrac = sMin / (24f * 60)
+                                        var endFrac = eMin / (24f * 60)
+                                        if (eMin <= sMin) endFrac = 1f
+                                        val bw = ((endFrac - startFrac).coerceAtLeast(0.02f)) * w
+                                        val bx = startFrac * w
+                                        drawRoundRect(
+                                            color = accent.copy(alpha = 0.7f),
+                                            topLeft = Offset(bx, 4f),
+                                            size = Size(bw, h - 8f),
+                                            cornerRadius = CornerRadius(3.dp.toPx())
+                                        )
+                                    }
+                                }
+                                Row(Modifier.fillMaxWidth().padding(top = 2.dp), horizontalArrangement = Arrangement.SpaceBetween) {
+                                    Text("00", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 8.sp)
+                                    Text("06", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 8.sp)
+                                    Text("12", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 8.sp)
+                                    Text("18", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 8.sp)
+                                    Text("24", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 8.sp)
+                                }
+                            }
+                        }
+
+                        Text("Time Blocks (HH:mm; overnight ok)", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 10.sp)
+                        // Use Column + regular for (body stays in @Composable context)
+                        Column {
+                            for (index in editBlocks.indices) {
+                                val block = editBlocks[index]
+                                Row(
+                                    modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    OutlinedTextField(value = block.start, onValueChange = { nv -> if (nv.length <= 5) { val m = editBlocks.toMutableList(); m[index] = block.copy(start = nv); editBlocks = m } }, label = { Text("Start") }, modifier = Modifier.width(78.dp), singleLine = true, textStyle = androidx.compose.ui.text.TextStyle(fontSize = 11.sp))
+                                    Spacer(Modifier.width(3.dp))
+                                    OutlinedTextField(value = block.end, onValueChange = { nv -> if (nv.length <= 5) { val m = editBlocks.toMutableList(); m[index] = block.copy(end = nv); editBlocks = m } }, label = { Text("End") }, modifier = Modifier.width(78.dp), singleLine = true, textStyle = androidx.compose.ui.text.TextStyle(fontSize = 11.sp))
+                                    Spacer(Modifier.width(4.dp))
+                                    val grp = allActiveGroups.find { it.id == block.groupId }
+                                    Box(modifier = Modifier.weight(1f).background(MaterialTheme.colorScheme.surface, RoundedCornerShape(6.dp)).clickable {
+                                        val cur = allActiveGroups.indexOfFirst { it.id == block.groupId }.coerceAtLeast(0)
+                                        val nextG = allActiveGroups.getOrNull((cur + 1) % allActiveGroups.size)
+                                        if (nextG != null) { val m = editBlocks.toMutableList(); m[index] = block.copy(groupId = nextG.id); editBlocks = m }
+                                    }.padding(6.dp)) {
+                                        Text(grp?.name ?: "?", color = MaterialTheme.colorScheme.onSurface, fontSize = 10.sp, maxLines = 1)
+                                    }
+                                    IconButton(onClick = { val m = editBlocks.toMutableList(); m.removeAt(index); editBlocks = m }, modifier = Modifier.size(26.dp)) {
+                                        Icon(Icons.Default.Close, null, tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(14.dp))
+                                    }
+                                }
+                            }
+                        }
+
+                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.padding(top = 4.dp)) {
+                            OutlinedButton(onClick = {
+                                val fg = allActiveGroups.firstOrNull()?.id ?: ""
+                                editBlocks = editBlocks + TimeBlock("09:00", "10:00", fg)
+                            }, modifier = Modifier.height(30.dp)) { Text("+ Block", fontSize = 10.sp) }
+                            Button(onClick = {
+                                var sId = allActiveGroups.firstOrNull { it.name.equals("Sleep", ignoreCase = true) }?.id
+                                if (sId == null) {
+                                    onAddGroup("Sleep", "SLEEP", null)
+                                    sId = "g_sleep"
+                                }
+                                editBlocks = editBlocks + TimeBlock("23:00", "07:00", sId)
+                            }, modifier = Modifier.height(30.dp)) { Text("+ Sleep 23-7", fontSize = 10.sp) }
+                            Spacer(Modifier.weight(1f))
+                            TextButton(onClick = { isEditingSchedule = false }) { Text("Cancel", fontSize = 10.sp) }
+                            Button(onClick = {
+                                val cleaned = editBlocks.filter { it.start.contains(":") && it.end.contains(":") && it.groupId.isNotBlank() }
+                                    .map { it.copy(start = normalizeTime(it.start), end = normalizeTime(it.end)) }
+                                if (activeSched != null) {
+                                    onUpdateScheduleBlocks(activeSched.id, cleaned)
+                                } else {
+                                    onApplySchedulePreset("Custom", cleaned)
+                                }
+                                isEditingSchedule = false
+                            }, modifier = Modifier.height(30.dp)) { Text("Apply", fontSize = 10.sp) }
+                        }
+                    } else if (activeSched != null && activeSched.timeBlocks.isNotEmpty()) {
+                        Row(Modifier.padding(top = 2.dp)) {
+                            val bs = activeSched.timeBlocks.take(3)
+                            if (bs.isNotEmpty()) { val b = bs[0]; val gn = allActiveGroups.find { it.id == b.groupId }?.name?.take(6) ?: "?"; Text("${b.start}-${b.end} ${gn}  ", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 9.sp) }
+                            if (bs.size > 1) { val b = bs[1]; val gn = allActiveGroups.find { it.id == b.groupId }?.name?.take(6) ?: "?"; Text("${b.start}-${b.end} ${gn}  ", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 9.sp) }
+                            if (bs.size > 2) { val b = bs[2]; val gn = allActiveGroups.find { it.id == b.groupId }?.name?.take(6) ?: "?"; Text("${b.start}-${b.end} ${gn}  ", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 9.sp) }
+                        }
+                    }
+                    Text("Editor updates schedule. Sleep group + overnight supported for resolveCurrentGroup/widget.", color = Color(0xFF475569), fontSize = 9.sp)
                 }
 
                 // Backup section inside the scrollable list
@@ -427,4 +581,20 @@ private fun AddHabitWithTypeDialogLocal(
         confirmButton = { TextButton(onClick = { if (name.isNotBlank()) onAdd(name, why, groupId, type, isSupp) }) { Text("Add") } },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
     )
+}
+
+// Helpers for 24h timeline editor (used in scheduling visual block editor)
+private fun parseHhMmToMin(hhmm: String): Int? {
+    val parts = hhmm.split(":")
+    val h = parts.getOrNull(0)?.toIntOrNull() ?: return null
+    val m = parts.getOrNull(1)?.toIntOrNull() ?: return null
+    if (h !in 0..23 || m !in 0..59) return null
+    return h * 60 + m
+}
+
+private fun normalizeTime(hhmm: String): String {
+    val p = hhmm.split(":")
+    val h = (p.getOrNull(0)?.toIntOrNull() ?: 0).coerceIn(0, 23)
+    val m = (p.getOrNull(1)?.toIntOrNull() ?: 0).coerceIn(0, 59)
+    return "%02d:%02d".format(h, m)
 }

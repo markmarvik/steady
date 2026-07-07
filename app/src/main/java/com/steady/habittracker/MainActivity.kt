@@ -6,14 +6,19 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.*
+import androidx.compose.ui.draw.clip
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -371,7 +376,11 @@ fun SteadyApp(viewModel: SteadyViewModel, repository: AndroidHabitRepository) {
                     onRequestLog = { h -> logHabit = h },
                     onSkip = viewModel::skipHabit,
                     onShowSkipPrompt = { id -> promptHabitId = id },
-                    onQuickCapture = viewModel::addCapture  // #10 quick capture wired
+                    onQuickCapture = viewModel::addCapture,
+                    onProcessCapture = viewModel::markCaptureProcessed,
+                    onDeleteCapture = viewModel::deleteCapture,
+                    onCreateMetric = { name -> viewModel.addMetricHabit(name) },
+                    onLogMetric = viewModel::logEntry
                 )
                 1 -> HistoryScreen(appData = appData)
                 2 -> ManageScreen(
@@ -389,6 +398,7 @@ fun SteadyApp(viewModel: SteadyViewModel, repository: AndroidHabitRepository) {
                     onUnarchiveHabit = { viewModel.unarchiveHabit(it) },
                     onApplySchedulePreset = viewModel::applySchedulePreset,
                     onSetActiveSchedule = viewModel::setActiveSchedule,
+                    onUpdateScheduleBlocks = viewModel::updateScheduleBlocks,
                     schedules = appData.schedules,
                     activeScheduleId = appData.activeScheduleId
                 )
@@ -399,8 +409,8 @@ fun SteadyApp(viewModel: SteadyViewModel, repository: AndroidHabitRepository) {
                 LogEntryDialog(
                     habit = h,
                     onDismiss = { logHabit = null },
-                    onLog = { value, note ->
-                        viewModel.logEntry(h.id, value, note)
+                    onLog = { value, note, date ->
+                        viewModel.logEntry(h.id, value, note, date)
                         logHabit = null
                     }
                 )
@@ -410,52 +420,173 @@ fun SteadyApp(viewModel: SteadyViewModel, repository: AndroidHabitRepository) {
 
     // Settings now inside the MaterialTheme so all dialogs use correct bg/surface/foreground
     if (showSettings) {
+        // Compute current accent for preview (matches resolveThemeColors)
+        val currentAccent = when (appData.colorScheme) {
+            "blue" -> Color(0xFF3B82F6)
+            "orange" -> Color(0xFFF97316)
+            "purple" -> Color(0xFF8B5CF6)
+            "slate" -> Color(0xFF64748B)
+            "teal" -> Color(0xFF14B8A6)
+            "red" -> Color(0xFFEF4444)
+            else -> Color(0xFF22C55E)
+        }
+        val previewBg = when (appData.backgroundMode) {
+            "amoled" -> Color.Black
+            "light" -> Color(0xFFF8FAFC)
+            else -> Color(0xFF0F172A)
+        }
+        val previewSurface = when (appData.backgroundMode) {
+            "amoled" -> Color(0xFF0F0F0F)
+            "light" -> Color.White
+            else -> Color(0xFF1E2937)
+        }
+        val previewOn = if (appData.backgroundMode == "light") Color(0xFF0F172A) else Color(0xFFE2E8F0)
+
         AlertDialog(
             onDismissRequest = { showSettings = false },
             containerColor = MaterialTheme.colorScheme.surface,
             titleContentColor = MaterialTheme.colorScheme.onSurface,
             textContentColor = MaterialTheme.colorScheme.onSurface,
-            title = { Text("Settings") },
+            title = { Text("Settings • Theme") },
             text = {
                 Column {
-                    Text("Background", fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurface)
-                    Spacer(Modifier.height(4.dp))
+                    Text("Background Mode (OLED / Light / Dark)", fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurface, fontSize = 13.sp)
+                    Spacer(Modifier.height(6.dp))
                     val backgrounds = listOf(
                         "dark" to "Dark",
-                        "amoled" to "AMOLED / OLED (pure black)",
+                        "amoled" to "AMOLED / OLED",
                         "light" to "Light"
                     )
-                    backgrounds.forEach { (key, label) ->
-                        TextButton(onClick = {
-                            viewModel.setBackgroundMode(key)
-                            showSettings = false
-                        }) {
-                            Text(label, color = if (appData.backgroundMode == key) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        backgrounds.forEach { (key, label) ->
+                            val isSel = appData.backgroundMode == key
+                            val swatchBg = when (key) {
+                                "amoled" -> Color.Black
+                                "light" -> Color(0xFFF8FAFC)
+                                else -> Color(0xFF0F172A)
+                            }
+                            Box(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(48.dp)
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(swatchBg)
+                                    .border(
+                                        if (isSel) BorderStroke(2.dp, MaterialTheme.colorScheme.primary) else BorderStroke(1.dp, Color.Gray.copy(alpha = 0.4f)),
+                                        RoundedCornerShape(8.dp)
+                                    )
+                                    .clickable {
+                                        viewModel.setBackgroundMode(key)
+                                    },
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(label, color = if (key == "light") Color(0xFF0F172A) else Color.White, fontSize = 10.sp, fontWeight = if (isSel) FontWeight.Bold else FontWeight.Normal)
+                            }
                         }
                     }
 
-                    Spacer(Modifier.height(12.dp))
-                    Text("Accent (highlight / foreground)", fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurface)
-                    Spacer(Modifier.height(4.dp))
+                    Spacer(Modifier.height(16.dp))
+                    Text("Accent Color (foreground / highlights)", fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurface, fontSize = 13.sp)
+                    Spacer(Modifier.height(6.dp))
+
                     val schemes = listOf(
-                        "default" to "Green",
-                        "blue" to "Blue",
-                        "orange" to "Orange",
-                        "purple" to "Purple",
-                        "slate" to "Slate",
-                        "teal" to "Teal",
-                        "red" to "Red"
+                        Triple("default", "Green", Color(0xFF22C55E)),
+                        Triple("blue", "Blue", Color(0xFF3B82F6)),
+                        Triple("orange", "Orange", Color(0xFFF97316)),
+                        Triple("purple", "Purple", Color(0xFF8B5CF6)),
+                        Triple("slate", "Slate", Color(0xFF64748B)),
+                        Triple("teal", "Teal", Color(0xFF14B8A6)),
+                        Triple("red", "Red", Color(0xFFEF4444))
                     )
-                    schemes.forEach { (key, label) ->
-                        TextButton(onClick = {
-                            viewModel.setColorScheme(key)
-                            showSettings = false
-                        }) {
-                            Text(label, color = if (appData.colorScheme == key) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
+                    // Visual swatches grid/row
+                    Column {
+                        schemes.chunked(4).forEach { row ->
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                row.forEach { (key, label, col) ->
+                                    val isSel = appData.colorScheme == key
+                                    Column(
+                                        horizontalAlignment = Alignment.CenterHorizontally,
+                                        modifier = Modifier.weight(1f)
+                                    ) {
+                                        Box(
+                                            modifier = Modifier
+                                                .size(42.dp)
+                                                .clip(CircleShape)
+                                                .background(col)
+                                                .border(
+                                                    if (isSel) BorderStroke(3.dp, MaterialTheme.colorScheme.primary) else BorderStroke(1.dp, Color(0x33FFFFFF)),
+                                                    CircleShape
+                                                )
+                                                .clickable { viewModel.setColorScheme(key) },
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            if (isSel) {
+                                                Icon(Icons.Default.Check, null, tint = Color.White, modifier = Modifier.size(18.dp))
+                                            }
+                                        }
+                                        Text(label, fontSize = 9.sp, color = if (isSel) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 2.dp))
+                                    }
+                                }
+                                // pad if short row
+                                repeat(4 - row.size) {
+                                    Spacer(Modifier.weight(1f))
+                                }
+                            }
+                            Spacer(Modifier.height(8.dp))
                         }
                     }
+
                     Spacer(Modifier.height(8.dp))
-                    Text("Changes apply instantly. OLED uses pure black for battery savings on AMOLED screens.", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("Live Preview (with current bg + accent)", fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurface, fontSize = 12.sp)
+                    // Mini preview card simulating UI elements
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = CardDefaults.cardColors(containerColor = previewSurface),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Column(Modifier.padding(10.dp)) {
+                            // fake header
+                            Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                                Text("Steady", color = previewOn, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                                Spacer(Modifier.weight(1f))
+                                Box(Modifier.size(10.dp).background(currentAccent, CircleShape))
+                            }
+                            Spacer(Modifier.height(6.dp))
+                            // fake habit row
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .background(previewBg.copy(alpha = 0.6f), RoundedCornerShape(6.dp))
+                                    .padding(6.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Box(Modifier.size(14.dp).background(currentAccent, RoundedCornerShape(3.dp)))
+                                Spacer(Modifier.width(6.dp))
+                                Text("Morning Sunlight", color = previewOn, fontSize = 11.sp)
+                                Spacer(Modifier.weight(1f))
+                                Box(Modifier.size(18.dp).background(currentAccent.copy(alpha = 0.3f), CircleShape), contentAlignment = Alignment.Center) {
+                                    Text("✓", color = currentAccent, fontSize = 9.sp)
+                                }
+                            }
+                            Spacer(Modifier.height(6.dp))
+                            // fake button
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(28.dp)
+                                    .background(currentAccent, RoundedCornerShape(6.dp)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text("Log Entry", color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.SemiBold)
+                            }
+                        }
+                    }
+
+                    Spacer(Modifier.height(8.dp))
+                    Text("Instant updates. AMOLED for pure black (battery friendly on OLED). All cards, texts, progress & widget use theme.", fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             },
             confirmButton = {

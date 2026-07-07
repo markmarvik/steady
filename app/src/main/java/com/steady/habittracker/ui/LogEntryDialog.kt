@@ -16,16 +16,18 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.steady.habittracker.data.Habit
 import com.steady.habittracker.data.HabitType
+import java.time.LocalDate
 
 @Composable
 fun LogEntryDialog(
     habit: Habit,
     onDismiss: () -> Unit,
-    onLog: (value: Double, note: String) -> Unit
+    onLog: (value: Double, note: String, date: String) -> Unit
 ) {
     var valueText by remember { mutableStateOf(if (habit.target != null) habit.target.toString() else "1") }
     var note by remember { mutableStateOf("") }
     var selectedScale by remember { mutableStateOf(3) }
+    var dateStr by remember { mutableStateOf(LocalDate.now().toString()) }
 
     val noteFocusRequester = remember { FocusRequester() }
     val keyboardController = LocalSoftwareKeyboardController.current
@@ -89,6 +91,13 @@ fun LogEntryDialog(
                         .then(if (habit.type == HabitType.NOTE) Modifier.focusRequester(noteFocusRequester) else Modifier),
                     minLines = if (habit.type == HabitType.NOTE) 5 else 2
                 )
+                Spacer(Modifier.height(6.dp))
+                OutlinedTextField(
+                    value = dateStr,
+                    onValueChange = { dateStr = it },
+                    label = { Text("Date (yyyy-MM-dd) for backfill") },
+                    modifier = Modifier.fillMaxWidth()
+                )
             }
         },
         confirmButton = {
@@ -98,7 +107,8 @@ fun LogEntryDialog(
                     HabitType.CHECKBOX -> 1.0
                     else -> valueText.toDoubleOrNull() ?: 1.0
                 }
-                onLog(v, note)
+                val d = try { LocalDate.parse(dateStr).toString() } catch (_: Exception) { LocalDate.now().toString() }
+                onLog(v, note, d)
             }) { Text("Save") }
         },
         dismissButton = {
