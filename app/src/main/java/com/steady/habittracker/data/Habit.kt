@@ -3,14 +3,11 @@ package com.steady.habittracker.data
 import kotlinx.serialization.Serializable
 
 /**
- * Data model v5.
- * - archived + canSkip on Habit/Group (archive instead of delete; hygiene non-skippable)
- * - parentId on Group (for Workouts subgroups / plans)
- * - skipped flag + loggedAt precision on entries (exact time + skip tracking)
- * - schemaVersion for migration.
- * - onboarded + colorScheme + backgroundMode for theming (supports AMOLED black).
- * - schedules + activeScheduleId for advanced 24h time scheduling (multiple schedules,
- *   weekday/date rules, presets, 24-hour circle editor for widget + notifications).
+ * Data model v6.
+ * - Groups = time-of-day slots on the 24h timeline (when you do it).
+ * - Tags = category identity for History (what it is: Supplements, Movement…).
+ * - SleepSettings anchors Morning + Bedtime routines to bed/wake times.
+ * - archived + canSkip, parentId, skip/loggedAt, themes, schedules (v5).
  * All @Serializable for DataStore JSON (portable).
  */
 
@@ -42,16 +39,47 @@ enum class ShowPreset {
 }
 
 /**
- * Group for time-of-day / routine organization (Morning Routine, Evening, Work, Mindset...).
+ * Timeline group: when on the 24h day (Morning, Focus, Bedtime, Sleep…).
+ * Not a category — use [Tag] for "Supplements", "Movement", etc.
  */
 @Serializable
 data class Group(
     val id: String,
     val name: String,
-    val timeHint: String = "ANY", // MORNING, EVENING, WORK, REVIEW, ANY
+    val timeHint: String = "ANY", // MORNING, EVENING, WORK, REVIEW, SLEEP, BEDTIME, ANY
     val order: Int = 0,
-    val parentId: String? = null,   // for subgroups e.g. under "Workouts"
+    val parentId: String? = null,   // for subgroups e.g. under a workout plan
     val archived: Boolean = false
+)
+
+/**
+ * Category tag for history and analytics. Survives moving a habit across timeline groups.
+ * Example: Omega-3 lives in Morning group but keeps tag "Supplements".
+ */
+@Serializable
+data class Tag(
+    val id: String,
+    val name: String,
+    val color: Int? = null,
+    val order: Int = 0,
+    val archived: Boolean = false
+)
+
+/**
+ * Sleep is the spine of the day (Blueprint-style).
+ * Morning routine starts at wake; bedtime/wind-down ends at bed; Sleep fills overnight.
+ */
+@Serializable
+data class SleepSettings(
+    val bedTime: String = "23:00",      // HH:mm
+    val wakeTime: String = "07:00",     // HH:mm
+    /** Minutes of wind-down before bed (Bedtime group block). */
+    val windDownMinutes: Int = 60,
+    /** Minutes of morning routine after wake. */
+    val morningMinutes: Int = 90,
+    val morningGroupId: String? = null,
+    val bedtimeGroupId: String? = null,
+    val sleepGroupId: String? = null
 )
 
 /**
@@ -130,7 +158,10 @@ data class Habit(
     val order: Int = 0,
     val canSkip: Boolean = true,   // false for hygiene/essentials (no skip allowed)
     val archived: Boolean = false,
-    val isSupplement: Boolean = false,  // quick-log tag
+    /** @deprecated Prefer [tags] with a Supplements tag; kept for back-compat / quick UI. */
+    val isSupplement: Boolean = false,
+    /** Category tag ids (what it is). Independent of [groupId] (when you do it). */
+    val tags: List<String> = emptyList(),
     /** When this habit appears on Today (Manage catalog always keeps it). */
     val showPreset: ShowPreset = ShowPreset.DAILY,
     /** Used by CUSTOM_DAYS (1=Mon … 7=Sun). */
@@ -152,7 +183,7 @@ data class AppData(
     // date (yyyy-MM-dd) -> habitId -> entry
     val entries: Map<String, Map<String, HabitEntry>> = emptyMap(),
     val reminders: List<Reminder> = emptyList(),
-    val schemaVersion: Int = 5,
+    val schemaVersion: Int = 6,
     val onboarded: Boolean = false,
     val colorScheme: String = "default",   // accent: "default" | "blue" | "orange" | "purple" | "slate"
     val backgroundMode: String = "dark",   // "dark" | "amoled" | "light"  (OLED pure black supported)
@@ -160,7 +191,11 @@ data class AppData(
     val activeScheduleId: String? = null,
     val captures: List<CaptureItem> = emptyList(),  // #8 quick capture inbox support
     /** Master switch for all habit reminders (Settings). When false, no alarms are scheduled. */
-    val remindersMasterEnabled: Boolean = true
+    val remindersMasterEnabled: Boolean = true,
+    /** Category tags for History (Supplements, Movement, …). */
+    val tags: List<Tag> = emptyList(),
+    /** Bed/wake spine that anchors Morning + Bedtime groups on the 24h timeline. */
+    val sleep: SleepSettings = SleepSettings()
 )
 
 /**
@@ -257,6 +292,17 @@ fun AppData.withColorScheme(scheme: String): AppData = copy(colorScheme = scheme
 fun AppData.withBackgroundMode(mode: String): AppData = copy(backgroundMode = mode)
 fun AppData.withOnboarded(): AppData = copy(onboarded = true)
 fun AppData.withRemindersMasterEnabled(enabled: Boolean): AppData = copy(remindersMasterEnabled = enabled)
+fun AppData.withSleep(sleep: SleepSettings): AppData = copy(sleep = sleep)
+fun AppData.withAddedTag(tag: Tag): AppData = copy(tags = tags + tag)
+fun AppData.withTag(updated: Tag): AppData =
+    copy(tags = tags.map { if (it.id == updated.id) updated else it })
+fun AppData.withArchivedTag(tagId: String): AppData =
+    copy(
+        tags = tags.map { if (it.id == tagId) it.copy(archived = true) else it },
+        habits = habits.map { h ->
+            if (tagId in h.tags) h.copy(tags = h.tags.filter { it != tagId }) else h
+        }
+    )
 
 // Schedule helpers (mirrored for convenience; repo delegates still work)
 fun AppData.withAddedSchedule(schedule: Schedule): AppData = copy(schedules = schedules + schedule)

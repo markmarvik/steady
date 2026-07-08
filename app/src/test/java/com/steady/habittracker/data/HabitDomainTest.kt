@@ -223,4 +223,82 @@ class HabitDomainTest {
         // falls to first after no match
         assertNotNull(gDay)
     }
+
+    @Test
+    fun `tag completion tracks across timeline groups`() {
+        val tags = listOf(Tag(TagIds.SUPPLEMENTS, "Supplements", order = 0))
+        val groups = listOf(
+            Group("g_morn", "Morning", "MORNING", 0),
+            Group("g_even", "Bedtime", "BEDTIME", 1)
+        )
+        val habits = listOf(
+            Habit("h_am", "Omega", groupId = "g_morn", tags = listOf(TagIds.SUPPLEMENTS), order = 0),
+            Habit("h_pm", "Mag", groupId = "g_even", tags = listOf(TagIds.SUPPLEMENTS), order = 0)
+        )
+        val today = LocalDate.now().toString()
+        val data = AppData(
+            groups = groups,
+            habits = habits,
+            tags = tags,
+            entries = mapOf(today to mapOf("h_am" to HabitEntry(value = 1.0)))
+        )
+        val todayRate = HabitDomain.computeTagDayCompletion(data, TagIds.SUPPLEMENTS)
+        assertEquals(0.5f, todayRate, 0.001f)
+        // Group avgs differ by group; tag sees both
+        assertTrue(HabitDomain.computeTag7DayAvg(data, TagIds.SUPPLEMENTS) > 0f)
+    }
+
+    @Test
+    fun `buildSleepAnchoredBlocks links morning bedtime sleep`() {
+        val sleep = SleepSettings(
+            bedTime = "23:00",
+            wakeTime = "07:00",
+            windDownMinutes = 60,
+            morningMinutes = 90
+        )
+        val blocks = HabitDomain.buildSleepAnchoredBlocks(
+            sleep, "g_morn", "g_even", "g_sleep",
+            existingMiddle = listOf(TimeBlock("09:00", "21:00", "g_focus"))
+        )
+        assertEquals(4, blocks.size)
+        assertEquals("g_morn", blocks[0].groupId)
+        assertEquals("07:00", blocks[0].start)
+        assertEquals("g_sleep", blocks.last().groupId)
+        assertEquals("23:00", blocks.last().start)
+        assertEquals("07:00", blocks.last().end)
+        assertTrue(blocks.any { it.groupId == "g_even" && it.end == "23:00" })
+    }
+
+    @Test
+    fun `ensureSleepLinkedGroups creates Sleep group`() {
+        val data = AppData(
+            groups = listOf(Group("g_morn", "Morning Routine", "MORNING", 0)),
+            habits = listOf(Habit("h1", "Light", groupId = "g_morn")),
+            schemaVersion = 6
+        )
+        val out = HabitDomain.ensureSleepLinkedGroups(data)
+        assertNotNull(out.sleep.morningGroupId)
+        assertNotNull(out.sleep.bedtimeGroupId)
+        assertNotNull(out.sleep.sleepGroupId)
+        assertTrue(out.groups.any { it.timeHint == "SLEEP" || it.name.equals("Sleep", true) })
+    }
+
+    @Test
+    fun `heatmap and hourly helpers run on empty and partial data`() {
+        val data = sampleDataWithEntries(
+            mapOf(
+                LocalDate.now().toString() to mapOf(
+                    "h1" to HabitEntry(value = 1.0, loggedAt = System.currentTimeMillis())
+                )
+            )
+        )
+        val heat = HabitDomain.computeHeatmap(data, weeks = 4)
+        assertTrue(heat.isNotEmpty())
+        assertEquals(7, heat.first().size)
+        val hours = HabitDomain.computeHourlyLogCounts(data)
+        assertEquals(24, hours.size)
+        assertTrue(hours.sum() >= 1)
+        assertEquals(1, HabitDomain.totalCompletedLogs(data))
+        assertEquals(1, HabitDomain.daysWithActivity(data))
+    }
 }

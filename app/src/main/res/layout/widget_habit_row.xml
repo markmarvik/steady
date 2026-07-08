@@ -1,11 +1,43 @@
 <?xml version="1.0" encoding="utf-8"?>
-<TextView xmlns:android="http://schemas.android.com/apk/res/android"
-    android:id="@+id/habit_row_text"
+<!-- Large tappable row: checkbox area + label. Entire row fill-in → toggle (no accidental Open). -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/habit_row_root"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
-    android:minHeight="44dp"
+    android:minHeight="52dp"
+    android:orientation="horizontal"
     android:gravity="center_vertical"
-    android:padding="10dp"
-    android:textColor="#E2E8F0"
-    android:textSize="15sp"
-    android:background="#1E3A5F" />
+    android:paddingStart="8dp"
+    android:paddingEnd="10dp"
+    android:paddingTop="8dp"
+    android:paddingBottom="8dp"
+    android:background="#1E3A5F"
+    android:clickable="true"
+    android:focusable="true">
+
+    <!-- Big checkbox hit target (~48dp) -->
+    <TextView
+        android:id="@+id/habit_row_check"
+        android:layout_width="48dp"
+        android:layout_height="48dp"
+        android:gravity="center"
+        android:text="☐"
+        android:textSize="22sp"
+        android:textColor="#E2E8F0"
+        android:clickable="false"
+        android:focusable="false" />
+
+    <TextView
+        android:id="@+id/habit_row_text"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_weight="1"
+        android:layout_marginStart="4dp"
+        android:gravity="center_vertical"
+        android:textColor="#E2E8F0"
+        android:textSize="15sp"
+        android:maxLines="2"
+        android:ellipsize="end"
+        android:clickable="false"
+        android:focusable="false" />
+</LinearLayout>

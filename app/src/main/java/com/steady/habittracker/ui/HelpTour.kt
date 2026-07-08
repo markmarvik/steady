@@ -5,6 +5,8 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -49,7 +51,7 @@ val TOUR_STEPS = listOf(
     ),
     TourStep(
         "Manage Tab — Full control",
-        "• Tap any group to drill in and edit its habits\n• Add new groups or habits (with type: checkbox/counter/duration/scale/note)\n• Set per-group reminders (time + weekdays)\n• Edit the 24h timeline schedule (affects widget 'current group')\n• Export full JSON backup (works even with no data)\n• Restore anything from the Archived section at the bottom"
+        "• Groups = when on the timeline (Morning, Focus, Bedtime, Sleep)\n• Tags = what it is for History (Supplements, Movement…) — move items freely\n• Sleep card: set wake/bed, Apply sleep-centered day\n• Drill into a group to edit When rules, stacks, tags\n• Export backup anytime; restore from Archived"
     ),
     TourStep(
         "Settings (gear icon)",
@@ -92,7 +94,7 @@ fun TourCoach(
                 .padding(16.dp)
                 .verticalScroll(rememberScrollState())
         ) {
-            // Header
+            // Header — X always closes immediately (no need to finish all steps)
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier.fillMaxWidth()
@@ -111,7 +113,14 @@ fun TourCoach(
                 )
                 Spacer(Modifier.weight(1f))
                 TextButton(onClick = onEnd) {
-                    Text("End tour", color = MaterialTheme.colorScheme.error, fontSize = 12.sp)
+                    Text("Skip", color = MaterialTheme.colorScheme.error, fontSize = 12.sp)
+                }
+                IconButton(onClick = onEnd, modifier = Modifier.size(36.dp)) {
+                    Icon(
+                        Icons.Default.Close,
+                        contentDescription = "Close tour",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                 }
             }
 
@@ -157,6 +166,10 @@ fun TourCoach(
                     modifier = Modifier.height(40.dp)
                 ) {
                     Text("Back")
+                }
+
+                TextButton(onClick = onEnd) {
+                    Text("Close", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
                 }
 
                 Button(

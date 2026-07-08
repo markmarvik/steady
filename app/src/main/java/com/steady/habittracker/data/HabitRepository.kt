@@ -76,46 +76,110 @@ class AndroidHabitRepository(private val context: Context) : HabitRepository {
     }
 
     /**
-     * Migrate older schemas to v5.
-     * Adds schedules + activeScheduleId for advanced time scheduling (24h circle, multiple schedules,
-     * weekday + specific-date rules, shift presets).
+     * Migrate older schemas to v6 (tags + sleep spine).
+     * v5: schedules. Pre-v5: archive/skip fields.
      */
     private fun migrateIfNeeded(data: AppData): AppData {
-        if (data.schemaVersion >= 5 && data.groups.isNotEmpty() && data.habits.isNotEmpty()) {
+        if (data.schemaVersion >= 6 && data.groups.isNotEmpty() && data.habits.isNotEmpty() && data.tags.isNotEmpty()) {
             return data
         }
         // Start from current or fresh
         var d = if (data.groups.isNotEmpty() && data.habits.isNotEmpty()) data else getDefaultData()
 
-        // Upgrade fields
+        // Upgrade fields (v3–v5)
         val upgradedGroups = d.groups.map { g ->
             if (g.archived || g.parentId != null) g else g.copy(archived = false, parentId = null)
         }
+
+        // Ensure default tags exist; merge with any user tags
+        val baseTags = if (d.tags.isEmpty()) defaultTags() else {
+            val existingIds = d.tags.map { it.id }.toSet()
+            d.tags + defaultTags().filter { it.id !in existingIds }
+        }
+        val tagByName = baseTags.associateBy { it.name.lowercase() }
+
+        fun inferTags(h: Habit): List<String> {
+            val existing = h.tags.toMutableList()
+            fun add(id: String) { if (id !in existing) existing.add(id) }
+            if (h.isSupplement || h.groupId == "g_supp" || h.name.contains("supp", true) ||
+                h.name.contains("magnesium", true) || h.name.contains("omega", true)
+            ) add(TagIds.SUPPLEMENTS)
+            if (h.groupId == "g_workout" || h.name.contains("pull", true) || h.name.contains("bench", true) ||
+                h.name.contains("squat", true) || h.name.contains("walk", true) || h.name.contains("move", true)
+            ) add(TagIds.MOVEMENT)
+            if (h.groupId == "g_mind" || h.name.contains("gratitude", true) || h.name.contains("reflect", true) ||
+                h.name.contains("wins", true)
+            ) add(TagIds.MINDSET)
+            if (h.name.contains("protein", true) || h.name.contains("hydrate", true)) add(TagIds.NUTRITION)
+            if (!h.canSkip || h.name.contains("teeth", true) || h.name.contains("floss", true) ||
+                h.name.contains("brush", true)
+            ) add(TagIds.HYGIENE)
+            if (h.name.contains("wind down", true) || h.name.contains("nsdr", true) ||
+                h.name.contains("sleep", true)
+            ) add(TagIds.SLEEP)
+            // Map category-style group names → tags (keep habit in that group until user moves)
+            val gName = upgradedGroups.find { it.id == h.groupId }?.name?.lowercase().orEmpty()
+            tagByName[gName]?.let { add(it.id) }
+            return existing
+        }
+
         val upgradedHabits = d.habits.map { h ->
             val isHygiene = h.name.contains("teeth", true) || h.name.contains("floss", true) ||
-                            h.name.contains("brush", true) || h.name.contains("tongue", true) ||
-                            h.name.contains("hygiene", true) || h.name.contains("shower", true)
+                h.name.contains("brush", true) || h.name.contains("tongue", true) ||
+                h.name.contains("hygiene", true) || h.name.contains("shower", true)
             h.copy(
                 archived = h.archived,
                 canSkip = if (isHygiene) false else h.canSkip,
-                isSupplement = h.isSupplement
+                isSupplement = h.isSupplement,
+                tags = if (h.tags.isNotEmpty()) h.tags else inferTags(h)
             )
         }
         val upgradedEntries = d.entries.mapValues { (_, m) ->
             m.mapValues { (_, e) -> e.copy(skipped = e.skipped) }
         }
 
-        return d.copy(
-            groups = upgradedGroups,
-            habits = upgradedHabits,
-            entries = upgradedEntries,
-            schemaVersion = 5,
-            onboarded = if (d.onboarded) d.onboarded else true,
-            colorScheme = if (d.colorScheme.isNotBlank()) d.colorScheme else "default",
-            backgroundMode = if (d.backgroundMode.isNotBlank()) d.backgroundMode else "dark",
-            schedules = d.schedules.ifEmpty { emptyList() },
-            activeScheduleId = d.activeScheduleId
+        // Sleep spine + linked groups
+        var withSleep = HabitDomain.ensureSleepLinkedGroups(
+            d.copy(
+                groups = upgradedGroups,
+                habits = upgradedHabits,
+                entries = upgradedEntries,
+                tags = baseTags,
+                sleep = d.sleep
+            )
         )
+
+        // If no active schedule, create sleep-centered default
+        if (withSleep.activeScheduleId == null || withSleep.schedules.isEmpty()) {
+            val s = withSleep.sleep
+            val morn = s.morningGroupId ?: "g_morn"
+            val bed = s.bedtimeGroupId ?: "g_even"
+            val sleepG = s.sleepGroupId ?: "g_sleep"
+            val focusId = withSleep.groups.firstOrNull {
+                !it.archived && (it.timeHint == "WORK" || it.name.contains("focus", true) || it.name.contains("work", true))
+            }?.id
+            val middle = if (focusId != null) {
+                listOf(TimeBlock("09:00", minutesToSafe(s.bedTime, -s.windDownMinutes - 60), focusId, 0xFF3B82F6.toInt()))
+            } else emptyList()
+            val blocks = HabitDomain.buildSleepAnchoredBlocks(s, morn, bed, sleepG, middle)
+            val schedule = Schedule(id = "s_sleep", name = "Sleep-centered", timeBlocks = blocks)
+            withSleep = withSleep.copy(
+                schedules = listOf(schedule) + withSleep.schedules.filter { it.id != "s_sleep" },
+                activeScheduleId = "s_sleep"
+            )
+        }
+
+        return withSleep.copy(
+            schemaVersion = 6,
+            onboarded = d.onboarded || d.schemaVersion >= 1,
+            colorScheme = if (d.colorScheme.isNotBlank()) d.colorScheme else "default",
+            backgroundMode = if (d.backgroundMode.isNotBlank()) d.backgroundMode else "dark"
+        )
+    }
+
+    private fun minutesToSafe(hhmm: String, deltaMin: Int): String {
+        val base = HabitDomain.parseTimeToMinutes(hhmm) + deltaMin
+        return HabitDomain.minutesToHhMm(base)
     }
 
     private fun defaultReminders(groups: List<Group>): List<Reminder> = listOf(
@@ -143,47 +207,98 @@ class AndroidHabitRepository(private val context: Context) : HabitRepository {
     )
 
     /**
-     * Rich seeded data matching original 7 + real patterns from user's TrackAndGraph (groups, varied types).
+     * Seeded day: timeline groups (when) + tags (what). Sleep is the spine.
+     * Supplements sit in Morning/Bedtime groups but keep Supplements tag for History.
      */
     private fun getDefaultData(): AppData {
         val groups = listOf(
             Group("g_morn", "Morning Routine", "MORNING", 0),
             Group("g_focus", "Focus & Work", "WORK", 1),
-            Group("g_even", "Evening / Wind Down", "EVENING", 2),
-            Group("g_mind", "Mindset & Review", "REVIEW", 3),
-            Group("g_supp", "Supplements", "ANY", 4),
-            Group("g_workout", "Workouts", "ANY", 5)
-            // Subgroups (e.g. plans) can be added with parentId = "g_workout"
+            Group("g_even", "Bedtime / Wind Down", "BEDTIME", 2),
+            Group("g_sleep", "Sleep", "SLEEP", 3)
         )
+        val tags = defaultTags()
 
         val habits = listOf(
-            // Morning (hygiene non-skippable)
-            Habit("h_light", "Morning Sunlight / Light exposure", "Aligns circadian rhythm, boosts mood/energy.", "g_morn", HabitType.CHECKBOX, order = 0),
-            Habit("h_breathe", "Box Breathing (6 min)", "Calms nervous system before day starts.", "g_morn", HabitType.DURATION_MIN, target = 6.0, unit = "min", order = 1),
-            Habit("h_teeth", "Brush + Floss + Tongue scrape", "Dental + overall health foundation.", "g_morn", HabitType.CHECKBOX, order = 2, canSkip = false),
-            Habit("h_supp_am", "Morning Supplements (Omega-3, Multi)", "Foundational nutrition.", "g_supp", HabitType.COUNTER, target = 1.0, unit = "", order = 3, isSupplement = true),
+            // Morning at wake — light + hygiene + AM supplements (tagged, not a separate group)
+            Habit(
+                "h_light", "Morning Sunlight / Light exposure", "Aligns circadian rhythm.",
+                "g_morn", HabitType.CHECKBOX, order = 0, tags = listOf(TagIds.SLEEP)
+            ),
+            Habit(
+                "h_breathe", "Box Breathing (6 min)", "Calms nervous system.",
+                "g_morn", HabitType.DURATION_MIN, target = 6.0, unit = "min", order = 1, tags = listOf(TagIds.MINDSET)
+            ),
+            Habit(
+                "h_teeth", "Brush + Floss + Tongue scrape", "Dental foundation.",
+                "g_morn", HabitType.CHECKBOX, order = 2, canSkip = false, tags = listOf(TagIds.HYGIENE)
+            ),
+            Habit(
+                "h_supp_am", "Morning Supplements (Omega-3, Multi)", "Foundational nutrition.",
+                "g_morn", HabitType.COUNTER, target = 1.0, unit = "", order = 3,
+                isSupplement = true, tags = listOf(TagIds.SUPPLEMENTS)
+            ),
 
-            // Focus/Work
-            Habit("h_move", "Move Your Body", "20+ min walk or exercise for brain and longevity.", "g_focus", HabitType.CHECKBOX, order = 0),
-            Habit("h_protein", "Protein First", "Prioritize protein for muscle, satiety and metabolism.", "g_focus", HabitType.CHECKBOX, order = 1),
-            Habit("h_focus", "Deep Focus Block", "Undistracted meaningful work or learning session.", "g_focus", HabitType.DURATION_MIN, target = 60.0, unit = "min", order = 2),
-            Habit("h_pull", "Pull-ups / Dips / Squats", "Strength training tracker (reps).", "g_workout", HabitType.COUNTER, target = 5.0, unit = "reps", order = 3),
+            // Daytime focus
+            Habit(
+                "h_move", "Move Your Body", "20+ min walk or exercise.",
+                "g_focus", HabitType.CHECKBOX, order = 0, tags = listOf(TagIds.MOVEMENT)
+            ),
+            Habit(
+                "h_protein", "Protein First", "Muscle, satiety, metabolism.",
+                "g_focus", HabitType.CHECKBOX, order = 1, tags = listOf(TagIds.NUTRITION)
+            ),
+            Habit(
+                "h_focus", "Deep Focus Block", "Undistracted work or learning.",
+                "g_focus", HabitType.DURATION_MIN, target = 60.0, unit = "min", order = 2, tags = listOf(TagIds.MINDSET)
+            ),
+            Habit(
+                "h_pull", "Pull-ups / Dips / Squats", "Strength (reps).",
+                "g_focus", HabitType.COUNTER, target = 5.0, unit = "reps", order = 3, tags = listOf(TagIds.MOVEMENT)
+            ),
 
-            // Evening
-            Habit("h_wind", "Wind Down Routine", "Protects sleep quality with consistent bedtime.", "g_even", HabitType.CHECKBOX, order = 0),
-            Habit("h_hydrate", "Stay Hydrated", "Better energy, focus and recovery.", "g_even", HabitType.COUNTER, target = 2.5, unit = "L", order = 1),
-            Habit("h_mg", "Magnesium + Chamomile", "Nervous system + sleep prep.", "g_even", HabitType.CHECKBOX, order = 2, isSupplement = true),
-            Habit("h_nSDR", "NSDR / 4-7-8 Breathing", "Non-sleep deep rest for recovery.", "g_even", HabitType.DURATION_MIN, target = 10.0, unit = "min", order = 3),
-
-            // Mindset (journaling)
-            Habit("h_grat", "Gratitude / 3 things", "Note things you're grateful for.", "g_mind", HabitType.NOTE, order = 0),
-            Habit("h_wins", "Wins today (1-3)", "Celebrate specific progress.", "g_mind", HabitType.NOTE, order = 1),
-            Habit("h_reflect", "Hard is Good / Ownership", "Did I lean in? Took responsibility?", "g_mind", HabitType.SCALE_1_5, target = 4.0, unit = "", order = 2),
-
-            // Workout example exercise (user can create more + subgroups)
-            Habit("h_bench", "Bench Press", "Workout plan exercise. Log weight x reps.", "g_workout", HabitType.COUNTER, target = 60.0, unit = "kg x reps", order = 4)
+            // Bedtime / wind-down before sleep
+            Habit(
+                "h_wind", "Wind Down Routine", "Consistent bedtime protects sleep.",
+                "g_even", HabitType.CHECKBOX, order = 0, tags = listOf(TagIds.SLEEP)
+            ),
+            Habit(
+                "h_hydrate", "Stay Hydrated", "Energy and recovery.",
+                "g_even", HabitType.COUNTER, target = 2.5, unit = "L", order = 1, tags = listOf(TagIds.NUTRITION)
+            ),
+            Habit(
+                "h_mg", "Magnesium + Chamomile", "Sleep prep.",
+                "g_even", HabitType.CHECKBOX, order = 2, isSupplement = true, tags = listOf(TagIds.SUPPLEMENTS, TagIds.SLEEP)
+            ),
+            Habit(
+                "h_nSDR", "NSDR / 4-7-8 Breathing", "Non-sleep deep rest.",
+                "g_even", HabitType.DURATION_MIN, target = 10.0, unit = "min", order = 3, tags = listOf(TagIds.SLEEP, TagIds.MINDSET)
+            ),
+            Habit(
+                "h_grat", "Gratitude / 3 things", "Evening review.",
+                "g_even", HabitType.NOTE, order = 4, tags = listOf(TagIds.MINDSET)
+            )
         )
 
+        val sleep = SleepSettings(
+            bedTime = "23:00",
+            wakeTime = "07:00",
+            windDownMinutes = 60,
+            morningMinutes = 90,
+            morningGroupId = "g_morn",
+            bedtimeGroupId = "g_even",
+            sleepGroupId = "g_sleep"
+        )
+        val blocks = HabitDomain.buildSleepAnchoredBlocks(
+            sleep = sleep,
+            morningGroupId = "g_morn",
+            bedtimeGroupId = "g_even",
+            sleepGroupId = "g_sleep",
+            existingMiddle = listOf(
+                TimeBlock("08:30", "22:00", "g_focus", color = 0xFF3B82F6.toInt())
+            )
+        )
+        val schedule = Schedule(id = "s_sleep", name = "Sleep-centered", timeBlocks = blocks)
         val reminders = defaultReminders(groups)
 
         return AppData(
@@ -191,12 +306,14 @@ class AndroidHabitRepository(private val context: Context) : HabitRepository {
             habits = habits,
             entries = emptyMap(),
             reminders = reminders,
-            schemaVersion = 5,
+            schemaVersion = 6,
             onboarded = false,
             colorScheme = "default",
             backgroundMode = "dark",
-            schedules = emptyList(),
-            activeScheduleId = null
+            schedules = listOf(schedule),
+            activeScheduleId = "s_sleep",
+            tags = tags,
+            sleep = sleep
         )
     }
 
@@ -220,6 +337,9 @@ class AndroidHabitRepository(private val context: Context) : HabitRepository {
 
     /** 7-day average completion for a specific group (habits belonging to it). */
     fun computeGroup7DayAvg(data: AppData, groupId: String): Float = HabitDomain.computeGroup7DayAvg(data, groupId)
+
+    /** 7-day average for a category tag (independent of timeline group). */
+    fun computeTag7DayAvg(data: AppData, tagId: String): Float = HabitDomain.computeTag7DayAvg(data, tagId)
 
     /** Simple time-of-day group hint for widget / Today highlight. */
     fun getCurrentPeriodHint(): String = HabitDomain.getCurrentPeriodHint()
@@ -265,10 +385,11 @@ class AndroidHabitRepository(private val context: Context) : HabitRepository {
     }
 
     fun exportHabitsCsv(data: AppData): String {
-        val header = "id,name,groupId,type,target,unit,canSkip,archived,why,isSupplement\n"
+        val header = "id,name,groupId,type,target,unit,canSkip,archived,why,isSupplement,tags\n"
         val rows = data.habits.joinToString("\n") { h ->
             val why = h.why.replace(",", " ").replace("\n", " ")
-            listOf(h.id, h.name, h.groupId, h.type.name, h.target ?: "", h.unit, h.canSkip, h.archived, why, h.isSupplement).joinToString(",")
+            val tagStr = h.tags.joinToString("|")
+            listOf(h.id, h.name, h.groupId, h.type.name, h.target ?: "", h.unit, h.canSkip, h.archived, why, h.isSupplement, tagStr).joinToString(",")
         }
         return header + rows
     }

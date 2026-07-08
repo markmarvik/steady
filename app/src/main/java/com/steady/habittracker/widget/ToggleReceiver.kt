@@ -20,11 +20,11 @@ import kotlinx.coroutines.launch
 class ToggleReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         val habitId = intent.getStringExtra("habitId") ?: return
-        val action = intent.getStringExtra("action") ?: "TOGGLE"
-
-        if (action != "TOGGLE") {
+        // COMPLETE / TOGGLE: finish in-widget. Never open the app from a list tap.
+        // OPEN_LOG reserved only if we explicitly send it later.
+        val action = intent.getStringExtra("action") ?: "COMPLETE"
+        if (action == "OPEN_APP") {
             val i = Intent(context, MainActivity::class.java).apply {
-                putExtra("log_habit", habitId)
                 flags = Intent.FLAG_ACTIVITY_NEW_TASK or
                     Intent.FLAG_ACTIVITY_CLEAR_TOP or
                     Intent.FLAG_ACTIVITY_SINGLE_TOP
@@ -39,9 +39,19 @@ class ToggleReceiver : BroadcastReceiver() {
             try {
                 val repo = AndroidHabitRepository(appContext)
                 val data = repo.appDataFlow.first()
+                val habit = data.habits.find { it.id == habitId }
                 val today = HabitDomain.getToday()
                 val currentEntry = data.entries[today]?.get(habitId)
-                val newVal = if ((currentEntry?.value ?: 0.0) >= 0.5) 0.0 else 1.0
+                val alreadyDone = (currentEntry?.value ?: 0.0) >= 0.5 && currentEntry?.skipped != true
+                if (alreadyDone && habit?.type != com.steady.habittracker.data.HabitType.CHECKBOX) {
+                    return@launch
+                }
+                val newVal = when {
+                    alreadyDone -> 0.0 // checkbox untoggle
+                    habit?.type == com.steady.habittracker.data.HabitType.CHECKBOX -> 1.0
+                    habit?.target != null && (habit.target ?: 0.0) > 0 -> habit.target!!
+                    else -> 1.0
+                }
                 val entry = HabitEntry(
                     value = newVal,
                     note = currentEntry?.note ?: "",

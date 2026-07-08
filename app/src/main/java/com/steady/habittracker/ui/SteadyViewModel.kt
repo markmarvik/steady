@@ -6,17 +6,23 @@ import com.steady.habittracker.data.AndroidHabitRepository
 import com.steady.habittracker.data.AppData
 import com.steady.habittracker.data.Group
 import com.steady.habittracker.data.Habit
+import com.steady.habittracker.data.HabitDomain
 import com.steady.habittracker.data.HabitEntry
 import com.steady.habittracker.data.HabitType
 import com.steady.habittracker.data.Reminder
 import com.steady.habittracker.data.Schedule
+import com.steady.habittracker.data.SleepSettings
+import com.steady.habittracker.data.Tag
+import com.steady.habittracker.data.TagIds
 import com.steady.habittracker.data.TimeBlock
 import com.steady.habittracker.data.withActiveSchedule
 import com.steady.habittracker.data.withAddedGroup
 import com.steady.habittracker.data.withAddedHabit
 import com.steady.habittracker.data.withAddedSchedule
+import com.steady.habittracker.data.withAddedTag
 import com.steady.habittracker.data.withArchivedGroup
 import com.steady.habittracker.data.withArchivedHabit
+import com.steady.habittracker.data.withArchivedTag
 import com.steady.habittracker.data.withBackgroundMode
 import com.steady.habittracker.data.withColorScheme
 import com.steady.habittracker.data.withGroup
@@ -24,6 +30,7 @@ import com.steady.habittracker.data.withHabit
 import com.steady.habittracker.data.withOnboarded
 import com.steady.habittracker.data.withReminder
 import com.steady.habittracker.data.withRemovedEntry
+import com.steady.habittracker.data.withSleep
 import com.steady.habittracker.data.withToggledReminder
 import com.steady.habittracker.data.withUpdatedEntry
 import com.steady.habittracker.data.withUpdatedSchedule
@@ -96,6 +103,15 @@ class SteadyViewModel(
         }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
+    /** Per tag: (tagName, 7-day avg) — category completion for History. */
+    val tagWeeklyRates: StateFlow<List<Triple<String, String, Float>>> = appData
+        .map { data ->
+            HabitDomain.getActiveTags(data).map { t ->
+                Triple(t.id, t.name, repository.computeTag7DayAvg(data, t.id))
+            }
+        }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
     // --- Logging (core action) - now uses immutable helpers (#16) ---
     // date param supports backfill for manual metrics (issue #19)
     fun logEntry(habitId: String, value: Double, note: String = "", date: String = today) {
@@ -144,6 +160,7 @@ class SteadyViewModel(
         type: HabitType = HabitType.CHECKBOX,
         canSkip: Boolean = true,
         isSupplement: Boolean = false,
+        tags: List<String> = emptyList(),
         showPreset: com.steady.habittracker.data.ShowPreset = com.steady.habittracker.data.ShowPreset.DAILY,
         weekdays: Set<Int> = setOf(1, 2, 3, 4, 5, 6, 7),
         intervalDays: Int = 2,
@@ -155,6 +172,8 @@ class SteadyViewModel(
             val current = appData.value
             val order = current.habits.filter { it.groupId == groupId }.size
             val todayStr = today
+            val tagList = tags.toMutableList()
+            if (isSupplement && TagIds.SUPPLEMENTS !in tagList) tagList.add(TagIds.SUPPLEMENTS)
             val newHabit = Habit(
                 id = "h_${UUID.randomUUID().toString().take(8)}",
                 name = name.trim(),
@@ -163,7 +182,8 @@ class SteadyViewModel(
                 type = type,
                 order = order,
                 canSkip = canSkip,
-                isSupplement = isSupplement,
+                isSupplement = isSupplement || TagIds.SUPPLEMENTS in tagList,
+                tags = tagList.distinct(),
                 showPreset = showPreset,
                 weekdays = weekdays,
                 intervalDays = intervalDays,
@@ -173,6 +193,65 @@ class SteadyViewModel(
             val updated = current.withAddedHabit(newHabit)
             repository.saveData(updated)
             refreshWidget(updated)
+        }
+    }
+
+    fun addTag(name: String) {
+        if (name.isBlank()) return
+        viewModelScope.launch {
+            val current = appData.value
+            if (current.tags.any { it.name.equals(name.trim(), ignoreCase = true) && !it.archived }) return@launch
+            val tag = Tag(
+                id = "tag_${UUID.randomUUID().toString().take(8)}",
+                name = name.trim(),
+                order = current.tags.size
+            )
+            repository.saveData(current.withAddedTag(tag))
+        }
+    }
+
+    fun archiveTag(tagId: String) {
+        viewModelScope.launch {
+            val current = appData.value
+            repository.saveData(current.withArchivedTag(tagId))
+        }
+    }
+
+    fun updateSleepSettings(sleep: SleepSettings) {
+        viewModelScope.launch {
+            val current = appData.value
+            repository.saveData(current.withSleep(sleep))
+        }
+    }
+
+    /**
+     * Apply sleep spine: ensure Morning / Bedtime / Sleep groups exist, rebuild 24h blocks
+     * from bed/wake, activate schedule. Preserves middle (Focus) blocks when possible.
+     */
+    fun applySleepAnchoredSchedule() {
+        viewModelScope.launch {
+            var current = HabitDomain.ensureSleepLinkedGroups(appData.value)
+            val s = current.sleep
+            val morn = s.morningGroupId ?: return@launch
+            val bed = s.bedtimeGroupId ?: return@launch
+            val sleepG = s.sleepGroupId ?: return@launch
+            val existing = HabitDomain.getActiveSchedule(current)?.timeBlocks ?: emptyList()
+            val blocks = HabitDomain.buildSleepAnchoredBlocks(s, morn, bed, sleepG, existing)
+            val scheduleId = current.activeScheduleId ?: "s_sleep"
+            val schedule = current.schedules.find { it.id == scheduleId }?.copy(
+                name = current.schedules.find { it.id == scheduleId }?.name ?: "Sleep-centered",
+                timeBlocks = blocks,
+                enabled = true
+            ) ?: Schedule(id = scheduleId, name = "Sleep-centered", timeBlocks = blocks)
+            current = if (current.schedules.any { it.id == schedule.id }) {
+                current.withUpdatedSchedule(schedule)
+            } else {
+                current.withAddedSchedule(schedule)
+            }
+            current = current.withActiveSchedule(schedule.id).withSleep(s)
+            repository.saveData(current)
+            refreshWidget(current)
+            rescheduleReminders(current)
         }
     }
 

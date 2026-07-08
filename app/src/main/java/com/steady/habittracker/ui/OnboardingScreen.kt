@@ -20,6 +20,12 @@ import androidx.compose.ui.unit.sp
  */
 @Composable
 fun OnboardingScreen(onComplete: () -> Unit) {
+    // Explicit high-contrast colors so welcome is readable even if theme defaults fail
+    val title = Color(0xFFF1F5F9)
+    val body = Color(0xFFE2E8F0)
+    val muted = Color(0xFF94A3B8)
+    val accent = MaterialTheme.colorScheme.primary
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -33,33 +39,31 @@ fun OnboardingScreen(onComplete: () -> Unit) {
             "Welcome to Steady",
             fontSize = 28.sp,
             fontWeight = FontWeight.Bold,
-            color = MaterialTheme.colorScheme.onSurface,
+            color = title,
             textAlign = TextAlign.Center
         )
         Spacer(Modifier.height(8.dp))
         Text(
             "Evidence-based habits. Simple daily tracking.",
             fontSize = 14.sp,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            color = muted,
             textAlign = TextAlign.Center
         )
 
         Spacer(Modifier.height(28.dp))
 
-        // Feature bullets
         val features = listOf(
-            "📅 Groups by time of day (Morning, Focus, Evening, Mindset...)",
-            "✅ Tap to log. Rich types: checkboxes, counters, minutes, scales, notes.",
-            "📈 See your streak and weekly trends at a glance.",
-            "🔔 Reminders you control in Manage.",
-            "🧩 The home-screen widget shows exactly what to do right now.",
-            "💾 Export your data anytime (even when just starting).",
-            "🗄 Archive instead of delete — your history stays safe."
+            "😴 Sleep first — set bed & wake; Morning and Bedtime anchor to them.",
+            "📅 Timeline groups = when (Morning, Focus, Bedtime, Sleep).",
+            "🏷 Tags = what it is (Supplements, Movement…) for History — move freely.",
+            "✅ Tap to log. Checkboxes, counters, minutes, scales, notes.",
+            "📈 Streak + tag completion trends.",
+            "🧩 Widget shows today’s full list; NOW highlights the current block."
         )
         features.forEach { f ->
             Text(
                 f,
-                color = MaterialTheme.colorScheme.onSurface,
+                color = body,
                 fontSize = 14.sp,
                 modifier = Modifier
                     .fillMaxWidth()
@@ -71,7 +75,7 @@ fun OnboardingScreen(onComplete: () -> Unit) {
 
         Text(
             "We've started you with a proven set of high-ROI habits.\nCustomize freely in the Manage tab.",
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            color = muted,
             fontSize = 12.sp,
             textAlign = TextAlign.Center
         )
@@ -80,16 +84,16 @@ fun OnboardingScreen(onComplete: () -> Unit) {
 
         Button(
             onClick = onComplete,
-            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
+            colors = ButtonDefaults.buttonColors(containerColor = accent),
             modifier = Modifier.fillMaxWidth()
         ) {
-            Text("Start tracking", color = MaterialTheme.colorScheme.onPrimary, fontWeight = FontWeight.SemiBold)
+            Text("Start tracking", color = Color(0xFF0F172A), fontWeight = FontWeight.SemiBold)
         }
 
         Spacer(Modifier.height(12.dp))
         Text(
             "Tip: Add the Steady widget to your home screen for 1-tap logging.",
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            color = muted,
             fontSize = 11.sp,
             textAlign = TextAlign.Center
         )
@@ -97,7 +101,7 @@ fun OnboardingScreen(onComplete: () -> Unit) {
         Spacer(Modifier.height(12.dp))
         Text(
             "Later: use the ⓘ icon (next to gear) to re-run the interactive tour anytime.",
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            color = muted,
             fontSize = 10.sp,
             textAlign = TextAlign.Center
         )

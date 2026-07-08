@@ -184,6 +184,84 @@ object HabitDomain {
         return result.reversed()
     }
 
+    /** Log counts per day for last N days (oldest first). Done (value≥0.5) + total entries. */
+    fun computeLastNDaysLogCounts(data: AppData, n: Int = 30): List<Triple<String, Int, Int>> {
+        val result = mutableListOf<Triple<String, Int, Int>>()
+        var d = LocalDate.now()
+        repeat(n) {
+            val key = d.toString()
+            val dayMap = data.entries[key] ?: emptyMap()
+            val done = dayMap.count { (_, e) -> e.value >= 0.5 && !e.skipped }
+            result.add(0, Triple(key, done, dayMap.size))
+            d = d.minusDays(1)
+        }
+        return result
+    }
+
+    /**
+     * Calendar heatmap cells for [weeks] weeks ending today (GitHub/Anki style).
+     * Each cell: date string, completion rate 0..1 (null = nothing due / no data day with 0 entries).
+     * Rows are weekdays Mon=0…Sun=6; columns are weeks oldest→newest.
+     */
+    fun computeHeatmap(data: AppData, weeks: Int = 16): List<List<Pair<String, Float?>>> {
+        val today = LocalDate.now()
+        // Align end to today; start so we fill full weeks (Mon start)
+        val days = weeks * 7
+        val start = today.minusDays((days - 1).toLong())
+        // Pad start back to Monday
+        val pad = (start.dayOfWeek.value - 1).toLong() // Mon=1 → 0
+        val gridStart = start.minusDays(pad)
+        val columns = mutableListOf<List<Pair<String, Float?>>>()
+        var colStart = gridStart
+        while (!colStart.isAfter(today)) {
+            val week = (0..6).map { offset ->
+                val d = colStart.plusDays(offset.toLong())
+                val key = d.toString()
+                if (d.isAfter(today)) {
+                    key to null
+                } else {
+                    val due = habitsDueOn(data, d)
+                    val dayMap = data.entries[key] ?: emptyMap()
+                    when {
+                        due.isEmpty() && dayMap.isEmpty() -> key to null
+                        due.isEmpty() -> key to 1f
+                        else -> {
+                            val done = due.count { h -> (dayMap[h.id]?.value ?: 0.0) >= 0.5 }
+                            key to (done.toFloat() / due.size)
+                        }
+                    }
+                }
+            }
+            columns.add(week)
+            colStart = colStart.plusWeeks(1)
+        }
+        return columns
+    }
+
+    /** Hour-of-day histogram (0..23) of log timestamps across all entries. */
+    fun computeHourlyLogCounts(data: AppData): IntArray {
+        val hours = IntArray(24)
+        data.entries.values.forEach { day ->
+            day.values.forEach { e ->
+                if (e.loggedAt > 0) {
+                    val h = java.time.Instant.ofEpochMilli(e.loggedAt)
+                        .atZone(java.time.ZoneId.systemDefault())
+                        .hour
+                    hours[h]++
+                }
+            }
+        }
+        return hours
+    }
+
+    /** Total done logs (value≥0.5, not skipped) across history. */
+    fun totalCompletedLogs(data: AppData): Int =
+        data.entries.values.sumOf { day -> day.values.count { it.value >= 0.5 && !it.skipped } }
+
+    /** Days with at least one done log. */
+    fun daysWithActivity(data: AppData): Int =
+        data.entries.count { (_, map) -> map.values.any { it.value >= 0.5 && !it.skipped } }
+
     /** 7-day average completion for a group (only habits due that day count). */
     fun computeGroup7DayAvg(data: AppData, groupId: String): Float {
         var sum = 0f
@@ -201,6 +279,164 @@ object HabitDomain {
             d = d.minusDays(1)
         }
         return if (count > 0) sum / count else 0f
+    }
+
+    /** Active (non-archived) tags, sorted. */
+    fun getActiveTags(data: AppData): List<Tag> =
+        data.tags.filter { !it.archived }.sortedBy { it.order }
+
+    /** Habits carrying a given tag (active). */
+    fun habitsWithTag(data: AppData, tagId: String): List<Habit> =
+        data.habits.filter { !it.archived && (tagId in it.tags || (tagId == TagIds.SUPPLEMENTS && it.isSupplement)) }
+
+    /**
+     * 7-day average completion for a tag — independent of which timeline group the habit sits in.
+     * So morning Omega-3 still counts toward Supplements even if group = Morning.
+     */
+    fun computeTag7DayAvg(data: AppData, tagId: String): Float {
+        var sum = 0f
+        var count = 0
+        var d = LocalDate.now()
+        repeat(7) {
+            val due = habitsDueOn(data, d).filter { h ->
+                tagId in h.tags || (tagId == TagIds.SUPPLEMENTS && h.isSupplement)
+            }
+            if (due.isNotEmpty()) {
+                val key = d.toString()
+                val dayMap = data.entries[key] ?: emptyMap()
+                val done = due.count { h -> (dayMap[h.id]?.value ?: 0.0) >= 0.5 }
+                sum += done.toFloat() / due.size
+                count++
+            }
+            d = d.minusDays(1)
+        }
+        return if (count > 0) sum / count else 0f
+    }
+
+    /** Today’s completion rate for a tag (due items only). */
+    fun computeTagDayCompletion(data: AppData, tagId: String, date: LocalDate = LocalDate.now()): Float {
+        val due = habitsDueOn(data, date).filter { h ->
+            tagId in h.tags || (tagId == TagIds.SUPPLEMENTS && h.isSupplement)
+        }
+        if (due.isEmpty()) return 1f
+        val dayMap = data.entries[date.toString()] ?: emptyMap()
+        val done = due.count { h -> (dayMap[h.id]?.value ?: 0.0) >= 0.5 }
+        return done.toFloat() / due.size
+    }
+
+    fun tagNamesForHabit(data: AppData, habit: Habit): List<String> {
+        val byId = data.tags.associateBy { it.id }
+        val names = habit.tags.mapNotNull { byId[it]?.name }
+        return if (habit.isSupplement && names.none { it.equals("Supplements", true) }) {
+            names + "Supplements"
+        } else names
+    }
+
+    // --- Sleep-centered 24h timeline ---
+
+    /**
+     * Build time blocks from sleep settings + group ids.
+     * Order on the day: Morning (at wake) → optional middle blocks kept → Bedtime → Sleep overnight.
+     * [existingMiddle] are non-sleep/morning/bedtime blocks to preserve (Focus, etc.).
+     */
+    fun buildSleepAnchoredBlocks(
+        sleep: SleepSettings,
+        morningGroupId: String,
+        bedtimeGroupId: String,
+        sleepGroupId: String,
+        existingMiddle: List<TimeBlock> = emptyList()
+    ): List<TimeBlock> {
+        val wake = parseTimeToMinutes(sleep.wakeTime).coerceIn(0, 24 * 60 - 1)
+        val bed = parseTimeToMinutes(sleep.bedTime).coerceIn(0, 24 * 60 - 1)
+        val morningEnd = (wake + sleep.morningMinutes.coerceIn(15, 180)).coerceAtMost(
+            if (bed > wake) bed else 24 * 60
+        )
+        val windStart = run {
+            val raw = bed - sleep.windDownMinutes.coerceIn(15, 180)
+            if (raw < 0) raw + 24 * 60 else raw
+        }
+
+        val morning = TimeBlock(
+            start = minutesToHhMm(wake),
+            end = minutesToHhMm(morningEnd),
+            groupId = morningGroupId,
+            color = 0xFFFBBF24.toInt() // amber
+        )
+        val bedtime = TimeBlock(
+            start = minutesToHhMm(windStart),
+            end = minutesToHhMm(bed),
+            groupId = bedtimeGroupId,
+            color = 0xFF8B5CF6.toInt() // purple
+        )
+        val sleepBlock = TimeBlock(
+            start = minutesToHhMm(bed),
+            end = minutesToHhMm(wake),
+            groupId = sleepGroupId,
+            color = 0xFF64748B.toInt() // slate
+        )
+
+        // Keep middle blocks that don't overlap sleep anchors (simple: not those group ids)
+        val reserved = setOf(morningGroupId, bedtimeGroupId, sleepGroupId)
+        val middle = existingMiddle.filter { it.groupId !in reserved }
+
+        return listOf(morning) + middle + listOf(bedtime, sleepBlock)
+    }
+
+    /**
+     * Ensure Sleep / Morning / Bedtime groups exist and sleep settings point at them.
+     * Returns updated AppData (groups + sleep only).
+     */
+    fun ensureSleepLinkedGroups(data: AppData): AppData {
+        var groups = data.groups.toMutableList()
+        fun findOrAdd(preferredId: String, name: String, hint: String, order: Int): String {
+            val existing = groups.firstOrNull {
+                !it.archived && (
+                    it.id == preferredId ||
+                        it.timeHint == hint ||
+                        it.name.equals(name, ignoreCase = true) ||
+                        (hint == "MORNING" && it.name.contains("morning", true)) ||
+                        (hint == "BEDTIME" && (it.name.contains("bed", true) || it.name.contains("wind", true) || it.name.contains("evening", true))) ||
+                        (hint == "SLEEP" && it.name.equals("sleep", true))
+                    )
+            }
+            if (existing != null) return existing.id
+            groups.add(Group(preferredId, name, hint, order = order))
+            return preferredId
+        }
+        val mornId = data.sleep.morningGroupId
+            ?: findOrAdd("g_morn", "Morning Routine", "MORNING", 0)
+        val bedId = data.sleep.bedtimeGroupId
+            ?: findOrAdd("g_even", "Bedtime / Wind Down", "BEDTIME", 2)
+        // Prefer BEDTIME hint; also accept existing Evening group
+        val bedResolved = groups.firstOrNull { it.id == bedId }?.id
+            ?: findOrAdd("g_even", "Bedtime / Wind Down", "EVENING", 2)
+        val sleepId = data.sleep.sleepGroupId
+            ?: findOrAdd("g_sleep", "Sleep", "SLEEP", 10)
+
+        // Ensure sleep group name/hint if we created/found it
+        groups = groups.map {
+            when (it.id) {
+                sleepId -> it.copy(timeHint = "SLEEP", name = if (it.name.isBlank()) "Sleep" else it.name)
+                else -> it
+            }
+        }.toMutableList()
+        if (groups.none { it.id == sleepId }) {
+            groups.add(Group(sleepId, "Sleep", "SLEEP", order = 10))
+        }
+
+        val sleep = data.sleep.copy(
+            morningGroupId = mornId,
+            bedtimeGroupId = bedResolved,
+            sleepGroupId = sleepId
+        )
+        return data.copy(groups = groups.sortedBy { it.order }, sleep = sleep)
+    }
+
+    fun minutesToHhMm(totalMin: Int): String {
+        val m = ((totalMin % (24 * 60)) + (24 * 60)) % (24 * 60)
+        val h = m / 60
+        val min = m % 60
+        return "%02d:%02d".format(h, min)
     }
 
     /** Simple time-of-day group hint for widget / Today highlight. */
@@ -316,7 +552,7 @@ object HabitDomain {
         return dow in schedule.weekdays
     }
 
-    private fun parseTimeToMinutes(hhmm: String): Int {
+    fun parseTimeToMinutes(hhmm: String): Int {
         val parts = hhmm.split(":")
         val h = parts.getOrNull(0)?.toIntOrNull() ?: 0
         val m = parts.getOrNull(1)?.toIntOrNull() ?: 0
@@ -344,6 +580,8 @@ fun computeStreak(data: AppData): Int = HabitDomain.computeStreak(data)
 fun computeDayCompletion(data: AppData, dateStr: String): Float = HabitDomain.computeDayCompletion(data, dateStr)
 fun computeLastNDays(data: AppData, n: Int): List<Pair<String, Float>> = HabitDomain.computeLastNDays(data, n)
 fun computeGroup7DayAvg(data: AppData, groupId: String): Float = HabitDomain.computeGroup7DayAvg(data, groupId)
+fun computeTag7DayAvg(data: AppData, tagId: String): Float = HabitDomain.computeTag7DayAvg(data, tagId)
+fun getActiveTags(data: AppData): List<Tag> = HabitDomain.getActiveTags(data)
 fun getCurrentPeriodHint(): String = HabitDomain.getCurrentPeriodHint()
 fun resolveThemeColors(data: AppData) = HabitDomain.resolveThemeColors(data)
 fun getActiveGroups(data: AppData): List<Group> = HabitDomain.getActiveGroups(data)
@@ -359,4 +597,21 @@ fun habitsDueOn(data: AppData, date: LocalDate = LocalDate.now()): List<Habit> =
 fun pendingGroupedForDate(data: AppData, date: LocalDate = LocalDate.now()) = HabitDomain.pendingGroupedForDate(data, date)
 fun showRuleLabel(habit: Habit): String = HabitDomain.showRuleLabel(habit)
 
-// Note: repo still exposes getToday() and resolve* for convenience + ThemeColors type lives in repo temporarily.
+/** Stable default tag ids (seeded + migration). */
+object TagIds {
+    const val SUPPLEMENTS = "tag_supp"
+    const val MOVEMENT = "tag_move"
+    const val MINDSET = "tag_mind"
+    const val NUTRITION = "tag_nutri"
+    const val HYGIENE = "tag_hygiene"
+    const val SLEEP = "tag_sleep"
+}
+
+fun defaultTags(): List<Tag> = listOf(
+    Tag(TagIds.SUPPLEMENTS, "Supplements", color = 0xFF14B8A6.toInt(), order = 0),
+    Tag(TagIds.MOVEMENT, "Movement", color = 0xFF3B82F6.toInt(), order = 1),
+    Tag(TagIds.MINDSET, "Mindset", color = 0xFF8B5CF6.toInt(), order = 2),
+    Tag(TagIds.NUTRITION, "Nutrition", color = 0xFFF97316.toInt(), order = 3),
+    Tag(TagIds.HYGIENE, "Hygiene", color = 0xFF22C55E.toInt(), order = 4),
+    Tag(TagIds.SLEEP, "Sleep", color = 0xFF64748B.toInt(), order = 5)
+)

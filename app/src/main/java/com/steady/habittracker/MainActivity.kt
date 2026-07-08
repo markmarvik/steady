@@ -232,12 +232,7 @@ fun SteadyApp(
         }
     }
 
-    if (!appData.onboarded) {
-        // Onboarding gate (full screen for first run)
-        OnboardingScreen(onComplete = { viewModel.completeOnboarding() })
-    } else {
     // Full dynamic theming: background (dark/amoled/light) + accent (foreground highlight)
-    // All UI elements below should use MaterialTheme.colorScheme.* or derived values.
     val isLight = appData.backgroundMode == "light"
     val isAmoled = appData.backgroundMode == "amoled"
 
@@ -253,6 +248,11 @@ fun SteadyApp(
     }
     val onSurfaceColor = if (isLight) Color(0xFF0F172A) else Color(0xFFE2E8F0)
     val onSurfaceVariant = if (isLight) Color(0xFF475569) else Color(0xFF94A3B8)
+    val surfaceVariantColor = when {
+        isAmoled -> Color(0xFF1A1A1A)
+        isLight -> Color(0xFFE2E8F0)
+        else -> Color(0xFF334155)
+    }
 
     val colorScheme = if (isLight) {
         lightColorScheme(
@@ -262,7 +262,7 @@ fun SteadyApp(
             onBackground = onSurfaceColor,
             surface = surfaceColor,
             onSurface = onSurfaceColor,
-            surfaceVariant = if (isAmoled) Color(0xFF1A1A1A) else Color(0xFF334155),
+            surfaceVariant = surfaceVariantColor,
             onSurfaceVariant = onSurfaceVariant,
             outline = onSurfaceVariant
         )
@@ -274,12 +274,20 @@ fun SteadyApp(
             onBackground = onSurfaceColor,
             surface = surfaceColor,
             onSurface = onSurfaceColor,
-            surfaceVariant = if (isAmoled) Color(0xFF1A1A1A) else Color(0xFF334155),
+            surfaceVariant = surfaceVariantColor,
             onSurfaceVariant = onSurfaceVariant,
             outline = onSurfaceVariant
         )
     }
 
+    if (!appData.onboarded) {
+        // Onboarding must use themed colors (was outside theme → dark text on dark bg)
+        MaterialTheme(colorScheme = colorScheme) {
+            Surface(modifier = Modifier.fillMaxSize(), color = bgColor) {
+                OnboardingScreen(onComplete = { viewModel.completeOnboarding() })
+            }
+        }
+    } else {
     MaterialTheme(colorScheme = colorScheme) {
     Scaffold(
         containerColor = bgColor
@@ -319,11 +327,19 @@ fun SteadyApp(
                         Icon(Icons.Default.Settings, contentDescription = "Settings", tint = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                     IconButton(onClick = {
-                        showHelpTour = true
-                        tourStep = 0
-                        selectedTab = 0
+                        if (showHelpTour) {
+                            showHelpTour = false
+                        } else {
+                            showHelpTour = true
+                            tourStep = 0
+                            selectedTab = 0
+                        }
                     }) {
-                        Icon(Icons.Default.Info, contentDescription = "Help / Tour", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Icon(
+                            Icons.Default.Info,
+                            contentDescription = if (showHelpTour) "Close tour" else "Help / Tour",
+                            tint = if (showHelpTour) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                        )
                     }
                 }
             }
@@ -489,12 +505,13 @@ fun SteadyApp(
                     2 -> ManageScreen(
                         appData = appData,
                         onAddGroup = { n, h, p -> viewModel.addGroup(n, h, p) },
-                        onAddHabit = { name, gid, type, isSupp, preset, weekdays, interval, dates ->
+                        onAddHabit = { name, gid, type, isSupp, tags, preset, weekdays, interval, dates ->
                             viewModel.addHabit(
                                 name = name,
                                 groupId = gid,
                                 type = type,
                                 isSupplement = isSupp,
+                                tags = tags,
                                 showPreset = preset,
                                 weekdays = weekdays,
                                 intervalDays = interval,
@@ -515,6 +532,9 @@ fun SteadyApp(
                         onApplySchedulePreset = viewModel::applySchedulePreset,
                         onSetActiveSchedule = viewModel::setActiveSchedule,
                         onUpdateScheduleBlocks = viewModel::updateScheduleBlocks,
+                        onAddTag = viewModel::addTag,
+                        onUpdateSleep = viewModel::updateSleepSettings,
+                        onApplySleepSchedule = viewModel::applySleepAnchoredSchedule,
                         schedules = appData.schedules,
                         activeScheduleId = appData.activeScheduleId
                     )

@@ -169,6 +169,7 @@ fun TodayScreen(
                     val isSimpleTapAdd = habit.type == HabitType.COUNTER &&
                         ((habit.target ?: 0.0) <= 2.0 || habit.isSupplement || habit.name.contains("supp", ignoreCase = true) || habit.name.contains("magnesium", ignoreCase = true))
                     val afterName = habit.afterHabitId?.let { nameById[it] }
+                    val tagLabel = HabitDomain.tagNamesForHabit(appData, habit).joinToString(" · ")
 
                     HabitRow(
                         habit = habit,
@@ -176,6 +177,7 @@ fun TodayScreen(
                         isDone = isDone,
                         isSkipped = isSkipped,
                         stackAfterLabel = afterName,
+                        tagLabel = tagLabel,
                         onToggle = { onToggle(habit.id) },
                         onLog = {
                             if (isSimpleTapAdd) {
@@ -202,6 +204,7 @@ private fun HabitRow(
     isDone: Boolean,
     isSkipped: Boolean,
     stackAfterLabel: String? = null,
+    tagLabel: String = "",
     onToggle: () -> Unit,
     onLog: () -> Unit,
     onSkip: () -> Unit,
@@ -239,32 +242,44 @@ private fun HabitRow(
                 .padding(start = if (stackAfterLabel != null) 12.dp else 0.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // Status indicator
+            // Status indicator — high contrast (no white-on-light-gray)
             val showCheck = habit.type == HabitType.CHECKBOX && isDone && !isSkipped
+            val iconBg = when {
+                isSkipped -> MaterialTheme.colorScheme.error.copy(alpha = 0.2f)
+                showCheck -> MaterialTheme.colorScheme.primary
+                isDone -> MaterialTheme.colorScheme.primary.copy(alpha = 0.35f)
+                else -> MaterialTheme.colorScheme.primary.copy(alpha = 0.18f)
+            }
+            val iconFg = when {
+                isSkipped -> Color(0xFFF87171)
+                showCheck -> MaterialTheme.colorScheme.onPrimary
+                else -> MaterialTheme.colorScheme.primary
+            }
             Box(
                 modifier = Modifier
-                    .size(26.dp)
-                    .background(
-                        if (showCheck) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                        RoundedCornerShape(8.dp)
-                    ),
+                    .size(28.dp)
+                    .background(iconBg, RoundedCornerShape(8.dp)),
                 contentAlignment = Alignment.Center
             ) {
                 if (showCheck) {
-                    Icon(Icons.Default.Check, null, tint = MaterialTheme.colorScheme.onPrimary, modifier = Modifier.size(16.dp))
+                    Icon(Icons.Default.Check, null, tint = iconFg, modifier = Modifier.size(16.dp))
                 } else if (isSkipped) {
-                    Text("⏭", color = Color(0xFFF87171), fontSize = 12.sp) // keep a soft red for skip state
+                    Text("⏭", color = iconFg, fontSize = 12.sp)
                 } else if (habit.type != HabitType.CHECKBOX) {
                     Text(
                         when (habit.type) {
                             HabitType.COUNTER -> "#"
-                            HabitType.DURATION_MIN -> "⏱"
-                            HabitType.SCALE_1_5 -> "1-5"
+                            HabitType.DURATION_MIN -> "m"
+                            HabitType.SCALE_1_5 -> "±"
                             HabitType.NOTE -> "✎"
                             else -> "•"
                         },
-                        color = Color.White, fontSize = 11.sp
+                        color = iconFg,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold
                     )
+                } else {
+                    Text("○", color = iconFg, fontSize = 14.sp)
                 }
             }
 
@@ -273,12 +288,18 @@ private fun HabitRow(
             Column(Modifier.weight(1f)) {
                 Text(
                     habit.name +
-                        (if (!habit.canSkip) " (essential)" else "") +
-                        (if (habit.isSupplement) " [supp]" else ""),
+                        (if (!habit.canSkip) " (essential)" else ""),
                     color = if (isSkipped) Color(0xFFF87171) else MaterialTheme.colorScheme.onSurface,
                     fontSize = 15.sp,
                     fontWeight = FontWeight.SemiBold
                 )
+                if (tagLabel.isNotBlank()) {
+                    Text(
+                        tagLabel,
+                        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.9f),
+                        fontSize = 11.sp
+                    )
+                }
                 if (stackAfterLabel != null) {
                     Text(
                         "↳ after $stackAfterLabel",

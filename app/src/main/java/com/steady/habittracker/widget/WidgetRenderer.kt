@@ -93,6 +93,7 @@ object WidgetRenderer {
                 views.setPendingIntentTemplate(R.id.widget_list, templatePi)
             }
 
+            // Only the explicit "Open Steady" button opens the app (not title / list taps)
             val open = Intent(context, MainActivity::class.java).apply {
                 flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
             }
@@ -100,7 +101,6 @@ object WidgetRenderer {
                 context, 999, open, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
             )
             views.setOnClickPendingIntent(R.id.open_btn, openPi)
-            views.setOnClickPendingIntent(R.id.widget_title, openPi)
 
             appWidgetManager.updateAppWidget(id, views)
             // Force list reload after snapshot write

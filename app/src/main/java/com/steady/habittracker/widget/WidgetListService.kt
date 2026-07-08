@@ -51,16 +51,22 @@ private class WidgetListFactory(
             }
             WidgetRowKind.HABIT -> {
                 val rv = RemoteViews(context.packageName, R.layout.widget_habit_row)
-                val prefix = if (row.isCheckbox) "☐ " else "✎ "
-                rv.setTextViewText(R.id.habit_row_text, prefix + row.title)
-                rv.setTextColor(R.id.habit_row_text, WidgetRenderer.readTextColor(context))
-                rv.setInt(R.id.habit_row_text, "setBackgroundColor", WidgetRenderer.readRowBg(context))
+                val textColor = WidgetRenderer.readTextColor(context)
+                val rowBg = WidgetRenderer.readRowBg(context)
+                // Always complete from widget (no accidental app open). Checkboxes toggle;
+                // counters/durations/etc. log a simple done value.
+                rv.setTextViewText(R.id.habit_row_check, if (row.isCheckbox) "☐" else "✓")
+                rv.setTextColor(R.id.habit_row_check, textColor)
+                rv.setTextViewText(R.id.habit_row_text, row.title)
+                rv.setTextColor(R.id.habit_row_text, textColor)
+                rv.setInt(R.id.habit_row_root, "setBackgroundColor", rowBg)
 
                 val fillIn = Intent().apply {
                     putExtra("habitId", row.habitId)
-                    putExtra("action", if (row.isCheckbox) "TOGGLE" else "OPEN_LOG")
+                    putExtra("action", "COMPLETE")
                 }
-                rv.setOnClickFillInIntent(R.id.habit_row_text, fillIn)
+                // Entire row is one big hit target
+                rv.setOnClickFillInIntent(R.id.habit_row_root, fillIn)
                 rv
             }
         }
