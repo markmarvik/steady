@@ -5,37 +5,71 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.os.Build
+import com.steady.habittracker.data.AppData
 import com.steady.habittracker.data.Reminder
-import java.util.*
+import java.util.Calendar
 
 object AlarmScheduler {
-    fun scheduleAll(context: Context, reminders: List<Reminder>) {
+
+    fun scheduleAll(context: Context, data: AppData) {
         val am = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
-        reminders.filter { it.enabled }.forEach { r ->
-            scheduleOne(context, am, r)
+        // Cancel everything first so disabled / master-off is honored
+        data.reminders.forEach { r ->
+            am.cancel(makePending(context, r.id))
         }
+        if (!data.remindersMasterEnabled) return
+        data.reminders.filter { it.enabled }.forEach { r ->
+            scheduleOne(context, am, r, data)
+        }
+    }
+
+    fun scheduleAll(context: Context, reminders: List<Reminder>) {
+        // Legacy entry points (boot without full AppData master flag) — assume master on
+        scheduleAll(context, AppData(reminders = reminders, remindersMasterEnabled = true))
     }
 
     fun cancelAll(context: Context, reminders: List<Reminder>) {
         val am = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
         reminders.forEach { r ->
-            val pi = makePending(context, r.id)
-            am.cancel(pi)
+            am.cancel(makePending(context, r.id))
         }
     }
 
-    private fun scheduleOne(context: Context, am: AlarmManager, r: Reminder) {
-        val pi = makePending(context, r.id, r.groupId, r.groupId ?: "Daily")
-        val triggerAt = computeNext(r)
+    fun scheduleOne(context: Context, r: Reminder, data: AppData? = null) {
+        if (data != null && !data.remindersMasterEnabled) return
+        if (!r.enabled) return
+        val am = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
+        scheduleOne(context, am, r, data)
+    }
+
+    fun cancelOne(context: Context, reminderId: String) {
+        val am = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
+        am.cancel(makePending(context, reminderId))
+    }
+
+    private fun scheduleOne(context: Context, am: AlarmManager, r: Reminder, data: AppData?) {
+        val groupName = resolveGroupName(r, data)
+        val pi = makePending(context, r.id, r.groupId, groupName)
+        val triggerAt = computeNextTriggerMillis(r)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && !am.canScheduleExactAlarms()) {
-            // App should guide user; fall back to inexact
             am.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerAt, pi)
         } else {
             am.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerAt, pi)
         }
     }
 
-    private fun makePending(context: Context, id: String, groupId: String? = null, name: String = ""): PendingIntent {
+    private fun resolveGroupName(r: Reminder, data: AppData?): String {
+        if (r.groupId == null) return "Daily Review"
+        val name = data?.groups?.firstOrNull { it.id == r.groupId }?.name
+        return name ?: "Habits"
+    }
+
+    private fun makePending(
+        context: Context,
+        id: String,
+        groupId: String? = null,
+        name: String = ""
+    ): PendingIntent {
         val i = Intent(context, ReminderReceiver::class.java).apply {
             putExtra("reminderId", id)
             putExtra("groupId", groupId)
@@ -47,16 +81,51 @@ object AlarmScheduler {
         )
     }
 
-    private fun computeNext(r: Reminder): Long {
-        val cal = Calendar.getInstance()
+    /**
+     * Next fire time for [r], honoring HH:mm and weekdays (1=Mon … 7=Sun).
+     * Pure enough for unit tests via [computeNextTriggerMillis].
+     */
+    fun computeNextTriggerMillis(r: Reminder, nowMillis: Long = System.currentTimeMillis()): Long {
         val parts = r.time.split(":")
-        cal.set(Calendar.HOUR_OF_DAY, parts.getOrNull(0)?.toIntOrNull() ?: 8)
-        cal.set(Calendar.MINUTE, parts.getOrNull(1)?.toIntOrNull() ?: 30)
-        cal.set(Calendar.SECOND, 0)
-        if (cal.timeInMillis <= System.currentTimeMillis()) {
-            cal.add(Calendar.DAY_OF_YEAR, 1)
+        val hour = parts.getOrNull(0)?.toIntOrNull() ?: 8
+        val minute = parts.getOrNull(1)?.toIntOrNull() ?: 30
+        val days = if (r.days.isEmpty()) (1..7).toSet() else r.days
+
+        val cal = Calendar.getInstance()
+        cal.timeInMillis = nowMillis
+
+        // Search up to 8 days ahead for next matching weekday + time strictly after now
+        for (offset in 0..8) {
+            val candidate = Calendar.getInstance()
+            candidate.timeInMillis = nowMillis
+            candidate.add(Calendar.DAY_OF_YEAR, offset)
+            candidate.set(Calendar.HOUR_OF_DAY, hour)
+            candidate.set(Calendar.MINUTE, minute)
+            candidate.set(Calendar.SECOND, 0)
+            candidate.set(Calendar.MILLISECOND, 0)
+
+            // Calendar.DAY_OF_WEEK: Sun=1 … Sat=7 → convert to ISO 1=Mon … 7=Sun
+            val isoDow = when (candidate.get(Calendar.DAY_OF_WEEK)) {
+                Calendar.MONDAY -> 1
+                Calendar.TUESDAY -> 2
+                Calendar.WEDNESDAY -> 3
+                Calendar.THURSDAY -> 4
+                Calendar.FRIDAY -> 5
+                Calendar.SATURDAY -> 6
+                else -> 7 // Sunday
+            }
+            if (isoDow !in days) continue
+            if (candidate.timeInMillis > nowMillis) {
+                return candidate.timeInMillis
+            }
         }
-        // naive weekday filter (real impl would loop to next matching day)
+
+        // Fallback: tomorrow at time
+        cal.add(Calendar.DAY_OF_YEAR, 1)
+        cal.set(Calendar.HOUR_OF_DAY, hour)
+        cal.set(Calendar.MINUTE, minute)
+        cal.set(Calendar.SECOND, 0)
+        cal.set(Calendar.MILLISECOND, 0)
         return cal.timeInMillis
     }
 }

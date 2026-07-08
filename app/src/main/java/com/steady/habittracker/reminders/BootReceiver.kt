@@ -12,10 +12,16 @@ import kotlinx.coroutines.launch
 class BootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         if (intent.action == Intent.ACTION_BOOT_COMPLETED || intent.action == Intent.ACTION_MY_PACKAGE_REPLACED) {
-            val repo = AndroidHabitRepository(context)
+            val pendingResult = goAsync()
+            val appContext = context.applicationContext
             CoroutineScope(Dispatchers.IO).launch {
-                val data = repo.appDataFlow.first()
-                AlarmScheduler.scheduleAll(context, data.reminders)
+                try {
+                    val repo = AndroidHabitRepository(appContext)
+                    val data = repo.appDataFlow.first()
+                    AlarmScheduler.scheduleAll(appContext, data)
+                } finally {
+                    pendingResult.finish()
+                }
             }
         }
     }

@@ -29,10 +29,78 @@ class HabitDomainTest {
     }
 
     @Test
-    fun `computeDayCompletion returns 0 for empty day`() {
+    fun `computeDayCompletion returns 0 when due items unfinished`() {
         val data = sampleDataWithEntries()
         val rate = HabitDomain.computeDayCompletion(data, LocalDate.now().toString())
+        // all 3 daily habits due, none done
         assertEquals(0f, rate)
+    }
+
+    @Test
+    fun `isDueOn weekdays excludes weekend`() {
+        val h = Habit("h1", "Work", groupId = "g1", showPreset = ShowPreset.WEEKDAYS)
+        val monday = LocalDate.of(2024, 6, 3) // Monday
+        val saturday = LocalDate.of(2024, 6, 8)
+        assertTrue(HabitDomain.isDueOn(h, monday))
+        assertFalse(HabitDomain.isDueOn(h, saturday))
+    }
+
+    @Test
+    fun `isDueOn every other day from anchor`() {
+        val h = Habit(
+            "h1", "Alt", groupId = "g1",
+            showPreset = ShowPreset.EVERY_N_DAYS,
+            intervalDays = 2,
+            anchorDate = "2024-06-01"
+        )
+        assertTrue(HabitDomain.isDueOn(h, LocalDate.of(2024, 6, 1)))
+        assertFalse(HabitDomain.isDueOn(h, LocalDate.of(2024, 6, 2)))
+        assertTrue(HabitDomain.isDueOn(h, LocalDate.of(2024, 6, 3)))
+    }
+
+    @Test
+    fun `isDueOn specific dates only`() {
+        val h = Habit(
+            "h1", "Once", groupId = "g1",
+            showPreset = ShowPreset.SPECIFIC_DATES,
+            specificDates = listOf("2024-07-04", "2024-12-25")
+        )
+        assertTrue(HabitDomain.isDueOn(h, LocalDate.of(2024, 7, 4)))
+        assertFalse(HabitDomain.isDueOn(h, LocalDate.of(2024, 7, 5)))
+    }
+
+    @Test
+    fun `sortByStack puts followers after predecessors`() {
+        val habits = listOf(
+            Habit("a", "Coffee", groupId = "g1", order = 0),
+            Habit("c", "Journal", groupId = "g1", order = 2, afterHabitId = "b"),
+            Habit("b", "Meditate", groupId = "g1", order = 1, afterHabitId = "a")
+        )
+        val sorted = HabitDomain.sortByStack(habits)
+        assertEquals(listOf("a", "b", "c"), sorted.map { it.id })
+    }
+
+    @Test
+    fun `pendingGroupedForDate hides non-due and done`() {
+        val today = LocalDate.now()
+        val weekendOnly = Habit("h_we", "Weekend", groupId = "g1", showPreset = ShowPreset.WEEKENDS, order = 0)
+        val daily = Habit("h_d", "Daily", groupId = "g1", showPreset = ShowPreset.DAILY, order = 1)
+        val data = AppData(
+            groups = listOf(Group("g1", "M", order = 0)),
+            habits = listOf(weekendOnly, daily),
+            entries = mapOf(today.toString() to emptyMap())
+        )
+        val pending = HabitDomain.pendingGroupedForDate(data, today)
+        val ids = pending.flatMap { it.second }.map { it.id }
+        // Only daily if today is weekday; both if weekend
+        val dow = today.dayOfWeek.value
+        if (dow in 6..7) {
+            assertTrue(ids.contains("h_we"))
+            assertTrue(ids.contains("h_d"))
+        } else {
+            assertFalse(ids.contains("h_we"))
+            assertTrue(ids.contains("h_d"))
+        }
     }
 
     @Test

@@ -29,9 +29,10 @@ interface HabitRepository {
  */
 class AndroidHabitRepository(private val context: Context) : HabitRepository {
 
-    private val json = Json { 
-        prettyPrint = true 
-        ignoreUnknownKeys = true 
+    private val json = Json {
+        // prettyPrint off: every save encodes full history; compact JSON is noticeably faster for widget toggles
+        prettyPrint = false
+        ignoreUnknownKeys = true
         encodeDefaults = true
     }
     

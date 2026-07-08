@@ -34,6 +34,10 @@ import com.steady.habittracker.data.withUnarchivedHabit
 import com.steady.habittracker.data.withAddedCapture
 import com.steady.habittracker.data.withoutCapture
 import com.steady.habittracker.data.withUpdatedCapture
+import com.steady.habittracker.data.withRemindersMasterEnabled
+import com.steady.habittracker.reminders.AlarmScheduler
+import com.steady.habittracker.widget.WidgetRenderer
+import android.app.Application
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.map
@@ -42,8 +46,11 @@ import kotlinx.coroutines.launch
 import java.util.UUID
 
 class SteadyViewModel(
-    private val repository: AndroidHabitRepository
+    private val repository: AndroidHabitRepository,
+    application: Application? = null
 ) : ViewModel() {
+
+    private val appContext = application?.applicationContext
 
     val appData: StateFlow<AppData> = repository.appDataFlow
         .stateIn(
@@ -56,11 +63,7 @@ class SteadyViewModel(
     val today: String get() = repository.getToday()
 
     val completionRate: StateFlow<Float> = appData
-        .map { data ->
-            val day = data.entries[today] ?: emptyMap()
-            val done = day.count { (_, e) -> e.value >= 0.5 }
-            if (data.habits.isNotEmpty()) done.toFloat() / data.habits.size else 0f
-        }
+        .map { data -> repository.computeDayCompletion(data, today) }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 0f)
 
     val todayEntries: StateFlow<Map<String, HabitEntry>> = appData
@@ -105,6 +108,7 @@ class SteadyViewModel(
             )
             val updated = current.withUpdatedEntry(date, habitId, entry)
             repository.saveData(updated)
+            refreshWidget(updated)
         }
     }
 
@@ -119,15 +123,38 @@ class SteadyViewModel(
             val current = appData.value
             val updated = current.withRemovedEntry(today, habitId)
             repository.saveData(updated)
+            refreshWidget(updated)
         }
     }
 
+    private fun refreshWidget(data: AppData) {
+        val ctx = appContext ?: return
+        WidgetRenderer.updateAll(ctx, data)
+    }
+
+    private fun rescheduleReminders(data: AppData) {
+        val ctx = appContext ?: return
+        AlarmScheduler.scheduleAll(ctx, data)
+    }
+
     // --- Habit CRUD ---
-    fun addHabit(name: String, why: String, groupId: String, type: HabitType = HabitType.CHECKBOX, canSkip: Boolean = true, isSupplement: Boolean = false) {
+    fun addHabit(
+        name: String,
+        groupId: String,
+        type: HabitType = HabitType.CHECKBOX,
+        canSkip: Boolean = true,
+        isSupplement: Boolean = false,
+        showPreset: com.steady.habittracker.data.ShowPreset = com.steady.habittracker.data.ShowPreset.DAILY,
+        weekdays: Set<Int> = setOf(1, 2, 3, 4, 5, 6, 7),
+        intervalDays: Int = 2,
+        specificDates: List<String> = emptyList(),
+        why: String = ""
+    ) {
         if (name.isBlank()) return
         viewModelScope.launch {
             val current = appData.value
             val order = current.habits.filter { it.groupId == groupId }.size
+            val todayStr = today
             val newHabit = Habit(
                 id = "h_${UUID.randomUUID().toString().take(8)}",
                 name = name.trim(),
@@ -136,16 +163,68 @@ class SteadyViewModel(
                 type = type,
                 order = order,
                 canSkip = canSkip,
-                isSupplement = isSupplement
+                isSupplement = isSupplement,
+                showPreset = showPreset,
+                weekdays = weekdays,
+                intervalDays = intervalDays,
+                anchorDate = if (showPreset == com.steady.habittracker.data.ShowPreset.EVERY_N_DAYS) todayStr else null,
+                specificDates = specificDates
             )
-            repository.saveData(current.withAddedHabit(newHabit))
+            val updated = current.withAddedHabit(newHabit)
+            repository.saveData(updated)
+            refreshWidget(updated)
+        }
+    }
+
+    fun reorderHabit(habitId: String, direction: Int) {
+        // direction: -1 up, +1 down within group
+        viewModelScope.launch {
+            val current = appData.value
+            val habit = current.habits.find { it.id == habitId } ?: return@launch
+            val siblings = current.habits.filter { it.groupId == habit.groupId && !it.archived }.sortedBy { it.order }
+            val idx = siblings.indexOfFirst { it.id == habitId }
+            val swapIdx = idx + direction
+            if (idx < 0 || swapIdx !in siblings.indices) return@launch
+            val a = siblings[idx]
+            val b = siblings[swapIdx]
+            val newHabits = current.habits.map {
+                when (it.id) {
+                    a.id -> it.copy(order = b.order)
+                    b.id -> it.copy(order = a.order)
+                    else -> it
+                }
+            }
+            val updated = current.copy(habits = newHabits)
+            repository.saveData(updated)
+            refreshWidget(updated)
+        }
+    }
+
+    fun moveHabitToGroup(habitId: String, newGroupId: String) {
+        viewModelScope.launch {
+            val current = appData.value
+            val newOrder = current.habits.count { it.groupId == newGroupId && !it.archived }
+            val newHabits = com.steady.habittracker.data.moveHabit(current.habits, habitId, newGroupId, newOrder)
+            val updated = current.copy(habits = newHabits)
+            repository.saveData(updated)
+            refreshWidget(updated)
         }
     }
 
     fun updateHabit(updated: Habit) {
         viewModelScope.launch {
             val current = appData.value
-            repository.saveData(current.withHabit(updated))
+            val existing = current.habits.find { it.id == updated.id }
+            var newData = if (existing != null && existing.groupId != updated.groupId) {
+                val newOrder = current.habits.count { it.groupId == updated.groupId && !it.archived && it.id != updated.id }
+                val habits = com.steady.habittracker.data.moveHabit(current.habits, updated.id, updated.groupId, newOrder)
+                    .map { if (it.id == updated.id) updated.copy(groupId = updated.groupId, order = it.order) else it }
+                current.copy(habits = habits)
+            } else {
+                current.withHabit(updated)
+            }
+            repository.saveData(newData)
+            refreshWidget(newData)
         }
     }
 
@@ -186,6 +265,7 @@ class SteadyViewModel(
             val current = appData.value
             val newData = current.withArchivedHabit(habitId)
             repository.saveData(newData)
+            refreshWidget(newData)
         }
     }
 
@@ -202,6 +282,7 @@ class SteadyViewModel(
             )
             val updated = current.withUpdatedEntry(today, habitId, entry)
             repository.saveData(updated)
+            refreshWidget(updated)
         }
     }
 
@@ -252,30 +333,46 @@ class SteadyViewModel(
     fun setReminder(reminder: Reminder) {
         viewModelScope.launch {
             val current = appData.value
-            repository.saveData(current.withReminder(reminder))
+            val updated = current.withReminder(reminder)
+            repository.saveData(updated)
+            rescheduleReminders(updated)
         }
     }
 
     fun deleteReminder(id: String) {
         viewModelScope.launch {
             val current = appData.value
-            repository.saveData(current.withoutReminder(id))
+            val updated = current.withoutReminder(id)
+            repository.saveData(updated)
+            rescheduleReminders(updated)
         }
     }
 
     fun toggleReminder(id: String) {
         viewModelScope.launch {
             val current = appData.value
-            repository.saveData(current.withToggledReminder(id))
+            val updated = current.withToggledReminder(id)
+            repository.saveData(updated)
+            rescheduleReminders(updated)
+        }
+    }
+
+    fun setRemindersMasterEnabled(enabled: Boolean) {
+        viewModelScope.launch {
+            val current = appData.value
+            if (current.remindersMasterEnabled == enabled) return@launch
+            val updated = current.withRemindersMasterEnabled(enabled)
+            repository.saveData(updated)
+            rescheduleReminders(updated)
         }
     }
 
     /** For skip prompt logic */
     fun shouldShowSkipPrompt(habitId: String): Boolean = getRecentSkipCount(habitId) >= 3
 
-    /** Hook for external widget refresh after saves (called from host) */
+    /** Refresh home-screen widgets from current in-memory data. */
     fun notifyDataChangedForWidget() {
-        // VM owner (MainActivity) will listen or call AppWidgetManager
+        refreshWidget(appData.value)
     }
 
     // --- Archive restore ---
@@ -309,7 +406,9 @@ class SteadyViewModel(
         viewModelScope.launch {
             val current = appData.value
             if (current.colorScheme != scheme) {
-                repository.saveData(current.withColorScheme(scheme))
+                val updated = current.withColorScheme(scheme)
+                repository.saveData(updated)
+                refreshWidget(updated)
             }
         }
     }
@@ -318,7 +417,9 @@ class SteadyViewModel(
         viewModelScope.launch {
             val current = appData.value
             if (current.backgroundMode != mode) {
-                repository.saveData(current.withBackgroundMode(mode))
+                val updated = current.withBackgroundMode(mode)
+                repository.saveData(updated)
+                refreshWidget(updated)
             }
         }
     }

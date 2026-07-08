@@ -20,7 +20,7 @@ Groups, flexible logging (checkbox / counter / duration / scale / notes), config
 - **Dedicated Widget**: Shows current time-of-day habits at a glance. Tap to open app. Time-aware.
 - **Customization**: Add/edit/delete groups + habits, change type, set targets/units. Reorder via Manage.
 - **Motivation**: Current streak (🔥), progress ring + weekly tracker with trend arrow, expandable per-group circles, rich notes preserved in history.
-- **Onboarding**: Friendly first-run guide for new users.
+- **Onboarding / Help**: Friendly first-run guide + anytime "Run guided tour / onboarding" (header ⓘ button and in Settings). The interactive tour walks through Today, History, Manage, progress, reminders, widget and key gestures. Welcome guide replays the quick-start bullets.
 - **Settings**: Choose color scheme (green/blue/orange/purple/slate) — live update.
 - **Backup**: Export button now fully works (even with minimal/empty data) via JSON backup.
 - **Manage**: Drill-down editing, reminders, CSV/backup export (fully functional, works on empty projects), and an Archived section to view + restore items.
@@ -35,6 +35,7 @@ Default starter set includes the original 7 high-ROI habits plus several pattern
   - Trend arrow (▲ / ▼) comparing to yesterday.
   - Tap the card to expand and see weekly % circles for every group.
 - **Settings**: Tap the gear icon (top right) to switch color schemes instantly (Green / Blue / Orange / Purple / Slate).
+- **Help / Tour**: Tap the ⓘ icon next to the gear (or Settings → "Guided tour" / "Welcome guide") to run the interactive onboarding that takes you around the app: explains the progress bar, switches tabs for you, details every screen, gestures (tap/log/long-press), reminders, widget, and backup.
 - **Manage tab**: Create/edit groups and habits here (including defaults + units for counters/durations). Set per-group reminders. Use "Export Backup" to save a full JSON (groups + habits + history). Scroll to the Archived section to restore anything.
 - **No quick + button**: We removed the floating action button. Add things deliberately from Manage.
 - **Widget**: Add from your launcher. It shows the current time-of-day group, missed items from the previous, and a peek at the upcoming group. Taps open the app (or toggle simple checkboxes directly in some cases).
@@ -66,7 +67,7 @@ After install:
 - For exact alarms (Android 12+): if a toast or card appears, go to system Settings → Apps → Steady → Alarms & reminders → Allow.
 - Add the Steady widget from your launcher’s widget picker for the best experience.
 - The first time you open the app you'll see onboarding.
-- Use the gear icon for color themes. All adds/edits happen in the Manage tab. Export your data from Manage anytime.
+- Use the gear icon for color themes. Tap the ⓘ (info) icon for the interactive guided tour / onboarding anytime. All adds/edits happen in the Manage tab. Export your data from Manage anytime.
 
 ## Widget + Reminders
 - Widget automatically shows the active period group (morning before noon, etc.).

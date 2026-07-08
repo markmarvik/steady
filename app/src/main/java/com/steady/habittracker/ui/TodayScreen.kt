@@ -27,6 +27,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.steady.habittracker.data.AppData
 import com.steady.habittracker.data.Habit
+import com.steady.habittracker.data.HabitDomain
 import com.steady.habittracker.data.HabitEntry
 import com.steady.habittracker.data.HabitType
 import java.text.SimpleDateFormat
@@ -57,21 +58,6 @@ fun TodayScreen(
     var showCaptureDialog by remember { mutableStateOf(false) }
     var showMetricDialog by remember { mutableStateOf(false) }
 
-    // Quick capture entry point (#10) - now opens proper dialog + shows inbox count
-    Row(modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp), horizontalArrangement = Arrangement.End) {
-        TextButton(onClick = { showCaptureDialog = true }) {
-            Text("+ Capture", color = MaterialTheme.colorScheme.primary, fontSize = 12.sp)
-        }
-        val pending = appData.captures.count { !it.processed }
-        if (pending > 0) {
-            Text(" ($pending inbox)", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 10.sp, modifier = Modifier.align(Alignment.CenterVertically))
-        }
-        Spacer(Modifier.width(4.dp))
-        TextButton(onClick = { showMetricDialog = true }) {
-            Text("+ Log", color = MaterialTheme.colorScheme.primary, fontSize = 12.sp)
-        }
-    }
-
     if (showMetricDialog) {
         MetricLogPickerDialog(
             appData = appData,
@@ -94,97 +80,115 @@ fun TodayScreen(
         )
     }
 
-    // Filter to only pending (not yet completed) items for a cleaner Today list (#2)
-    // Completed items (value >=0.5 or skipped) are hidden until next day (entries keyed by date).
-    val grouped = appData.groups.filter { !it.archived }.sortedBy { it.order }.map { g ->
-        val habitsForGroup = appData.habits.filter { it.groupId == g.id && !it.archived }.sortedBy { it.order }
-        val pending = habitsForGroup.filter { h ->
-            val e = todayEntries[h.id]
-            (e?.value ?: 0.0) < 0.5 && e?.skipped != true
-        }
-        g to pending
-    }.filter { it.second.isNotEmpty() }  // hide groups with nothing left to do today
+    // Due today (show rules) + pending only; stack-ordered within groups
+    val currentGroupId = remember(appData) { HabitDomain.resolveCurrentGroup(appData)?.id }
+    val grouped = HabitDomain.pendingGroupedForDate(appData, LocalDate.now())
+    val nameById = remember(appData.habits) { appData.habits.associate { it.id to it.name } }
 
     val pendingCaptures = appData.captures.filter { !it.processed }
 
-    LazyColumn(
-        verticalArrangement = Arrangement.spacedBy(12.dp)
-    ) {
-        // Quick captures / inbox integrated so it scrolls with the rest of Today
-        if (pendingCaptures.isNotEmpty()) {
-            item {
-                Text("Quick Captures / Inbox", color = MaterialTheme.colorScheme.primary, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(start = 4.dp).padding(bottom = 4.dp))
+    // Root Column + weight(1f) on the list guarantees the action buttons above it are always clickable and laid out correctly.
+    Column(modifier = Modifier.fillMaxSize()) {
+        Row(modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp), horizontalArrangement = Arrangement.End) {
+            TextButton(onClick = { showCaptureDialog = true }) {
+                Text("+ Capture", color = MaterialTheme.colorScheme.primary, fontSize = 12.sp)
             }
-            items(pendingCaptures.take(5)) { cap ->
-                Card(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 4.dp)
-                        .padding(bottom = 4.dp),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-                    shape = RoundedCornerShape(10.dp)
-                ) {
-                    Column(Modifier.padding(8.dp)) {
-                        Text(cap.title, color = MaterialTheme.colorScheme.onSurface, fontSize = 13.sp, fontWeight = FontWeight.Medium)
-                        if (cap.note.isNotBlank()) {
-                            Text(cap.note, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp)
-                        }
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 4.dp)) {
-                            TextButton(onClick = { onProcessCapture(cap.id) }) {
-                                Text("Mark Done", color = MaterialTheme.colorScheme.primary, fontSize = 11.sp)
+            val pending = appData.captures.count { !it.processed }
+            if (pending > 0) {
+                Text(" ($pending inbox)", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 10.sp, modifier = Modifier.align(Alignment.CenterVertically))
+            }
+            Spacer(Modifier.width(4.dp))
+            TextButton(onClick = { showMetricDialog = true }) {
+                Text("+ Log", color = MaterialTheme.colorScheme.primary, fontSize = 12.sp)
+            }
+        }
+
+        LazyColumn(
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            // Quick captures / inbox integrated so it scrolls with the rest of Today
+            if (pendingCaptures.isNotEmpty()) {
+                item {
+                    Text("Quick Captures / Inbox", color = MaterialTheme.colorScheme.primary, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(start = 4.dp).padding(bottom = 4.dp))
+                }
+                items(pendingCaptures.take(5)) { cap ->
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 4.dp)
+                            .padding(bottom = 4.dp),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                        shape = RoundedCornerShape(10.dp)
+                    ) {
+                        Column(Modifier.padding(8.dp)) {
+                            Text(cap.title, color = MaterialTheme.colorScheme.onSurface, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                            if (cap.note.isNotBlank()) {
+                                Text(cap.note, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp)
                             }
-                            TextButton(onClick = { onDeleteCapture(cap.id) }) {
-                                Text("Delete", color = MaterialTheme.colorScheme.error, fontSize = 11.sp)
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 4.dp)) {
+                                TextButton(onClick = { onProcessCapture(cap.id) }) {
+                                    Text("Mark Done", color = MaterialTheme.colorScheme.primary, fontSize = 11.sp)
+                                }
+                                TextButton(onClick = { onDeleteCapture(cap.id) }) {
+                                    Text("Delete", color = MaterialTheme.colorScheme.error, fontSize = 11.sp)
+                                }
                             }
                         }
                     }
                 }
+                item { Spacer(Modifier.height(4.dp)) }
             }
-            item { Spacer(Modifier.height(4.dp)) }
-        }
 
-        grouped.forEach { (group, habits) ->
-            item {
-                Text(
-                    group.name.uppercase(),
-                    color = MaterialTheme.colorScheme.primary,
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    modifier = Modifier.padding(start = 4.dp, top = 4.dp, bottom = 2.dp)
-                )
+            if (grouped.isEmpty()) {
+                item {
+                    Text(
+                        "Nothing due today — enjoy the space.\nAdd or configure items in Manage.",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        fontSize = 13.sp,
+                        modifier = Modifier.padding(16.dp)
+                    )
+                }
             }
-            items(habits) { habit ->
-                val entry = todayEntries[habit.id]
-                val isDone = (entry?.value ?: 0.0) >= 0.5
-                val isSkipped = entry?.skipped == true
-                val isSimpleTapAdd = habit.type == HabitType.COUNTER &&
-                    ((habit.target ?: 0.0) <= 2.0 || habit.isSupplement || habit.name.contains("supp", ignoreCase = true) || habit.name.contains("magnesium", ignoreCase = true))
 
-                HabitRow(
-                    habit = habit,
-                    entry = entry,
-                    isDone = isDone,
-                    isSkipped = isSkipped,
-                    onToggle = { onToggle(habit.id) },
-                    onLog = {
-                        if (isSimpleTapAdd) {
-                            // Simple tap-to-add for supplements (#5): log default immediately, no dialog/note
-                            val v = habit.target ?: 1.0
-                            onLogEntry(habit.id, v, "", java.time.LocalDate.now().toString())
-                        } else {
-                            onRequestLog(habit)
-                        }
-                    },
-                    onSkip = {
-                        onSkip(habit.id)
-                        if (!habit.canSkip) {
-                            // hygiene - still called but caller may have warned
-                        } else if (/* caller decides */ false) {
-                            // prompt handled in parent
-                        }
-                    },
-                    showSkipPrompt = { onShowSkipPrompt(habit.id) }
-                )
+            grouped.forEach { (group, habits) ->
+                item {
+                    val isNow = group.id == currentGroupId
+                    Text(
+                        if (isNow) "NOW · ${group.name.uppercase()}" else group.name.uppercase(),
+                        color = MaterialTheme.colorScheme.primary,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.padding(start = 4.dp, top = 4.dp, bottom = 2.dp)
+                    )
+                }
+                items(habits, key = { it.id }) { habit ->
+                    val entry = todayEntries[habit.id]
+                    val isDone = (entry?.value ?: 0.0) >= 0.5
+                    val isSkipped = entry?.skipped == true
+                    val isSimpleTapAdd = habit.type == HabitType.COUNTER &&
+                        ((habit.target ?: 0.0) <= 2.0 || habit.isSupplement || habit.name.contains("supp", ignoreCase = true) || habit.name.contains("magnesium", ignoreCase = true))
+                    val afterName = habit.afterHabitId?.let { nameById[it] }
+
+                    HabitRow(
+                        habit = habit,
+                        entry = entry,
+                        isDone = isDone,
+                        isSkipped = isSkipped,
+                        stackAfterLabel = afterName,
+                        onToggle = { onToggle(habit.id) },
+                        onLog = {
+                            if (isSimpleTapAdd) {
+                                val v = habit.target ?: 1.0
+                                onLogEntry(habit.id, v, "", java.time.LocalDate.now().toString())
+                            } else {
+                                onRequestLog(habit)
+                            }
+                        },
+                        onSkip = { onSkip(habit.id) },
+                        showSkipPrompt = { onShowSkipPrompt(habit.id) }
+                    )
+                }
             }
         }
     }
@@ -197,6 +201,7 @@ private fun HabitRow(
     entry: HabitEntry?,
     isDone: Boolean,
     isSkipped: Boolean,
+    stackAfterLabel: String? = null,
     onToggle: () -> Unit,
     onLog: () -> Unit,
     onSkip: () -> Unit,
@@ -230,7 +235,8 @@ private fun HabitRow(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(14.dp),
+                .padding(14.dp)
+                .padding(start = if (stackAfterLabel != null) 12.dp else 0.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             // Status indicator
@@ -273,8 +279,12 @@ private fun HabitRow(
                     fontSize = 15.sp,
                     fontWeight = FontWeight.SemiBold
                 )
-                if (habit.why.isNotBlank()) {
-                    Text(habit.why, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp, lineHeight = 14.sp)
+                if (stackAfterLabel != null) {
+                    Text(
+                        "↳ after $stackAfterLabel",
+                        color = MaterialTheme.colorScheme.primary,
+                        fontSize = 11.sp
+                    )
                 }
                 if (entry != null && entry.note.isNotBlank()) {
                     Text("“${entry.note}”", color = MaterialTheme.colorScheme.primary, fontSize = 11.sp)

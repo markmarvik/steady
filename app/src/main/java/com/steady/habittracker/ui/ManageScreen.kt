@@ -6,6 +6,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -31,23 +33,33 @@ import androidx.compose.ui.unit.sp
 import com.steady.habittracker.data.AppData
 import com.steady.habittracker.data.Group
 import com.steady.habittracker.data.Habit
+import com.steady.habittracker.data.HabitDomain
 import com.steady.habittracker.data.HabitType
 import com.steady.habittracker.data.Reminder
 import com.steady.habittracker.data.Schedule
+import com.steady.habittracker.data.ShowPreset
 import com.steady.habittracker.data.TimeBlock
+import java.time.LocalDate
 
 /**
- * Manage with drill-down:
- * - List of groups (click to open)
- * - Inside group: habits (edit via dialog), add, reminder, archive group
- * - No immediate delete buttons at list level
- * - Backup section for CSV
+ * Manage = catalog workshop:
+ * - Groups → habits with When / stack / reorder / move
+ * - Today only shows items due per show rules
  */
 @Composable
 fun ManageScreen(
     appData: AppData,
     onAddGroup: (String, String, String?) -> Unit,
-    onAddHabit: (name: String, why: String, groupId: String, type: HabitType, isSupplement: Boolean) -> Unit,
+    onAddHabit: (
+        name: String,
+        groupId: String,
+        type: HabitType,
+        isSupplement: Boolean,
+        showPreset: ShowPreset,
+        weekdays: Set<Int>,
+        intervalDays: Int,
+        specificDates: List<String>
+    ) -> Unit,
     onDeleteHabit: (String) -> Unit,  // now archives
     onSetReminder: (Reminder) -> Unit,
     onToggleReminder: (String) -> Unit,
@@ -57,7 +69,8 @@ fun ManageScreen(
     onUpdateHabit: (Habit) -> Unit = {},
     onUnarchiveGroup: (String) -> Unit = {},
     onUnarchiveHabit: (String) -> Unit = {},
-    // Scheduling (daily group time assignment for widget + current group logic; key for reminders context)
+    onReorderHabit: (habitId: String, direction: Int) -> Unit = { _, _ -> },
+    onMoveHabitToGroup: (habitId: String, groupId: String) -> Unit = { _, _ -> },
     onApplySchedulePreset: (name: String, blocks: List<TimeBlock>) -> Unit = { _, _ -> },
     onSetActiveSchedule: (String?) -> Unit = {},
     onUpdateScheduleBlocks: (scheduleId: String, blocks: List<TimeBlock>) -> Unit = { _, _ -> },
@@ -69,6 +82,8 @@ fun ManageScreen(
     var showAddHabitFor by remember { mutableStateOf<String?>(null) }
     var showReminderFor by remember { mutableStateOf<Group?>(null) }
     var showEditHabit by remember { mutableStateOf<Habit?>(null) }
+    var moveHabitId by remember { mutableStateOf<String?>(null) }
+    var stackHabitId by remember { mutableStateOf<String?>(null) }
 
     // Confirmation for archive (do not archive immediately; tap away / cancel = nothing)
     var confirmArchiveGroupId by remember { mutableStateOf<String?>(null) }
@@ -398,28 +413,74 @@ fun ManageScreen(
             }
 
             Spacer(Modifier.height(8.dp))
-            TextButton(onClick = { showAddHabitFor = group.id }) { Text("+ Add Habit / Exercise") }
+            Text(
+                "Today only shows items due today (When rules). Stack links order them.",
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                fontSize = 10.sp,
+                modifier = Modifier.padding(bottom = 4.dp)
+            )
+            TextButton(onClick = { showAddHabitFor = group.id }) { Text("+ Add item") }
 
-            // Scrollable habits list (takes remaining space)
+            val nameById = appData.habits.associate { it.id to it.name }
             LazyColumn(modifier = Modifier.weight(1f)) {
-                items(habitsInGroup) { h ->
-                    Row(
+                items(habitsInGroup, key = { it.id }) { h ->
+                    val afterLabel = h.afterHabitId?.let { nameById[it] }
+                    Column(
                         Modifier
                             .fillMaxWidth()
                             .padding(vertical = 4.dp)
-                            .clickable { showEditHabit = h },
-                        verticalAlignment = Alignment.CenterVertically
+                            .clickable { showEditHabit = h }
                     ) {
-                        Text("• ${h.name} (${h.type.name})", color = MaterialTheme.colorScheme.onSurface, modifier = Modifier.weight(1f))
-                        if (!h.canSkip) Text(" essential", color = MaterialTheme.colorScheme.error, fontSize = 10.sp)
-                        IconButton(onClick = { showEditHabit = h }) {
-                            Icon(Icons.Default.Edit, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Column(Modifier.weight(1f).padding(start = if (afterLabel != null) 12.dp else 0.dp)) {
+                                Text(
+                                    (if (afterLabel != null) "↳ " else "• ") + h.name,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                    fontSize = 15.sp,
+                                    fontWeight = FontWeight.Medium
+                                )
+                                Text(
+                                    listOfNotNull(
+                                        HabitDomain.showRuleLabel(h),
+                                        h.type.name.lowercase(),
+                                        if (!h.canSkip) "essential" else null
+                                    ).joinToString(" · "),
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    fontSize = 11.sp
+                                )
+                                if (afterLabel != null) {
+                                    Text("after $afterLabel", color = MaterialTheme.colorScheme.primary, fontSize = 10.sp)
+                                }
+                            }
+                            TextButton(onClick = { onReorderHabit(h.id, -1) }) {
+                                Text("↑", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 14.sp)
+                            }
+                            TextButton(onClick = { onReorderHabit(h.id, 1) }) {
+                                Text("↓", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 14.sp)
+                            }
+                            IconButton(onClick = { showEditHabit = h }) {
+                                Icon(Icons.Default.Edit, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                        }
+                        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                            TextButton(onClick = { moveHabitId = h.id }) {
+                                Text("Move", color = MaterialTheme.colorScheme.primary, fontSize = 11.sp)
+                            }
+                            TextButton(onClick = { stackHabitId = h.id }) {
+                                Text(if (h.afterHabitId != null) "Restack" else "Stack after…", color = MaterialTheme.colorScheme.primary, fontSize = 11.sp)
+                            }
+                            if (h.afterHabitId != null) {
+                                TextButton(onClick = {
+                                    onUpdateHabit(h.copy(afterHabitId = null))
+                                }) {
+                                    Text("Unstack", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp)
+                                }
+                            }
                         }
                     }
                 }
             }
 
-            // Reminder quick (pinned below scroll area)
             val rem = appData.reminders.firstOrNull { it.groupId == group.id }
             Row {
                 IconButton(onClick = { showReminderFor = group }) {
@@ -447,12 +508,62 @@ fun ManageScreen(
     showEditHabit?.let { h ->
         EditHabitDialog(
             habit = h,
+            allHabits = appData.habits.filter { !it.archived },
+            groups = activeGroups,
             onDismiss = { showEditHabit = null },
             onSave = { updated ->
                 onUpdateHabit(updated)
                 showEditHabit = null
             },
             onArchive = { confirmArchiveHabitId = h.id; showEditHabit = null }
+        )
+    }
+    moveHabitId?.let { hid ->
+        AlertDialog(
+            onDismissRequest = { moveHabitId = null },
+            containerColor = MaterialTheme.colorScheme.surface,
+            title = { Text("Move to group") },
+            text = {
+                Column {
+                    activeGroups.forEach { g ->
+                        TextButton(onClick = {
+                            onMoveHabitToGroup(hid, g.id)
+                            moveHabitId = null
+                        }) {
+                            Text(g.name, color = MaterialTheme.colorScheme.primary)
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { moveHabitId = null }) { Text("Cancel") }
+            }
+        )
+    }
+    stackHabitId?.let { hid ->
+        val candidates = appData.habits.filter { !it.archived && it.id != hid }
+        AlertDialog(
+            onDismissRequest = { stackHabitId = null },
+            containerColor = MaterialTheme.colorScheme.surface,
+            title = { Text("Stack after…") },
+            text = {
+                Column {
+                    Text("This item will sit under the chosen one on Today.", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Spacer(Modifier.height(8.dp))
+                    candidates.forEach { c ->
+                        TextButton(onClick = {
+                            val h = appData.habits.find { it.id == hid }
+                            if (h != null) onUpdateHabit(h.copy(afterHabitId = c.id))
+                            stackHabitId = null
+                        }) {
+                            Text("${c.name} (${appData.groups.find { it.id == c.groupId }?.name ?: "?"})", color = MaterialTheme.colorScheme.primary, fontSize = 13.sp)
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { stackHabitId = null }) { Text("Cancel") }
+            }
         )
     }
 
@@ -516,24 +627,114 @@ private fun AddGroupDialogWithParent(onDismiss: () -> Unit, onAdd: (name: String
                 OutlinedTextField(value = parent ?: "", onValueChange = { parent = it.ifBlank { null } }, label = { Text("Parent ID (e.g. g_workout)") }, modifier = Modifier.fillMaxWidth())
             }
         },
+        
         confirmButton = { TextButton(onClick = { if (name.isNotBlank()) onAdd(name, hint, parent) }) { Text("Add") } },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
     )
 }
 
 @Composable
+private fun ShowWhenPicker(
+    preset: ShowPreset,
+    weekdays: Set<Int>,
+    intervalDays: Int,
+    specificDates: List<String>,
+    onPreset: (ShowPreset) -> Unit,
+    onWeekdays: (Set<Int>) -> Unit,
+    onInterval: (Int) -> Unit,
+    onDates: (List<String>) -> Unit
+) {
+    Text("When (on Today)", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurface)
+    Spacer(Modifier.height(4.dp))
+    val chips = listOf(
+        ShowPreset.DAILY to "Daily",
+        ShowPreset.WEEKDAYS to "Weekdays",
+        ShowPreset.WEEKENDS to "Weekends",
+        ShowPreset.CUSTOM_DAYS to "Custom",
+        ShowPreset.EVERY_N_DAYS to "Every N",
+        ShowPreset.SPECIFIC_DATES to "Dates"
+    )
+    chips.chunked(3).forEach { row ->
+        Row(horizontalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.padding(bottom = 4.dp)) {
+            row.forEach { (pr, label) ->
+                FilterChip(selected = preset == pr, onClick = { onPreset(pr) }, label = { Text(label, fontSize = 11.sp) })
+            }
+        }
+    }
+    when (preset) {
+        ShowPreset.CUSTOM_DAYS -> {
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                listOf(1 to "M", 2 to "T", 3 to "W", 4 to "T", 5 to "F", 6 to "S", 7 to "S").forEach { (d, lab) ->
+                    FilterChip(
+                        selected = d in weekdays,
+                        onClick = {
+                            onWeekdays(if (d in weekdays) weekdays - d else weekdays + d)
+                        },
+                        label = { Text(lab) }
+                    )
+                }
+            }
+        }
+        ShowPreset.EVERY_N_DAYS -> {
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                listOf(2, 3, 7).forEach { n ->
+                    FilterChip(
+                        selected = intervalDays == n,
+                        onClick = { onInterval(n); onPreset(ShowPreset.EVERY_N_DAYS) },
+                        label = { Text("Every ${n}d", fontSize = 11.sp) }
+                    )
+                }
+            }
+        }
+        ShowPreset.SPECIFIC_DATES -> {
+            var dateInput by remember { mutableStateOf(LocalDate.now().toString()) }
+            OutlinedTextField(
+                value = dateInput,
+                onValueChange = { dateInput = it },
+                label = { Text("Add date yyyy-MM-dd") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth()
+            )
+            TextButton(onClick = {
+                try {
+                    val d = LocalDate.parse(dateInput).toString()
+                    if (d !in specificDates) onDates(specificDates + d)
+                } catch (_: Exception) {}
+            }) { Text("Add date", fontSize = 11.sp) }
+            specificDates.forEach { d ->
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(d, modifier = Modifier.weight(1f), fontSize = 12.sp)
+                    TextButton(onClick = { onDates(specificDates.filter { it != d }) }) {
+                        Text("x", color = MaterialTheme.colorScheme.error)
+                    }
+                }
+            }
+        }
+        else -> {}
+    }
+}
+
+@Composable
 private fun EditHabitDialog(
     habit: Habit,
+    allHabits: List<Habit>,
+    groups: List<Group>,
     onDismiss: () -> Unit,
     onSave: (Habit) -> Unit,
     onArchive: () -> Unit
 ) {
     var name by remember { mutableStateOf(habit.name) }
-    var why by remember { mutableStateOf(habit.why) }
+    var type by remember { mutableStateOf(habit.type) }
     var canSkip by remember { mutableStateOf(habit.canSkip) }
     var defaultValue by remember { mutableStateOf(habit.target?.toString() ?: "") }
     var unit by remember { mutableStateOf(habit.unit) }
     var isSupp by remember { mutableStateOf(habit.isSupplement) }
+    var groupId by remember { mutableStateOf(habit.groupId) }
+    var showPreset by remember { mutableStateOf(habit.showPreset) }
+    var weekdays by remember { mutableStateOf(habit.weekdays) }
+    var intervalDays by remember { mutableIntStateOf(habit.intervalDays.coerceAtLeast(1)) }
+    var specificDates by remember { mutableStateOf(habit.specificDates) }
+    var afterId by remember { mutableStateOf(habit.afterHabitId) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -542,27 +743,82 @@ private fun EditHabitDialog(
         textContentColor = MaterialTheme.colorScheme.onSurface,
         title = { Text("Edit ${habit.name}") },
         text = {
-            Column {
-                OutlinedTextField(value = name, onValueChange = { name = it }, label = { Text("Name") })
-                OutlinedTextField(value = why, onValueChange = { why = it }, label = { Text("Why") })
-                Row {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                OutlinedTextField(value = name, onValueChange = { name = it }, label = { Text("Name") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                Spacer(Modifier.height(6.dp))
+                Text("Type", fontSize = 11.sp)
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    HabitType.entries.forEach { t ->
+                        FilterChip(selected = type == t, onClick = { type = t }, label = { Text(t.name.take(6), fontSize = 10.sp) })
+                    }
+                }
+                Spacer(Modifier.height(8.dp))
+                ShowWhenPicker(
+                    preset = showPreset,
+                    weekdays = weekdays,
+                    intervalDays = intervalDays,
+                    specificDates = specificDates,
+                    onPreset = { showPreset = it },
+                    onWeekdays = { weekdays = it },
+                    onInterval = { intervalDays = it },
+                    onDates = { specificDates = it }
+                )
+                Spacer(Modifier.height(8.dp))
+                Text("Group", fontSize = 11.sp)
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    groups.forEach { g ->
+                        FilterChip(selected = groupId == g.id, onClick = { groupId = g.id }, label = { Text(g.name, fontSize = 10.sp) })
+                    }
+                }
+                Spacer(Modifier.height(6.dp))
+                Text("Stack after", fontSize = 11.sp)
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    FilterChip(selected = afterId == null, onClick = { afterId = null }, label = { Text("None", fontSize = 10.sp) })
+                    allHabits.filter { it.id != habit.id }.take(8).forEach { o ->
+                        FilterChip(
+                            selected = afterId == o.id,
+                            onClick = { afterId = o.id },
+                            label = { Text(o.name.take(12), fontSize = 10.sp) }
+                        )
+                    }
+                }
+                Row(verticalAlignment = Alignment.CenterVertically) {
                     Checkbox(checked = !canSkip, onCheckedChange = { canSkip = !it })
-                    Text("Essential (prevent skip, e.g. hygiene)")
+                    Text("Essential (harder to skip)", fontSize = 12.sp)
                 }
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Checkbox(checked = isSupp, onCheckedChange = { isSupp = it })
-                    Text("Supplement tag (#3)", fontSize = 12.sp)
+                    Text("Supplement (quick log)", fontSize = 12.sp)
                 }
-                Spacer(Modifier.height(8.dp))
-                Text("Default value (prefills log, e.g. 300 for supplements or 10 for duration)", fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                OutlinedTextField(value = defaultValue, onValueChange = { defaultValue = it }, label = { Text("Default value") }, modifier = Modifier.fillMaxWidth())
-                OutlinedTextField(value = unit, onValueChange = { unit = it }, label = { Text("Unit (e.g. mg, min, reps)") }, modifier = Modifier.fillMaxWidth())
+                if (type != HabitType.CHECKBOX && type != HabitType.NOTE) {
+                    OutlinedTextField(value = defaultValue, onValueChange = { defaultValue = it }, label = { Text("Default value") }, modifier = Modifier.fillMaxWidth())
+                    OutlinedTextField(value = unit, onValueChange = { unit = it }, label = { Text("Unit") }, modifier = Modifier.fillMaxWidth())
+                }
             }
         },
         confirmButton = {
             TextButton(onClick = {
                 val target = defaultValue.toDoubleOrNull()
-                onSave(habit.copy(name = name, why = why, canSkip = canSkip, target = target, unit = unit, isSupplement = isSupp))
+                val anchor = if (showPreset == ShowPreset.EVERY_N_DAYS) {
+                    habit.anchorDate ?: LocalDate.now().toString()
+                } else habit.anchorDate
+                onSave(
+                    habit.copy(
+                        name = name.trim(),
+                        type = type,
+                        canSkip = canSkip,
+                        target = target,
+                        unit = unit,
+                        isSupplement = isSupp,
+                        groupId = groupId,
+                        showPreset = showPreset,
+                        weekdays = if (weekdays.isEmpty()) setOf(1, 2, 3, 4, 5, 6, 7) else weekdays,
+                        intervalDays = intervalDays,
+                        anchorDate = anchor,
+                        specificDates = specificDates,
+                        afterHabitId = afterId
+                    )
+                )
             }) { Text("Save") }
         },
         dismissButton = {
@@ -578,35 +834,86 @@ private fun EditHabitDialog(
 private fun AddHabitWithTypeDialogLocal(
     groupId: String,
     onDismiss: () -> Unit,
-    onAdd: (name: String, why: String, groupId: String, type: HabitType, isSupplement: Boolean) -> Unit
+    onAdd: (
+        name: String,
+        groupId: String,
+        type: HabitType,
+        isSupplement: Boolean,
+        showPreset: ShowPreset,
+        weekdays: Set<Int>,
+        intervalDays: Int,
+        specificDates: List<String>
+    ) -> Unit
 ) {
     var name by remember { mutableStateOf("") }
-    var why by remember { mutableStateOf("") }
     var type by remember { mutableStateOf(HabitType.CHECKBOX) }
     var isSupp by remember { mutableStateOf(false) }
+    var showPreset by remember { mutableStateOf(ShowPreset.DAILY) }
+    var weekdays by remember { mutableStateOf(setOf(1, 2, 3, 4, 5, 6, 7)) }
+    var intervalDays by remember { mutableIntStateOf(2) }
+    var specificDates by remember { mutableStateOf(listOf<String>()) }
+    var addedCount by remember { mutableIntStateOf(0) }
+
+    fun submit(close: Boolean) {
+        if (name.isNotBlank()) {
+            onAdd(name.trim(), groupId, type, isSupp, showPreset, weekdays, intervalDays, specificDates)
+            name = ""
+            isSupp = false
+            addedCount++
+        }
+        if (close) onDismiss()
+    }
 
     AlertDialog(
         onDismissRequest = onDismiss,
         containerColor = MaterialTheme.colorScheme.surface,
         titleContentColor = MaterialTheme.colorScheme.onSurface,
         textContentColor = MaterialTheme.colorScheme.onSurface,
-        title = { Text("New Habit / Exercise") },
+        title = {
+            Text(if (addedCount > 0) "New item (+$addedCount)" else "New item")
+        },
         text = {
-            Column {
-                OutlinedTextField(value = name, onValueChange = { name = it }, label = { Text("Name") }, modifier = Modifier.fillMaxWidth())
-                OutlinedTextField(value = why, onValueChange = { why = it }, label = { Text("Why / notes") }, modifier = Modifier.fillMaxWidth())
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                OutlinedTextField(
+                    value = name,
+                    onValueChange = { name = it },
+                    label = { Text("Name") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
                 Text("Type", fontSize = 11.sp)
-                Row { HabitType.values().forEach { t -> FilterChip(selected = type == t, onClick = { type = t }, label = { Text(t.name.take(6)) }) } }
+                Row {
+                    HabitType.entries.forEach { t ->
+                        FilterChip(selected = type == t, onClick = { type = t }, label = { Text(t.name.take(6), fontSize = 10.sp) })
+                    }
+                }
+                Spacer(Modifier.height(6.dp))
+                ShowWhenPicker(
+                    preset = showPreset,
+                    weekdays = weekdays,
+                    intervalDays = intervalDays,
+                    specificDates = specificDates,
+                    onPreset = { showPreset = it },
+                    onWeekdays = { weekdays = it },
+                    onInterval = { intervalDays = it },
+                    onDates = { specificDates = it }
+                )
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Checkbox(checked = isSupp, onCheckedChange = { isSupp = it })
-                    Text("Supplement (tag for special visibility + quick add)", fontSize = 12.sp)
+                    Text("Supplement (quick-add)", fontSize = 12.sp)
                 }
             }
         },
-        confirmButton = { TextButton(onClick = { if (name.isNotBlank()) onAdd(name, why, groupId, type, isSupp) }) { Text("Add") } },
+        confirmButton = {
+            Row {
+                TextButton(onClick = { submit(false) }) { Text("Add another") }
+                TextButton(onClick = { submit(true) }) { Text(if (name.isNotBlank() || addedCount == 0) "Add & close" else "Done") }
+            }
+        },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
     )
 }
+
 
 // Helpers for 24h timeline editor (used in scheduling visual block editor)
 private fun parseHhMmToMin(hhmm: String): Int? {

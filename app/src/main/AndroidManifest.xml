@@ -69,6 +69,12 @@
                 android:resource="@xml/steady_widget_info" />
         </receiver>
 
+        <!-- Scrollable widget list (full-day habits) -->
+        <service
+            android:name=".widget.WidgetListService"
+            android:permission="android.permission.BIND_REMOTEVIEWS"
+            android:exported="false" />
+
     </application>
 
 </manifest>

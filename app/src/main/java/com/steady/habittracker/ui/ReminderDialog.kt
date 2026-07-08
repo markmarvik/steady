@@ -3,8 +3,10 @@ package com.steady.habittracker.ui
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.steady.habittracker.data.Group
 import com.steady.habittracker.data.Reminder
 
@@ -16,7 +18,10 @@ fun ReminderDialog(
     onSave: (Reminder) -> Unit
 ) {
     var time by remember { mutableStateOf(existing?.time ?: "08:30") }
-    val days = remember { mutableStateListOf<Int>().apply { addAll(existing?.days ?: setOf(1,2,3,4,5,6,7)) } }
+    val days = remember {
+        mutableStateListOf<Int>().apply { addAll(existing?.days ?: setOf(1, 2, 3, 4, 5, 6, 7)) }
+    }
+    var enabled by remember { mutableStateOf(existing?.enabled ?: true) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -26,10 +31,16 @@ fun ReminderDialog(
         title = { Text("Reminder for ${group?.name ?: "Daily Review"}") },
         text = {
             Column {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("Enabled", modifier = Modifier.weight(1f))
+                    Switch(checked = enabled, onCheckedChange = { enabled = it })
+                }
+                Spacer(Modifier.height(8.dp))
                 OutlinedTextField(
                     value = time,
                     onValueChange = { time = it },
                     label = { Text("Time (HH:mm)") },
+                    singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
                 Spacer(Modifier.height(8.dp))
@@ -45,20 +56,35 @@ fun ReminderDialog(
                         )
                     }
                 }
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    "You'll get a notification with what's still left to do.",
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
             }
         },
         confirmButton = {
             TextButton(onClick = {
+                val normalized = normalizeTime(time)
                 val r = Reminder(
                     id = existing?.id ?: "rem_${System.currentTimeMillis()}",
                     groupId = group?.id,
-                    time = time,
-                    days = days.toSet(),
-                    enabled = true
+                    time = normalized,
+                    days = if (days.isEmpty()) setOf(1, 2, 3, 4, 5, 6, 7) else days.toSet(),
+                    enabled = enabled
                 )
                 onSave(r)
+                onDismiss()
             }) { Text("Save") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
     )
+}
+
+private fun normalizeTime(raw: String): String {
+    val parts = raw.trim().split(":")
+    val h = (parts.getOrNull(0)?.toIntOrNull() ?: 8).coerceIn(0, 23)
+    val m = (parts.getOrNull(1)?.toIntOrNull() ?: 0).coerceIn(0, 59)
+    return "%02d:%02d".format(h, m)
 }

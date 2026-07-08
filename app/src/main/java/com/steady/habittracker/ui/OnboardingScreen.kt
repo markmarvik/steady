@@ -93,5 +93,13 @@ fun OnboardingScreen(onComplete: () -> Unit) {
             fontSize = 11.sp,
             textAlign = TextAlign.Center
         )
+
+        Spacer(Modifier.height(12.dp))
+        Text(
+            "Later: use the ⓘ icon (next to gear) to re-run the interactive tour anytime.",
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            fontSize = 10.sp,
+            textAlign = TextAlign.Center
+        )
     }
 }

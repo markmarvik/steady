@@ -12,7 +12,7 @@ import java.time.LocalTime
  */
 object HabitDomain {
 
-    /** Returns sorted groups + habits in each for Today UI (non-archived only). */
+    /** Returns sorted groups + habits in each for Manage catalog (non-archived only). */
     fun groupHabits(data: AppData): List<Pair<Group, List<Habit>>> {
         val sortedGroups = data.groups.filter { !it.archived }.sortedBy { it.order }
         return sortedGroups.map { g ->
@@ -20,34 +20,156 @@ object HabitDomain {
         }
     }
 
-    /** Compute current streak (consecutive days back from today with reasonable completion). */
+    // --- Show rules (when habit appears on Today) ---
+
+    /** Whether [habit] should appear on the given calendar [date] based on showPreset. */
+    fun isDueOn(habit: Habit, date: LocalDate): Boolean {
+        if (habit.archived) return false
+        val dow = date.dayOfWeek.value // 1=Mon … 7=Sun
+        return when (habit.showPreset) {
+            ShowPreset.DAILY -> true
+            ShowPreset.WEEKDAYS -> dow in 1..5
+            ShowPreset.WEEKENDS -> dow in 6..7
+            ShowPreset.CUSTOM_DAYS -> {
+                val days = if (habit.weekdays.isEmpty()) (1..7).toSet() else habit.weekdays
+                dow in days
+            }
+            ShowPreset.EVERY_N_DAYS -> {
+                val n = habit.intervalDays.coerceAtLeast(1)
+                val anchor = try {
+                    LocalDate.parse(habit.anchorDate ?: "1970-01-01")
+                } catch (_: Exception) {
+                    LocalDate.of(1970, 1, 1)
+                }
+                val daysBetween = java.time.temporal.ChronoUnit.DAYS.between(anchor, date)
+                if (daysBetween < 0) false else daysBetween % n == 0L
+            }
+            ShowPreset.SPECIFIC_DATES -> date.toString() in habit.specificDates
+        }
+    }
+
+    fun isDueOn(habit: Habit, dateStr: String): Boolean =
+        try {
+            isDueOn(habit, LocalDate.parse(dateStr))
+        } catch (_: Exception) {
+            false
+        }
+
+    /** Active non-archived habits due on [date]. */
+    fun habitsDueOn(data: AppData, date: LocalDate = LocalDate.now()): List<Habit> =
+        data.habits.filter { !it.archived && isDueOn(it, date) }
+
+    fun isPendingEntry(entry: HabitEntry?): Boolean =
+        (entry?.value ?: 0.0) < 0.5 && entry?.skipped != true
+
+    /**
+     * Pending (due + not done/skipped) habits for a date, sorted by group → stack → order.
+     * Returns list of (group, ordered habits).
+     */
+    fun pendingGroupedForDate(
+        data: AppData,
+        date: LocalDate = LocalDate.now()
+    ): List<Pair<Group, List<Habit>>> {
+        val dateStr = date.toString()
+        val entries = data.entries[dateStr] ?: emptyMap()
+        val due = habitsDueOn(data, date).filter { isPendingEntry(entries[it.id]) }
+        val byGroup = due.groupBy { it.groupId }
+        return getActiveGroups(data).mapNotNull { g ->
+            val inGroup = byGroup[g.id] ?: return@mapNotNull null
+            if (inGroup.isEmpty()) null else g to sortByStack(inGroup, data.habits)
+        }
+    }
+
+    /**
+     * Soft-stack sort: roots by order, then followers after their predecessor.
+     * Broken links fall back to flat order.
+     */
+    fun sortByStack(habits: List<Habit>, allHabits: List<Habit> = habits): List<Habit> {
+        if (habits.isEmpty()) return emptyList()
+        val byId = habits.associateBy { it.id }
+        val remaining = habits.toMutableList()
+        val result = mutableListOf<Habit>()
+
+        fun chainFrom(root: Habit) {
+            var current: Habit? = root
+            val seen = mutableSetOf<String>()
+            while (current != null && current.id !in seen) {
+                seen.add(current.id)
+                if (current.id in byId) {
+                    remaining.removeAll { it.id == current!!.id }
+                    result.add(current)
+                }
+                val next = remaining.firstOrNull { it.afterHabitId == current!!.id }
+                    ?: habits.firstOrNull { it.afterHabitId == current!!.id && it.id !in seen && it !in result }
+                current = next
+            }
+        }
+
+        // Roots: afterHabitId null or points outside this set
+        val roots = habits.filter { h ->
+            h.afterHabitId == null || h.afterHabitId !in byId
+        }.sortedBy { it.order }
+
+        roots.forEach { chainFrom(it) }
+        // Any leftovers (cycles / orphans)
+        remaining.sortedBy { it.order }.forEach { if (it !in result) result.add(it) }
+        return result
+    }
+
+    /** Short label for Manage / chips: "Daily", "Weekdays", "Every 2d", … */
+    fun showRuleLabel(habit: Habit): String = when (habit.showPreset) {
+        ShowPreset.DAILY -> "Daily"
+        ShowPreset.WEEKDAYS -> "Weekdays"
+        ShowPreset.WEEKENDS -> "Weekends"
+        ShowPreset.CUSTOM_DAYS -> {
+            val names = listOf("", "M", "T", "W", "T", "F", "S", "S")
+            habit.weekdays.sorted().joinToString("") { names.getOrElse(it) { "?" } }
+                .ifBlank { "Custom" }
+        }
+        ShowPreset.EVERY_N_DAYS -> "Every ${habit.intervalDays.coerceAtLeast(1)}d"
+        ShowPreset.SPECIFIC_DATES ->
+            if (habit.specificDates.isEmpty()) "No dates"
+            else "${habit.specificDates.size} date(s)"
+    }
+
+    /** Compute current streak using due-aware completion. */
     fun computeStreak(data: AppData): Int {
-        if (data.habits.isEmpty()) return 0
-        val todayStr = getToday()
+        if (data.habits.none { !it.archived }) return 0
         var streak = 0
-        var checkDate = LocalDate.parse(todayStr)
-        val totalHabits = data.habits.size
+        var checkDate = LocalDate.parse(getToday())
 
         while (true) {
+            val due = habitsDueOn(data, checkDate)
             val key = checkDate.toString()
             val dayEntries = data.entries[key] ?: emptyMap()
-            val completedCount = dayEntries.count { (_, e) -> e.value >= 0.5 }
-            val rate = if (totalHabits > 0) completedCount.toFloat() / totalHabits else 0f
-            if (rate >= 0.6f || completedCount >= 3) { // lenient for mixed types
-                streak++
-                checkDate = checkDate.minusDays(1)
-                if (streak > 365) break
-            } else break
+            val completedCount = due.count { h -> (dayEntries[h.id]?.value ?: 0.0) >= 0.5 }
+            val ok = when {
+                due.isEmpty() -> true // nothing due — skip day without breaking
+                completedCount == due.size -> true
+                completedCount >= 3 -> true
+                completedCount.toFloat() / due.size >= 0.6f -> true
+                else -> false
+            }
+            if (!ok) break
+            if (due.isNotEmpty()) streak++ // only count days that had something to do
+            checkDate = checkDate.minusDays(1)
+            if (streak > 365) break
         }
         return streak
     }
 
-    /** Overall completion rate (0f..1f) for a specific date key (yyyy-MM-dd). */
+    /** Completion among habits *due* that day (not full catalog). */
     fun computeDayCompletion(data: AppData, dateStr: String): Float {
+        val date = try {
+            LocalDate.parse(dateStr)
+        } catch (_: Exception) {
+            return 0f
+        }
+        val due = habitsDueOn(data, date)
+        if (due.isEmpty()) return 1f // nothing due = fully "done"
         val dayMap = data.entries[dateStr] ?: emptyMap()
-        val done = dayMap.count { (_, e) -> e.value >= 0.5 }
-        val total = data.habits.size.coerceAtLeast(1)
-        return done.toFloat() / total
+        val done = due.count { h -> (dayMap[h.id]?.value ?: 0.0) >= 0.5 }
+        return done.toFloat() / due.size
     }
 
     /** Last N days of overall rates, oldest first. Returns list of (date, rate). */
@@ -62,19 +184,20 @@ object HabitDomain {
         return result.reversed()
     }
 
-    /** 7-day average completion for a specific group (habits belonging to it). */
+    /** 7-day average completion for a group (only habits due that day count). */
     fun computeGroup7DayAvg(data: AppData, groupId: String): Float {
-        val groupHabits = data.habits.filter { it.groupId == groupId && !it.archived }
-        if (groupHabits.isEmpty()) return 0f
         var sum = 0f
         var count = 0
         var d = LocalDate.now()
         repeat(7) {
-            val key = d.toString()
-            val dayMap = data.entries[key] ?: emptyMap()
-            val done = groupHabits.count { h -> (dayMap[h.id]?.value ?: 0.0) >= 0.5 }
-            sum += done.toFloat() / groupHabits.size
-            count++
+            val due = habitsDueOn(data, d).filter { it.groupId == groupId }
+            if (due.isNotEmpty()) {
+                val key = d.toString()
+                val dayMap = data.entries[key] ?: emptyMap()
+                val done = due.count { h -> (dayMap[h.id]?.value ?: 0.0) >= 0.5 }
+                sum += done.toFloat() / due.size
+                count++
+            }
             d = d.minusDays(1)
         }
         return if (count > 0) sum / count else 0f
@@ -231,5 +354,9 @@ fun getToday(): String = HabitDomain.getToday()
 fun resolveCurrentGroup(data: AppData, now: LocalTime = LocalTime.now()): Group? = HabitDomain.resolveCurrentGroup(data, now)
 fun moveHabit(currentHabits: List<Habit>, habitId: String, newGroupId: String, newOrder: Int): List<Habit> =
     HabitDomain.moveHabit(currentHabits, habitId, newGroupId, newOrder)
+fun isDueOn(habit: Habit, date: LocalDate): Boolean = HabitDomain.isDueOn(habit, date)
+fun habitsDueOn(data: AppData, date: LocalDate = LocalDate.now()): List<Habit> = HabitDomain.habitsDueOn(data, date)
+fun pendingGroupedForDate(data: AppData, date: LocalDate = LocalDate.now()) = HabitDomain.pendingGroupedForDate(data, date)
+fun showRuleLabel(habit: Habit): String = HabitDomain.showRuleLabel(habit)
 
 // Note: repo still exposes getToday() and resolve* for convenience + ThemeColors type lives in repo temporarily.

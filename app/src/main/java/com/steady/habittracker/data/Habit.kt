@@ -28,6 +28,20 @@ enum class HabitType {
 }
 
 /**
+ * When a habit appears on Today / widget (catalog stays in Manage always).
+ * Defaults to DAILY so existing items keep current behavior.
+ */
+@Serializable
+enum class ShowPreset {
+    DAILY,           // every day
+    WEEKDAYS,        // Mon–Fri
+    WEEKENDS,        // Sat–Sun
+    CUSTOM_DAYS,     // uses [Habit.weekdays]
+    EVERY_N_DAYS,    // every intervalDays from anchorDate
+    SPECIFIC_DATES   // only dates in specificDates
+}
+
+/**
  * Group for time-of-day / routine organization (Morning Routine, Evening, Work, Mindset...).
  */
 @Serializable
@@ -108,7 +122,7 @@ data class Schedule(
 data class Habit(
     val id: String,
     val name: String,
-    val why: String = "",
+    val why: String = "", // kept for export/back-compat; not shown in UI
     val groupId: String,
     val type: HabitType = HabitType.CHECKBOX,
     val target: Double? = null,
@@ -116,7 +130,19 @@ data class Habit(
     val order: Int = 0,
     val canSkip: Boolean = true,   // false for hygiene/essentials (no skip allowed)
     val archived: Boolean = false,
-    val isSupplement: Boolean = false   // #3: tag for supplement visibility + scheduling across morning/evening
+    val isSupplement: Boolean = false,  // quick-log tag
+    /** When this habit appears on Today (Manage catalog always keeps it). */
+    val showPreset: ShowPreset = ShowPreset.DAILY,
+    /** Used by CUSTOM_DAYS (1=Mon … 7=Sun). */
+    val weekdays: Set<Int> = setOf(1, 2, 3, 4, 5, 6, 7),
+    /** Used by EVERY_N_DAYS (e.g. 2 = every other day). */
+    val intervalDays: Int = 2,
+    /** Anchor for EVERY_N_DAYS (yyyy-MM-dd). Null → treat as epoch / always interval from date 0. */
+    val anchorDate: String? = null,
+    /** Used by SPECIFIC_DATES (yyyy-MM-dd). */
+    val specificDates: List<String> = emptyList(),
+    /** Soft stack: previous habit in sequence (Atomic Habits style). Null = standalone / root. */
+    val afterHabitId: String? = null
 )
 
 @Serializable
@@ -132,7 +158,9 @@ data class AppData(
     val backgroundMode: String = "dark",   // "dark" | "amoled" | "light"  (OLED pure black supported)
     val schedules: List<Schedule> = emptyList(),
     val activeScheduleId: String? = null,
-    val captures: List<CaptureItem> = emptyList()  // #8 quick capture inbox support
+    val captures: List<CaptureItem> = emptyList(),  // #8 quick capture inbox support
+    /** Master switch for all habit reminders (Settings). When false, no alarms are scheduled. */
+    val remindersMasterEnabled: Boolean = true
 )
 
 /**
@@ -228,6 +256,7 @@ fun AppData.withToggledReminder(id: String): AppData {
 fun AppData.withColorScheme(scheme: String): AppData = copy(colorScheme = scheme)
 fun AppData.withBackgroundMode(mode: String): AppData = copy(backgroundMode = mode)
 fun AppData.withOnboarded(): AppData = copy(onboarded = true)
+fun AppData.withRemindersMasterEnabled(enabled: Boolean): AppData = copy(remindersMasterEnabled = enabled)
 
 // Schedule helpers (mirrored for convenience; repo delegates still work)
 fun AppData.withAddedSchedule(schedule: Schedule): AppData = copy(schedules = schedules + schedule)

@@ -1,6 +1,13 @@
 package com.steady.habittracker
 
+import android.Manifest
+import android.app.AlarmManager
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.net.Uri
+import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -12,14 +19,19 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.*
 import androidx.compose.ui.draw.clip
 import androidx.compose.runtime.*
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Size
@@ -30,10 +42,12 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.steady.habittracker.data.AndroidHabitRepository
 import com.steady.habittracker.data.AppData
 import com.steady.habittracker.data.Habit
+import com.steady.habittracker.reminders.NotificationHelper
 import com.steady.habittracker.ui.HistoryScreen
 import com.steady.habittracker.ui.LogEntryDialog
 import com.steady.habittracker.ui.ManageScreen
@@ -42,6 +56,9 @@ import com.steady.habittracker.ui.SkipPromptDialog
 import com.steady.habittracker.ui.SteadyViewModel
 import com.steady.habittracker.ui.TabButton
 import com.steady.habittracker.ui.TodayScreen
+import com.steady.habittracker.ui.TOUR_STEPS
+import com.steady.habittracker.ui.TourCoach
+import com.steady.habittracker.ui.TourHeaderIndicator
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -54,8 +71,25 @@ import kotlinx.serialization.json.Json
 
 class MainActivity : ComponentActivity() {
 
+    /** Deep-link extras from widget / notifications (survives onNewIntent). */
+    val deepLinkLogHabit = mutableStateOf<String?>(null)
+    val deepLinkOpenGroup = mutableStateOf<String?>(null)
+
+    private fun captureDeepLinks(intent: Intent?) {
+        if (intent == null) return
+        intent.getStringExtra("log_habit")?.let {
+            deepLinkLogHabit.value = it
+            intent.removeExtra("log_habit")
+        }
+        intent.getStringExtra("open_group")?.let {
+            deepLinkOpenGroup.value = it
+            intent.removeExtra("open_group")
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        captureDeepLinks(intent)
 
         // Create repo once (Android specific). ViewModel will hold reference.
         val repository = AndroidHabitRepository(this)
@@ -65,7 +99,7 @@ class MainActivity : ComponentActivity() {
             val scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO)
             scope.launch {
                 val data = repository.appDataFlow.first()
-                com.steady.habittracker.reminders.AlarmScheduler.scheduleAll(this@MainActivity, data.reminders)
+                com.steady.habittracker.reminders.AlarmScheduler.scheduleAll(this@MainActivity, data)
             }
         } catch (_: Exception) {}
 
@@ -74,23 +108,36 @@ class MainActivity : ComponentActivity() {
                 factory = object : androidx.lifecycle.ViewModelProvider.Factory {
                     @Suppress("UNCHECKED_CAST")
                     override fun <T : androidx.lifecycle.ViewModel> create(modelClass: Class<T>): T {
-                        return SteadyViewModel(repository) as T
+                        return SteadyViewModel(repository, application) as T
                     }
                 }
             )
-            // Theme is resolved inside SteadyApp using appData.colorScheme (dynamic)
             SteadyApp(viewModel = viewModel, repository = repository)
         }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        captureDeepLinks(intent)
     }
 }
 
 @Composable
-fun SteadyApp(viewModel: SteadyViewModel, repository: AndroidHabitRepository) {
+fun SteadyApp(
+    viewModel: SteadyViewModel,
+    repository: AndroidHabitRepository
+) {
     val appData by viewModel.appData.collectAsState()
     var selectedTab by remember { mutableIntStateOf(0) }
     var promptHabitId by remember { mutableStateOf<String?>(null) }
     var progressExpanded by remember { mutableStateOf(false) }
     var showSettings by remember { mutableStateOf(false) }
+
+    // Help / interactive onboarding tour ("run onboarding")
+    var showHelpTour by remember { mutableStateOf(false) }
+    var tourStep by remember { mutableIntStateOf(0) }
+    var showWelcomeGuide by remember { mutableStateOf(false) }
 
     val completionRate by viewModel.completionRate.collectAsState()
     val streak by viewModel.streak.collectAsState()
@@ -100,8 +147,11 @@ fun SteadyApp(viewModel: SteadyViewModel, repository: AndroidHabitRepository) {
     val today = viewModel.today
     val period by viewModel.currentPeriod.collectAsState()
 
-    val doneCount = todayEntries.count { (_, e) -> e.value >= 0.5 }
-    val total = appData.habits.size.coerceAtLeast(1)
+    val dueToday = remember(appData, today) {
+        com.steady.habittracker.data.HabitDomain.habitsDueOn(appData, java.time.LocalDate.parse(today))
+    }
+    val doneCount = dueToday.count { h -> (todayEntries[h.id]?.value ?: 0.0) >= 0.5 }
+    val total = dueToday.size.coerceAtLeast(1)
 
     val promptHabit = promptHabitId?.let { id -> appData.habits.find { it.id == id } }
 
@@ -109,7 +159,60 @@ fun SteadyApp(viewModel: SteadyViewModel, repository: AndroidHabitRepository) {
     var logHabit by remember { mutableStateOf<Habit?>(null) }
 
     val context = LocalContext.current
+    val activity = context as? MainActivity
     val accent = getAccentColor(appData.colorScheme)
+
+    val deepLogState = activity?.deepLinkLogHabit ?: remember { mutableStateOf<String?>(null) }
+    val deepGroupState = activity?.deepLinkOpenGroup ?: remember { mutableStateOf<String?>(null) }
+    val deepLog by deepLogState
+    val deepGroup by deepGroupState
+
+    // Deep-links from widget (log_habit) and notifications (open_group)
+    LaunchedEffect(deepLog, appData.habits) {
+        val logId = deepLog ?: return@LaunchedEffect
+        val h = appData.habits.find { it.id == logId && !it.archived }
+        if (h != null) {
+            selectedTab = 0
+            logHabit = h
+        }
+        activity?.deepLinkLogHabit?.value = null
+    }
+    LaunchedEffect(deepGroup) {
+        if (deepGroup != null) {
+            selectedTab = 0
+            activity?.deepLinkOpenGroup?.value = null
+        }
+    }
+
+    // Notification permission (Android 13+)
+    val notifPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { /* result ignored; Settings shows status */ }
+
+    LaunchedEffect(Unit) {
+        NotificationHelper.ensureChannel(context)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            val granted = ContextCompat.checkSelfPermission(
+                context, Manifest.permission.POST_NOTIFICATIONS
+            ) == PackageManager.PERMISSION_GRANTED
+            if (!granted) {
+                notifPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+            }
+        }
+    }
+
+    // Drive tab changes when tour step changes (takes user around the app)
+    LaunchedEffect(tourStep, showHelpTour) {
+        if (showHelpTour) {
+            when (tourStep) {
+                0, 1, 2 -> if (selectedTab != 0) selectedTab = 0
+                3 -> selectedTab = 0
+                4 -> selectedTab = 1
+                5 -> selectedTab = 2
+                // later steps stay on the relevant tab
+            }
+        }
+    }
 
     // SAF launcher for JSON backup export (works for empty data: groups/habits structure only)
     val exportLauncher = rememberLauncherForActivityResult(
@@ -214,6 +317,13 @@ fun SteadyApp(viewModel: SteadyViewModel, repository: AndroidHabitRepository) {
                     Spacer(Modifier.width(8.dp))
                     IconButton(onClick = { showSettings = true }) {
                         Icon(Icons.Default.Settings, contentDescription = "Settings", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    IconButton(onClick = {
+                        showHelpTour = true
+                        tourStep = 0
+                        selectedTab = 0
+                    }) {
+                        Icon(Icons.Default.Info, contentDescription = "Help / Tour", tint = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
             }
@@ -352,42 +462,95 @@ fun SteadyApp(viewModel: SteadyViewModel, repository: AndroidHabitRepository) {
                 TabButton("Manage", selectedTab == 2, modifier = Modifier.weight(1f)) { selectedTab = 2 }
             }
 
+            if (showHelpTour) {
+                TourHeaderIndicator(stepIndex = tourStep, onEnd = { showHelpTour = false })
+            }
+
             Spacer(Modifier.height(12.dp))
 
-            when (selectedTab) {
-                0 -> TodayScreen(
-                    appData = appData,
-                    todayEntries = todayEntries,
-                    onToggle = viewModel::toggleCheckbox,
-                    onLogEntry = viewModel::logEntry,  // kept for compatibility in some paths
-                    onRequestLog = { h -> logHabit = h },
-                    onSkip = viewModel::skipHabit,
-                    onShowSkipPrompt = { id -> promptHabitId = id },
-                    onQuickCapture = viewModel::addCapture,
-                    onProcessCapture = viewModel::markCaptureProcessed,
-                    onDeleteCapture = viewModel::deleteCapture,
-                    onCreateMetric = { name -> viewModel.addMetricHabit(name) },
-                    onLogMetric = viewModel::logEntry
-                )
-                1 -> HistoryScreen(appData = appData)
-                2 -> ManageScreen(
-                    appData = appData,
-                    onAddGroup = { n, h, p -> viewModel.addGroup(n, h, p) },
-                    onAddHabit = { name, why, gid, type, isSupp -> viewModel.addHabit(name, why, gid, type, isSupp) },
-                    onDeleteHabit = viewModel::deleteHabit,  // now archives
-                    onSetReminder = viewModel::setReminder,
-                    onToggleReminder = viewModel::toggleReminder,
-                    onArchiveGroup = { viewModel.deleteGroup(it) },
-                    onExportCsv = { exportLauncher.launch("steady_backup_${java.time.LocalDate.now()}.json") },
-                    onImportCsv = { /* TODO: can add OpenDocument for JSON restore later */ },
-                    onUpdateHabit = viewModel::updateHabit,
-                    onUnarchiveGroup = { viewModel.unarchiveGroup(it) },
-                    onUnarchiveHabit = { viewModel.unarchiveHabit(it) },
-                    onApplySchedulePreset = viewModel::applySchedulePreset,
-                    onSetActiveSchedule = viewModel::setActiveSchedule,
-                    onUpdateScheduleBlocks = viewModel::updateScheduleBlocks,
-                    schedules = appData.schedules,
-                    activeScheduleId = appData.activeScheduleId
+            // Tab content area always takes remaining vertical space so inner lists and top actions (like +Capture/+Log) have proper layout.
+            Box(modifier = Modifier.weight(1f)) {
+                when (selectedTab) {
+                    0 -> TodayScreen(
+                        appData = appData,
+                        todayEntries = todayEntries,
+                        onToggle = viewModel::toggleCheckbox,
+                        onLogEntry = viewModel::logEntry,  // kept for compatibility in some paths
+                        onRequestLog = { h -> logHabit = h },
+                        onSkip = viewModel::skipHabit,
+                        onShowSkipPrompt = { id -> promptHabitId = id },
+                        onQuickCapture = viewModel::addCapture,
+                        onProcessCapture = viewModel::markCaptureProcessed,
+                        onDeleteCapture = viewModel::deleteCapture,
+                        onCreateMetric = { name -> viewModel.addMetricHabit(name) },
+                        onLogMetric = viewModel::logEntry
+                    )
+                    1 -> HistoryScreen(appData = appData)
+                    2 -> ManageScreen(
+                        appData = appData,
+                        onAddGroup = { n, h, p -> viewModel.addGroup(n, h, p) },
+                        onAddHabit = { name, gid, type, isSupp, preset, weekdays, interval, dates ->
+                            viewModel.addHabit(
+                                name = name,
+                                groupId = gid,
+                                type = type,
+                                isSupplement = isSupp,
+                                showPreset = preset,
+                                weekdays = weekdays,
+                                intervalDays = interval,
+                                specificDates = dates
+                            )
+                        },
+                        onDeleteHabit = viewModel::deleteHabit,
+                        onSetReminder = viewModel::setReminder,
+                        onToggleReminder = viewModel::toggleReminder,
+                        onArchiveGroup = { viewModel.deleteGroup(it) },
+                        onExportCsv = { exportLauncher.launch("steady_backup_${java.time.LocalDate.now()}.json") },
+                        onImportCsv = { },
+                        onUpdateHabit = viewModel::updateHabit,
+                        onUnarchiveGroup = { viewModel.unarchiveGroup(it) },
+                        onUnarchiveHabit = { viewModel.unarchiveHabit(it) },
+                        onReorderHabit = viewModel::reorderHabit,
+                        onMoveHabitToGroup = viewModel::moveHabitToGroup,
+                        onApplySchedulePreset = viewModel::applySchedulePreset,
+                        onSetActiveSchedule = viewModel::setActiveSchedule,
+                        onUpdateScheduleBlocks = viewModel::updateScheduleBlocks,
+                        schedules = appData.schedules,
+                        activeScheduleId = appData.activeScheduleId
+                    )
+                }
+            }
+
+            // Interactive help / onboarding tour coach (sits below the tab content when active)
+            if (showHelpTour) {
+                TourCoach(
+                    stepIndex = tourStep,
+                    onNext = {
+                        if (tourStep >= TOUR_STEPS.lastIndex) {
+                            showHelpTour = false
+                        } else {
+                            val next = tourStep + 1
+                            tourStep = next
+                            // Drive the UI to "take the user around"
+                            when (next) {
+                                3 -> selectedTab = 0   // Today deep dive
+                                4 -> selectedTab = 1   // History
+                                5 -> selectedTab = 2   // Manage
+                                else -> { /* keep current tab */ }
+                            }
+                        }
+                    },
+                    onPrev = {
+                        val prev = (tourStep - 1).coerceAtLeast(0)
+                        tourStep = prev
+                        when (prev) {
+                            3 -> selectedTab = 0
+                            4 -> selectedTab = 1
+                            5 -> selectedTab = 2
+                            else -> { /* keep */ }
+                        }
+                    },
+                    onEnd = { showHelpTour = false }
                 )
             }
 
@@ -434,9 +597,82 @@ fun SteadyApp(viewModel: SteadyViewModel, repository: AndroidHabitRepository) {
             containerColor = MaterialTheme.colorScheme.surface,
             titleContentColor = MaterialTheme.colorScheme.onSurface,
             textContentColor = MaterialTheme.colorScheme.onSurface,
-            title = { Text("Settings • Theme") },
+            title = { Text("Settings") },
             text = {
-                Column {
+                Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
+                    // --- Reminders ---
+                    Text("Reminders", fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurface, fontSize = 13.sp)
+                    Spacer(Modifier.height(6.dp))
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Box(Modifier.weight(1f)) {
+                            Column {
+                                Text("Habit reminders", color = MaterialTheme.colorScheme.onSurface, fontSize = 13.sp)
+                                Text("Regular notifications for your routines", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 10.sp)
+                            }
+                        }
+                        Switch(
+                            checked = appData.remindersMasterEnabled,
+                            onCheckedChange = { viewModel.setRemindersMasterEnabled(it) }
+                        )
+                    }
+                    Spacer(Modifier.height(4.dp))
+                    appData.reminders.sortedBy { it.time }.forEach { rem ->
+                        val gName = rem.groupId?.let { gid -> appData.groups.find { it.id == gid }?.name } ?: "Daily Review"
+                        Row(
+                            Modifier.fillMaxWidth().padding(vertical = 2.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Box(Modifier.weight(1f)) {
+                                Column {
+                                    Text("$gName - ${rem.time}", color = MaterialTheme.colorScheme.onSurface, fontSize = 12.sp)
+                                    Text("${rem.days.size} day(s)/week", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 10.sp)
+                                }
+                            }
+                            Switch(
+                                checked = rem.enabled && appData.remindersMasterEnabled,
+                                enabled = appData.remindersMasterEnabled,
+                                onCheckedChange = { viewModel.toggleReminder(rem.id) }
+                            )
+                        }
+                    }
+                    Text("Edit times in Manage > open a group > bell icon.", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 10.sp)
+                    Spacer(Modifier.height(6.dp))
+                    val notifOk = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                        ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
+                    } else true
+                    val am = context.getSystemService(AlarmManager::class.java)
+                    val exactOk = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                        am?.canScheduleExactAlarms() == true
+                    } else true
+                    if (!notifOk) {
+                        TextButton(onClick = {
+                            notifPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                        }) { Text("Allow notifications", fontSize = 12.sp) }
+                    }
+                    if (!exactOk) {
+                        TextButton(onClick = {
+                            try {
+                                val i = Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM)
+                                i.data = Uri.parse("package:${context.packageName}")
+                                context.startActivity(i)
+                            } catch (_: Exception) {
+                                try {
+                                    val i2 = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
+                                    i2.data = Uri.parse("package:${context.packageName}")
+                                    context.startActivity(i2)
+                                } catch (_: Exception) {}
+                            }
+                        }) { Text("Allow exact alarms", fontSize = 12.sp) }
+                    }
+                    if (notifOk && exactOk) {
+                        Text("Notifications & exact alarms: OK", color = MaterialTheme.colorScheme.primary, fontSize = 10.sp)
+                    }
+
+                    Spacer(Modifier.height(16.dp))
                     Text("Background Mode (OLED / Light / Dark)", fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurface, fontSize = 13.sp)
                     Spacer(Modifier.height(6.dp))
                     val backgrounds = listOf(
@@ -574,10 +810,89 @@ fun SteadyApp(viewModel: SteadyViewModel, repository: AndroidHabitRepository) {
 
                     Spacer(Modifier.height(8.dp))
                     Text("Instant updates. AMOLED for pure black (battery friendly on OLED). All cards, texts, progress & widget use theme.", fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+
+                    Spacer(Modifier.height(16.dp))
+                    Text("Help", fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurface, fontSize = 13.sp)
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(onClick = {
+                            showSettings = false
+                            showHelpTour = true
+                            tourStep = 0
+                            selectedTab = 0
+                        }) {
+                            Text("Guided tour")
+                        }
+                        OutlinedButton(onClick = {
+                            showSettings = false
+                            showWelcomeGuide = true
+                        }) {
+                            Text("Welcome guide")
+                        }
+                    }
+                    Text("Guided tour walks the screens. Welcome guide is the first-run summary. Header ? also starts the tour.", fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             },
             confirmButton = {
                 TextButton(onClick = { showSettings = false }) { Text("Close") }
+            }
+        )
+    }
+
+    // Welcome / onboarding guide dialog (replayable "run onboarding" summary)
+    if (showWelcomeGuide) {
+        AlertDialog(
+            onDismissRequest = { showWelcomeGuide = false },
+            containerColor = MaterialTheme.colorScheme.surface,
+            titleContentColor = MaterialTheme.colorScheme.onSurface,
+            textContentColor = MaterialTheme.colorScheme.onSurface,
+            title = { Text("Welcome to Steady") },
+            text = {
+                Column(
+                    modifier = Modifier
+                        .verticalScroll(rememberScrollState())
+                        .fillMaxWidth()
+                ) {
+                    Text(
+                        "Evidence-based habits. Simple daily tracking.",
+                        fontSize = 13.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(Modifier.height(12.dp))
+                    val features = listOf(
+                        "📅 Groups by time of day (Morning, Focus, Evening, Mindset...)",
+                        "✅ Tap to log. Rich types: checkboxes, counters, minutes, scales, notes.",
+                        "📈 See your streak and weekly trends at a glance.",
+                        "🔔 Reminders you control in Manage.",
+                        "🧩 The home-screen widget shows exactly what to do right now.",
+                        "💾 Export your data anytime (even when just starting).",
+                        "🗄 Archive instead of delete — your history stays safe."
+                    )
+                    features.forEach { f ->
+                        Text(
+                            f,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            fontSize = 13.sp,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 4.dp)
+                        )
+                    }
+                    Spacer(Modifier.height(12.dp))
+                    Text(
+                        "We've started you with a proven set of high-ROI habits.\nCustomize freely in the Manage tab.",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        fontSize = 12.sp
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        "Tip: Add the Steady widget to your home screen for 1-tap logging.",
+                        color = MaterialTheme.colorScheme.primary,
+                        fontSize = 11.sp
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showWelcomeGuide = false }) { Text("Got it") }
             }
         )
     }
