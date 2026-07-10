@@ -698,6 +698,145 @@ object HabitDomain {
     fun sessionExerciseCount(session: WorkoutSession): Int =
         session.performedExercises.count { it.value.isNotEmpty() }
 
+    // --- Dreamline / Path (#25, #26) ---
+
+    fun getActiveGoals(data: AppData): List<GoalStory> =
+        data.goals.filter { !it.archived }.sortedByDescending { it.updatedAt }
+
+    fun dreamlineGoals(data: AppData): List<GoalStory> =
+        getActiveGoals(data).filter { g ->
+            g.tags.any { it.equals(GoalTags.DREAMLINE, ignoreCase = true) } ||
+                g.tags.any { it.equals("dreamline", ignoreCase = true) }
+        }
+
+    fun goalsByHorizon(data: AppData, horizon: DreamHorizon): List<GoalStory> =
+        dreamlineGoals(data).filter { it.horizon == horizon }
+
+    fun goalsByCategory(data: AppData, category: DreamCategory): List<GoalStory> =
+        dreamlineGoals(data).filter { it.category == category }
+
+    fun latestPathCheck(data: AppData): PathAlignmentCheck? =
+        data.pathChecks.maxByOrNull { it.loggedAt }
+
+    fun pathCheckToday(data: AppData, date: String = getToday()): PathAlignmentCheck? =
+        data.pathChecks.filter { it.date == date }.maxByOrNull { it.loggedAt }
+
+    /** Average of the three alignment sliders (1–5 → 0–1). */
+    fun pathCheckScore(check: PathAlignmentCheck): Float {
+        val avg = (check.visionAlignment + check.energyTowardDreams + check.identityCongruence) / 3f
+        return ((avg - 1f) / 4f).coerceIn(0f, 1f)
+    }
+
+    fun averageProgress(goals: List<GoalStory>): Float {
+        if (goals.isEmpty()) return 0f
+        return goals.map { it.progress.coerceIn(0f, 1f) }.average().toFloat()
+    }
+
+    /**
+     * Mindset prompts derived from Being goals (identity-linked).
+     * Returns ready-to-show strings for the Path tab.
+     */
+    fun mindsetPrompts(data: AppData, limit: Int = 4): List<String> {
+        val being = goalsByCategory(data, DreamCategory.BEING)
+        if (being.isEmpty()) {
+            return listOf(
+                "What would the future you who already lives your dream do today?",
+                "If stuck, consider the opposite of what you hate or fear.",
+                "Name one identity you want to grow into this week."
+            )
+        }
+        return being.take(limit).map { g ->
+            val core = g.title.trim().ifBlank { "your vision" }
+            "What would the version of you who is already “$core” do today?"
+        }
+    }
+
+    /** First-step actions still open (not marked done on parent). */
+    fun openFirstSteps(data: AppData): List<Pair<GoalStory, String>> =
+        dreamlineGoals(data)
+            .filter { it.firstStepNow.isNotBlank() }
+            .map { it to it.firstStepNow }
+
+    fun openSteps(data: AppData): List<Pair<GoalStory, GoalStep>> =
+        dreamlineGoals(data).flatMap { g ->
+            g.steps.filter { !it.done }.map { g to it }
+        }
+
+    /**
+     * Build GoalStories from wizard draft lines.
+     * [dreams]: list of (horizon, category, text)
+     * [stepsByKey]: map "horizon|category|text" -> list of step titles
+     * [firstStepsByKey]: map key -> first step now
+     */
+    fun buildGoalsFromDreamline(
+        dreams: List<Triple<DreamHorizon, DreamCategory, String>>,
+        stepsByKey: Map<String, List<String>> = emptyMap(),
+        firstStepsByKey: Map<String, String> = emptyMap(),
+        nowMs: Long = System.currentTimeMillis()
+    ): List<GoalStory> {
+        val today = java.time.LocalDate.now()
+        return dreams.mapIndexedNotNull { index, (horizon, category, raw) ->
+            val text = raw.trim()
+            if (text.isBlank()) return@mapIndexedNotNull null
+            val key = dreamKey(horizon, category, text)
+            val end = when (horizon) {
+                DreamHorizon.SIX_MONTHS -> today.plusMonths(6)
+                DreamHorizon.TWELVE_MONTHS -> today.plusMonths(12)
+            }
+            val stepTitles = stepsByKey[key].orEmpty().map { it.trim() }.filter { it.isNotEmpty() }.take(3)
+            GoalStory(
+                id = "goal_${java.util.UUID.randomUUID().toString().take(8)}",
+                title = text.take(120),
+                description = when (category) {
+                    DreamCategory.HAVING -> "Dreamline · Having (${horizonLabel(horizon)})"
+                    DreamCategory.BEING -> "Dreamline · Being / identity (${horizonLabel(horizon)})"
+                    DreamCategory.DOING -> "Dreamline · Doing (${horizonLabel(horizon)})"
+                },
+                category = category,
+                horizon = horizon,
+                tags = listOf(
+                    GoalTags.DREAMLINE,
+                    GoalTags.forHorizon(horizon),
+                    GoalTags.forCategory(category)
+                ),
+                progress = 0f,
+                confidence = 0.5f,
+                firstStepNow = firstStepsByKey[key]?.trim().orEmpty(),
+                steps = stepTitles.mapIndexed { i, t ->
+                    GoalStep(id = "gs_${i}_$index", title = t, order = i)
+                },
+                startDate = today.toString(),
+                endDate = end.toString(),
+                createdAt = nowMs,
+                updatedAt = nowMs
+            )
+        }
+    }
+
+    fun dreamKey(horizon: DreamHorizon, category: DreamCategory, text: String): String =
+        "${horizon.name}|${category.name}|${text.trim().lowercase()}"
+
+    fun horizonLabel(horizon: DreamHorizon): String = when (horizon) {
+        DreamHorizon.SIX_MONTHS -> "6 months"
+        DreamHorizon.TWELVE_MONTHS -> "12 months"
+    }
+
+    fun categoryLabel(category: DreamCategory): String = when (category) {
+        DreamCategory.HAVING -> "Having"
+        DreamCategory.BEING -> "Being"
+        DreamCategory.DOING -> "Doing"
+    }
+
+    /** Example dream prompts when the user is stuck (Dreamline helpers). */
+    fun dreamlineStuckPrompts(): List<String> = listOf(
+        "If stuck, consider the opposite of what you hate or fear.",
+        "A place you want to visit or live.",
+        "A memory of a lifetime you want to create.",
+        "A daily or weekly habit that would change everything.",
+        "A skill you want to learn or master.",
+        "Who do you want to become — not just what you want to do?"
+    )
+
     /** Return nested view for a parent (e.g. Workouts and its plan subgroups). */
     fun getSubGroups(data: AppData, parentId: String): List<Group> =
         data.groups.filter { it.parentId == parentId && !it.archived }.sortedBy { it.order }

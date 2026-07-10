@@ -50,6 +50,12 @@ import com.steady.habittracker.data.withUpdatedRoutine
 import com.steady.habittracker.data.withArchivedRoutine
 import com.steady.habittracker.data.withLoggedWorkoutSession
 import com.steady.habittracker.data.withBlueprintRoutinesIfMissing
+import com.steady.habittracker.data.GoalStory
+import com.steady.habittracker.data.PathAlignmentCheck
+import com.steady.habittracker.data.withUpdatedGoal
+import com.steady.habittracker.data.withArchivedGoal
+import com.steady.habittracker.data.withGoalsReplacedFromWizard
+
 import com.steady.habittracker.reminders.AlarmScheduler
 import com.steady.habittracker.widget.WidgetRenderer
 import android.app.Application
@@ -643,6 +649,38 @@ class SteadyViewModel(
     fun saveInProgressWorkoutSession(session: WorkoutSession) {
         viewModelScope.launch {
             repository.saveData(appData.value.withLoggedWorkoutSession(session.copy(completed = false)))
+        }
+    }
+
+    // --- Dreamline / Path (#25, #26) ---
+    fun applyDreamlineGoals(newGoals: List<GoalStory>, replaceExistingDreamline: Boolean = true) {
+        if (newGoals.isEmpty()) return
+        viewModelScope.launch {
+            val current = appData.value
+            repository.saveData(
+                current.withGoalsReplacedFromWizard(newGoals, replaceDreamline = replaceExistingDreamline)
+            )
+        }
+    }
+
+    fun updateGoal(goal: GoalStory) {
+        viewModelScope.launch {
+            repository.saveData(appData.value.withUpdatedGoal(goal.copy(updatedAt = System.currentTimeMillis())))
+        }
+    }
+
+    fun archiveGoal(goalId: String) {
+        viewModelScope.launch {
+            repository.saveData(appData.value.withArchivedGoal(goalId))
+        }
+    }
+
+    fun savePathAlignment(check: PathAlignmentCheck) {
+        viewModelScope.launch {
+            val current = appData.value
+            // One primary check-in per day (still keeps prior days)
+            val pruned = current.pathChecks.filter { it.date != check.date }
+            repository.saveData(current.copy(pathChecks = pruned + check))
         }
     }
 

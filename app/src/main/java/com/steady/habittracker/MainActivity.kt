@@ -60,6 +60,8 @@ import com.steady.habittracker.ui.TOUR_STEPS
 import com.steady.habittracker.ui.TourCoach
 import com.steady.habittracker.ui.TourHeaderIndicator
 import com.steady.habittracker.ui.WorkoutSessionScreen
+import com.steady.habittracker.ui.PathScreen
+import com.steady.habittracker.ui.DreamlineWizard
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -162,6 +164,7 @@ fun SteadyApp(
     var activeWorkoutRoutine by remember {
         mutableStateOf<com.steady.habittracker.data.ExerciseRoutine?>(null)
     }
+    var showDreamlineWizard by remember { mutableStateOf(false) }
 
     val context = LocalContext.current
     val activity = context as? MainActivity
@@ -207,13 +210,15 @@ fun SteadyApp(
     }
 
     // Drive tab changes when tour step changes (takes user around the app)
+    // Tabs: 0 Today, 1 Path, 2 History, 3 Manage
     LaunchedEffect(tourStep, showHelpTour) {
         if (showHelpTour) {
             when (tourStep) {
                 0, 1, 2 -> if (selectedTab != 0) selectedTab = 0
                 3 -> selectedTab = 0
-                4 -> selectedTab = 1
-                5 -> selectedTab = 2
+                4 -> selectedTab = 1 // Path
+                5 -> selectedTab = 2 // History
+                6 -> selectedTab = 3 // Manage
                 // later steps stay on the relevant tab
             }
         }
@@ -317,21 +322,40 @@ fun SteadyApp(
         }
     } else {
     MaterialTheme(colorScheme = colorScheme) {
-    // Full-screen workout session takes over content (#22)
+    // Full-screen workout session or Dreamline wizard takes over content
     val workoutRt = activeWorkoutRoutine
-    if (workoutRt != null) {
-        Surface(modifier = Modifier.fillMaxSize(), color = bgColor) {
-            WorkoutSessionScreen(
-                routine = workoutRt,
-                onFinish = { session ->
-                    viewModel.finishWorkoutSession(session)
-                    activeWorkoutRoutine = null
-                    Toast.makeText(context, "Workout saved — great work!", Toast.LENGTH_SHORT).show()
-                },
-                onDiscard = { activeWorkoutRoutine = null }
-            )
+    when {
+        workoutRt != null -> {
+            Surface(modifier = Modifier.fillMaxSize(), color = bgColor) {
+                WorkoutSessionScreen(
+                    routine = workoutRt,
+                    onFinish = { session ->
+                        viewModel.finishWorkoutSession(session)
+                        activeWorkoutRoutine = null
+                        Toast.makeText(context, "Workout saved — great work!", Toast.LENGTH_SHORT).show()
+                    },
+                    onDiscard = { activeWorkoutRoutine = null }
+                )
+            }
         }
-    } else {
+        showDreamlineWizard -> {
+            Surface(modifier = Modifier.fillMaxSize(), color = bgColor) {
+                DreamlineWizard(
+                    onComplete = { goals ->
+                        viewModel.applyDreamlineGoals(goals, replaceExistingDreamline = true)
+                        showDreamlineWizard = false
+                        selectedTab = 1 // Path tab
+                        Toast.makeText(
+                            context,
+                            "Created ${goals.size} goal(s) — see Path tab",
+                            Toast.LENGTH_SHORT
+                        ).show()
+                    },
+                    onCancel = { showDreamlineWizard = false }
+                )
+            }
+        }
+        else -> {
     Scaffold(
         containerColor = bgColor
         // No FAB: removed per request (adds only via Manage now)
@@ -509,7 +533,7 @@ fun SteadyApp(
 
             Spacer(Modifier.height(10.dp))
 
-            // Tabs (Today / History / Manage) — 3 tabs kept
+            // Tabs: Today | Path | History | Manage (#26 Path)
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -517,8 +541,9 @@ fun SteadyApp(
                     .padding(4.dp)
             ) {
                 TabButton("Today", selectedTab == 0, modifier = Modifier.weight(1f)) { selectedTab = 0 }
-                TabButton("History", selectedTab == 1, modifier = Modifier.weight(1f)) { selectedTab = 1 }
-                TabButton("Manage", selectedTab == 2, modifier = Modifier.weight(1f)) { selectedTab = 2 }
+                TabButton("Path", selectedTab == 1, modifier = Modifier.weight(1f)) { selectedTab = 1 }
+                TabButton("History", selectedTab == 2, modifier = Modifier.weight(1f)) { selectedTab = 2 }
+                TabButton("Manage", selectedTab == 3, modifier = Modifier.weight(1f)) { selectedTab = 3 }
             }
 
             if (showHelpTour) {
@@ -545,8 +570,15 @@ fun SteadyApp(
                         onLogMetric = viewModel::logEntry,
                         onStartRoutine = { rt -> activeWorkoutRoutine = rt }
                     )
-                    1 -> HistoryScreen(appData = appData)
-                    2 -> ManageScreen(
+                    1 -> PathScreen(
+                        appData = appData,
+                        onOpenWizard = { showDreamlineWizard = true },
+                        onUpdateGoal = viewModel::updateGoal,
+                        onSaveAlignment = viewModel::savePathAlignment,
+                        onArchiveGoal = viewModel::archiveGoal
+                    )
+                    2 -> HistoryScreen(appData = appData)
+                    3 -> ManageScreen(
                         appData = appData,
                         onAddGroup = { n, h, p -> viewModel.addGroup(n, h, p) },
                         onAddHabit = { name, gid, type, isSupp, tags, preset, weekdays, interval, dates ->
@@ -602,8 +634,9 @@ fun SteadyApp(
                             // Drive the UI to "take the user around"
                             when (next) {
                                 3 -> selectedTab = 0   // Today deep dive
-                                4 -> selectedTab = 1   // History
-                                5 -> selectedTab = 2   // Manage
+                                4 -> selectedTab = 1   // Path
+                                5 -> selectedTab = 2   // History
+                                6 -> selectedTab = 3   // Manage
                                 else -> { /* keep current tab */ }
                             }
                         }
@@ -615,6 +648,7 @@ fun SteadyApp(
                             3 -> selectedTab = 0
                             4 -> selectedTab = 1
                             5 -> selectedTab = 2
+                            6 -> selectedTab = 3
                             else -> { /* keep */ }
                         }
                     },
@@ -980,9 +1014,10 @@ fun SteadyApp(
             }
         )
     }
-    } // end Scaffold
-    } // end else (not in workout session)
-    } // end MaterialTheme + else (non-onboarding)
+        } // end when else (main shell: Scaffold + dialogs)
+    } // end when (workout / wizard / shell)
+    } // end MaterialTheme
+    } // end else (onboarded)
 }
 
 // Accent resolver (used for dynamic theme + progress). Matches resolveThemeColors.

@@ -448,4 +448,71 @@ class HabitDomainTest {
         assertEquals(1, data.workoutSessions.size)
         assertTrue(data.workoutSessions.first().completed)
     }
+
+    // --- #25 / #26 Dreamline + Path ---
+
+    @Test
+    fun `buildGoalsFromDreamline tags and horizons`() {
+        val dreams = listOf(
+            Triple(DreamHorizon.SIX_MONTHS, DreamCategory.BEING, "Calm and present"),
+            Triple(DreamHorizon.TWELVE_MONTHS, DreamCategory.DOING, "Run a marathon")
+        )
+        val key = HabitDomain.dreamKey(DreamHorizon.SIX_MONTHS, DreamCategory.BEING, "Calm and present")
+        val goals = HabitDomain.buildGoalsFromDreamline(
+            dreams = dreams,
+            stepsByKey = mapOf(key to listOf("Meditate 5 min", "Phone-free morning")),
+            firstStepsByKey = mapOf(key to "Sit quietly for 2 minutes")
+        )
+        assertEquals(2, goals.size)
+        val being = goals.find { it.category == DreamCategory.BEING }!!
+        assertTrue(being.tags.contains(GoalTags.DREAMLINE))
+        assertTrue(being.tags.contains(GoalTags.HORIZON_6))
+        assertTrue(being.tags.contains("being"))
+        assertEquals(2, being.steps.size)
+        assertEquals("Sit quietly for 2 minutes", being.firstStepNow)
+        assertTrue(being.endDate.isNotBlank())
+    }
+
+    @Test
+    fun `dreamlineGoals filters and mindset prompts use Being`() {
+        val goals = listOf(
+            GoalStory(
+                id = "g1", title = "Great cook", category = DreamCategory.BEING,
+                horizon = DreamHorizon.SIX_MONTHS, tags = listOf(GoalTags.DREAMLINE, "being")
+            ),
+            GoalStory(
+                id = "g2", title = "Other", category = DreamCategory.DOING,
+                tags = listOf("manual"), archived = false
+            )
+        )
+        val data = AppData(goals = goals)
+        assertEquals(1, HabitDomain.dreamlineGoals(data).size)
+        val prompts = HabitDomain.mindsetPrompts(data)
+        assertTrue(prompts.any { it.contains("Great cook") })
+    }
+
+    @Test
+    fun `pathCheckScore maps 1-5 to 0-1`() {
+        val low = PathAlignmentCheck("1", "2024-01-01", 1, 1, 1)
+        val mid = PathAlignmentCheck("2", "2024-01-01", 3, 3, 3)
+        val high = PathAlignmentCheck("3", "2024-01-01", 5, 5, 5)
+        assertEquals(0f, HabitDomain.pathCheckScore(low), 0.01f)
+        assertEquals(0.5f, HabitDomain.pathCheckScore(mid), 0.01f)
+        assertEquals(1f, HabitDomain.pathCheckScore(high), 0.01f)
+    }
+
+    @Test
+    fun `withGoalsReplacedFromWizard replaces dreamline only`() {
+        val manual = GoalStory(id = "m1", title = "Manual", tags = listOf("work"))
+        val oldDl = GoalStory(id = "d1", title = "Old", tags = listOf(GoalTags.DREAMLINE))
+        val base = AppData(goals = listOf(manual, oldDl))
+        val fresh = listOf(
+            GoalStory(id = "d2", title = "New", tags = listOf(GoalTags.DREAMLINE))
+        )
+        val out = base.withGoalsReplacedFromWizard(fresh, replaceDreamline = true)
+        assertEquals(2, out.goals.size)
+        assertTrue(out.goals.any { it.id == "m1" })
+        assertTrue(out.goals.any { it.id == "d2" })
+        assertFalse(out.goals.any { it.id == "d1" })
+    }
 }

@@ -76,17 +76,17 @@ class AndroidHabitRepository(private val context: Context) : HabitRepository {
     }
 
     /**
-     * Migrate older schemas to v7 (routines + multi-group; v6 tags + sleep spine).
+     * Migrate older schemas to v8 (goals/path; v7 routines; v6 tags + sleep).
      * v5: schedules. Pre-v5: archive/skip fields.
      * Missing new fields default safely via kotlinx.serialization.
      */
     private fun migrateIfNeeded(data: AppData): AppData {
-        if (data.schemaVersion >= 7 && data.groups.isNotEmpty() && data.habits.isNotEmpty() && data.tags.isNotEmpty()) {
+        if (data.schemaVersion >= 8 && data.groups.isNotEmpty() && data.habits.isNotEmpty() && data.tags.isNotEmpty()) {
             return data
         }
         if (data.schemaVersion >= 6 && data.groups.isNotEmpty() && data.habits.isNotEmpty() && data.tags.isNotEmpty()) {
-            // Soft bump: ensure routines/sessions lists exist (already defaulted on decode)
-            return data.copy(schemaVersion = 7)
+            // Soft bump: ensure routines/goals lists exist (already defaulted on decode)
+            return data.copy(schemaVersion = 8)
         }
         // Start from current or fresh
         var d = if (data.groups.isNotEmpty() && data.habits.isNotEmpty()) data else getDefaultData()
@@ -175,12 +175,14 @@ class AndroidHabitRepository(private val context: Context) : HabitRepository {
         }
 
         return withSleep.copy(
-            schemaVersion = 7,
+            schemaVersion = 8,
             onboarded = d.onboarded || d.schemaVersion >= 1,
             colorScheme = if (d.colorScheme.isNotBlank()) d.colorScheme else "default",
             backgroundMode = if (d.backgroundMode.isNotBlank()) d.backgroundMode else "dark",
             routines = d.routines,
-            workoutSessions = d.workoutSessions
+            workoutSessions = d.workoutSessions,
+            goals = d.goals,
+            pathChecks = d.pathChecks
         )
     }
 
@@ -313,7 +315,7 @@ class AndroidHabitRepository(private val context: Context) : HabitRepository {
             habits = habits,
             entries = emptyMap(),
             reminders = reminders,
-            schemaVersion = 7,
+            schemaVersion = 8,
             onboarded = false,
             colorScheme = "default",
             backgroundMode = "dark",
@@ -322,7 +324,9 @@ class AndroidHabitRepository(private val context: Context) : HabitRepository {
             tags = tags,
             sleep = sleep,
             routines = emptyList(),
-            workoutSessions = emptyList()
+            workoutSessions = emptyList(),
+            goals = emptyList(),
+            pathChecks = emptyList()
         )
     }
 

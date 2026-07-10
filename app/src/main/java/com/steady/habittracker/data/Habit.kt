@@ -237,6 +237,67 @@ data class WorkoutSession(
     val completed: Boolean = false
 )
 
+// --- Dreamline Goal Stories (#25) + Path orientation (#26) ---
+
+@Serializable
+enum class DreamHorizon {
+    SIX_MONTHS,
+    TWELVE_MONTHS
+}
+
+@Serializable
+enum class DreamCategory {
+    HAVING,
+    BEING,
+    DOING
+}
+
+@Serializable
+data class GoalStep(
+    val id: String,
+    val title: String,
+    val done: Boolean = false,
+    val order: Int = 0
+)
+
+/**
+ * Continuous goal produced by the Dreamline wizard (or created manually).
+ * Tagged for Path tab filtering (dreamline, 6-month/12-month, being/doing/having).
+ */
+@Serializable
+data class GoalStory(
+    val id: String,
+    val title: String,
+    val description: String = "",
+    val category: DreamCategory = DreamCategory.DOING,
+    val horizon: DreamHorizon = DreamHorizon.SIX_MONTHS,
+    val tags: List<String> = listOf("dreamline"),
+    val progress: Float = 0f,
+    val confidence: Float = 0.5f,
+    /** Immediate ≤5-minute first action from the wizard. */
+    val firstStepNow: String = "",
+    val steps: List<GoalStep> = emptyList(),
+    val startDate: String = "",
+    val endDate: String = "",
+    val archived: Boolean = false,
+    val createdAt: Long = 0L,
+    val updatedAt: Long = 0L,
+    /** Mindset notes / check-in reflections attached on Path tab. */
+    val notes: List<String> = emptyList()
+)
+
+/** Daily/on-demand “Am I on path?” alignment check (#26). */
+@Serializable
+data class PathAlignmentCheck(
+    val id: String,
+    val date: String,
+    val visionAlignment: Int = 3,
+    val energyTowardDreams: Int = 3,
+    val identityCongruence: Int = 3,
+    val note: String = "",
+    val loggedAt: Long = 0L
+)
+
 @Serializable
 data class AppData(
     val groups: List<Group> = emptyList(),
@@ -244,7 +305,7 @@ data class AppData(
     // date (yyyy-MM-dd) -> habitId -> entry
     val entries: Map<String, Map<String, HabitEntry>> = emptyMap(),
     val reminders: List<Reminder> = emptyList(),
-    val schemaVersion: Int = 7,
+    val schemaVersion: Int = 8,
     val onboarded: Boolean = false,
     val colorScheme: String = "default",   // accent: "default" | "blue" | "orange" | "purple" | "slate"
     val backgroundMode: String = "dark",   // "dark" | "amoled" | "light"  (OLED pure black supported)
@@ -260,7 +321,11 @@ data class AppData(
     /** Structured exercise routines catalog (#21). */
     val routines: List<ExerciseRoutine> = emptyList(),
     /** Completed / in-progress workout sessions (newest-friendly flat list). */
-    val workoutSessions: List<WorkoutSession> = emptyList()
+    val workoutSessions: List<WorkoutSession> = emptyList(),
+    /** Dreamline-derived continuous goals for Path tab (#25, #26). */
+    val goals: List<GoalStory> = emptyList(),
+    /** Alignment check-ins for Path tab. */
+    val pathChecks: List<PathAlignmentCheck> = emptyList()
 )
 
 /**
@@ -409,4 +474,33 @@ fun AppData.withBlueprintRoutinesIfMissing(templates: List<ExerciseRoutine>): Ap
     val existingIds = routines.map { it.id }.toSet()
     val toAdd = templates.filter { it.id !in existingIds }
     return if (toAdd.isEmpty()) this else copy(routines = routines + toAdd)
+}
+
+// Goal Story / Path helpers (#25, #26)
+fun AppData.withAddedGoal(goal: GoalStory): AppData = copy(goals = goals + goal)
+fun AppData.withUpdatedGoal(goal: GoalStory): AppData =
+    copy(goals = goals.map { if (it.id == goal.id) goal else it })
+fun AppData.withArchivedGoal(goalId: String): AppData =
+    copy(goals = goals.map { if (it.id == goalId) it.copy(archived = true, updatedAt = System.currentTimeMillis()) else it })
+fun AppData.withGoalsReplacedFromWizard(newGoals: List<GoalStory>, replaceDreamline: Boolean = true): AppData {
+    val kept = if (replaceDreamline) {
+        goals.filter { g -> !g.archived && "dreamline" !in g.tags.map { it.lowercase() } }
+    } else {
+        goals
+    }
+    return copy(goals = kept + newGoals)
+}
+fun AppData.withAddedPathCheck(check: PathAlignmentCheck): AppData = copy(pathChecks = pathChecks + check)
+fun AppData.withPathChecks(checks: List<PathAlignmentCheck>): AppData = copy(pathChecks = checks)
+
+/** Stable tag constants for Dreamline / Path filtering. */
+object GoalTags {
+    const val DREAMLINE = "dreamline"
+    const val HORIZON_6 = "6-month"
+    const val HORIZON_12 = "12-month"
+    fun forHorizon(h: DreamHorizon) = when (h) {
+        DreamHorizon.SIX_MONTHS -> HORIZON_6
+        DreamHorizon.TWELVE_MONTHS -> HORIZON_12
+    }
+    fun forCategory(c: DreamCategory) = c.name.lowercase()
 }

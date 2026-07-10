@@ -38,20 +38,24 @@ val TOUR_STEPS = listOf(
         "Top shows today's date and your current streak (🔥).\n\nThe big progress card shows today's completion percentage and a compact 7-day trend (dots).\n\nTap the progress card to open a detailed view with a large ring and weekly % per group."
     ),
     TourStep(
-        "Tabs: Today / History / Manage",
-        "Use the three tabs to move around:\n• Today — do your daily habits\n• History — see 2 weeks of trends\n• Manage — customize everything + reminders + backup"
+        "Tabs: Today / Path / History / Manage",
+        "Four tabs:\n• Today — daily habits & workouts\n• Path — long-term vision, Dreamline goals, alignment\n• History — heatmaps & trends\n• Manage — groups, tags, routines, backup"
     ),
     TourStep(
         "Today Tab — Your daily actions",
         "Habits are grouped by time of day (Morning, Focus/Work, Evening, Mindset...).\n\n• Tap a checkbox habit to toggle complete\n• Tap Log (or the row) for counters, durations, scales, notes\n• Long-press any row to skip\n• Use +Capture for quick ideas/inbox\n• Use +Log for ad-hoc metrics (weight, etc.)\n\nOnly pending (not-yet-done) items are shown — keeps focus."
     ),
     TourStep(
+        "Path Tab — Vision & orientation",
+        "Run the Dreamline wizard (Having / Being / Doing for 6 & 12 months). Path shows your goals, progress, confidence, “Am I on path?” check-ins, and identity mindset prompts."
+    ),
+    TourStep(
         "History Tab — Trends & reflection",
-        "See your last 14 days as completion bars.\n\nHigher bars = better days. Tap Today tab again to edit past notes or backfill values via the metric logger."
+        "Anki-style heatmap, charts, and workout sessions.\n\nHigher bars = better days. Use +Log on Today for past metrics."
     ),
     TourStep(
         "Manage Tab — Full control",
-        "• Groups = when on the timeline (Morning, Focus, Bedtime, Sleep)\n• Tags = what it is for History (Supplements, Movement…) — move items freely\n• Sleep card: set wake/bed, Apply sleep-centered day\n• Drill into a group to edit When rules, stacks, tags\n• Export backup anytime; restore from Archived"
+        "• Groups = when on the timeline (Morning, Focus, Bedtime, Sleep)\n• Tags = what it is for History (Supplements, Movement…) — move items freely\n• Exercise routines + Blueprint templates\n• Sleep card, reminders, export backup"
     ),
     TourStep(
         "Settings (gear icon)",
