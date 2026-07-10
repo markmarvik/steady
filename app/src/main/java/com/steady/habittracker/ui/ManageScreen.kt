@@ -82,6 +82,10 @@ fun ManageScreen(
     onAddTag: (String) -> Unit = {},
     onUpdateSleep: (SleepSettings) -> Unit = {},
     onApplySleepSchedule: () -> Unit = {},
+    onSaveRoutine: (com.steady.habittracker.data.ExerciseRoutine) -> Unit = {},
+    onArchiveRoutine: (String) -> Unit = {},
+    onLoadBlueprintRoutines: () -> Unit = {},
+    onStartRoutine: (com.steady.habittracker.data.ExerciseRoutine) -> Unit = {},
     schedules: List<Schedule> = emptyList(),
     activeScheduleId: String? = null
 ) {
@@ -92,6 +96,8 @@ fun ManageScreen(
     var showEditHabit by remember { mutableStateOf<Habit?>(null) }
     var moveHabitId by remember { mutableStateOf<String?>(null) }
     var stackHabitId by remember { mutableStateOf<String?>(null) }
+    var showRoutineEditor by remember { mutableStateOf<com.steady.habittracker.data.ExerciseRoutine?>(null) }
+    var showNewRoutine by remember { mutableStateOf(false) }
 
     // Confirmation for archive (do not archive immediately; tap away / cancel = nothing)
     var confirmArchiveGroupId by remember { mutableStateOf<String?>(null) }
@@ -404,6 +410,79 @@ fun ManageScreen(
                     Text("Editor updates schedule. Sleep group + overnight supported for resolveCurrentGroup/widget.", color = Color(0xFF475569), fontSize = 9.sp)
                 }
 
+                // Exercise routines (#20–#22)
+                item {
+                    Spacer(Modifier.height(16.dp))
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column {
+                            Text("Exercise routines", color = MaterialTheme.colorScheme.primary, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                            Text("Structured workouts · Start from Today or here", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 10.sp)
+                        }
+                        Row {
+                            TextButton(onClick = onLoadBlueprintRoutines) {
+                                Text("Templates", color = MaterialTheme.colorScheme.primary, fontSize = 11.sp)
+                            }
+                            TextButton(onClick = { showNewRoutine = true }) {
+                                Text("+ New", color = MaterialTheme.colorScheme.primary, fontSize = 11.sp)
+                            }
+                        }
+                    }
+                }
+                val activeRoutines = HabitDomain.getActiveRoutines(appData)
+                if (activeRoutines.isEmpty()) {
+                    item {
+                        Text(
+                            "No routines yet. Load Blueprint templates or create one.",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            fontSize = 12.sp,
+                            modifier = Modifier.padding(vertical = 4.dp)
+                        )
+                    }
+                } else {
+                    items(activeRoutines, key = { it.id }) { rt ->
+                        Card(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 4.dp),
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+                        ) {
+                            Column(Modifier.padding(12.dp)) {
+                                Text(rt.name, color = MaterialTheme.colorScheme.onSurface, fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
+                                Text(
+                                    listOfNotNull(
+                                        "${rt.exercises.size} exercises",
+                                        "~${rt.estimatedDurationMin} min",
+                                        HabitDomain.showRuleLabel(
+                                            com.steady.habittracker.data.Habit(
+                                                id = rt.id, name = rt.name, groupId = "",
+                                                showPreset = rt.showPreset, weekdays = rt.weekdays
+                                            )
+                                        ),
+                                        rt.tags.take(2).joinToString(", ").ifBlank { null }
+                                    ).joinToString(" · "),
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    fontSize = 11.sp
+                                )
+                                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                    TextButton(onClick = { onStartRoutine(rt) }) {
+                                        Text("Start", color = MaterialTheme.colorScheme.primary, fontSize = 12.sp)
+                                    }
+                                    TextButton(onClick = { showRoutineEditor = rt }) {
+                                        Text("Edit", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
+                                    }
+                                    TextButton(onClick = { onArchiveRoutine(rt.id) }) {
+                                        Text("Archive", color = MaterialTheme.colorScheme.error, fontSize = 11.sp)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
                 // Backup section inside the scrollable list
                 item {
                     Spacer(Modifier.height(16.dp))
@@ -539,6 +618,18 @@ fun ManageScreen(
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     fontSize = 11.sp
                                 )
+                                if (h.additionalGroupIds.isNotEmpty()) {
+                                    val alsoNames = h.additionalGroupIds.mapNotNull { aid ->
+                                        appData.groups.find { it.id == aid && !it.archived }?.name
+                                    }
+                                    if (alsoNames.isNotEmpty()) {
+                                        Text(
+                                            "Also in: ${alsoNames.joinToString(", ")}",
+                                            color = MaterialTheme.colorScheme.primary,
+                                            fontSize = 10.sp
+                                        )
+                                    }
+                                }
                                 if (afterLabel != null) {
                                     Text("after $afterLabel", color = MaterialTheme.colorScheme.primary, fontSize = 10.sp)
                                 }
@@ -613,6 +704,21 @@ fun ManageScreen(
                 showEditHabit = null
             },
             onArchive = { confirmArchiveHabitId = h.id; showEditHabit = null }
+        )
+    }
+    if (showNewRoutine) {
+        RoutineEditorDialog(
+            existing = null,
+            onDismiss = { showNewRoutine = false },
+            onSave = { rt -> onSaveRoutine(rt); showNewRoutine = false }
+        )
+    }
+    showRoutineEditor?.let { rt ->
+        RoutineEditorDialog(
+            existing = rt,
+            onDismiss = { showRoutineEditor = null },
+            onSave = { updated -> onSaveRoutine(updated); showRoutineEditor = null },
+            onArchive = { onArchiveRoutine(rt.id); showRoutineEditor = null }
         )
     }
     moveHabitId?.let { hid ->
@@ -737,7 +843,7 @@ private fun AddGroupDialogWithParent(onDismiss: () -> Unit, onAdd: (name: String
 }
 
 @Composable
-private fun ShowWhenPicker(
+internal fun ShowWhenPicker(
     preset: ShowPreset,
     weekdays: Set<Int>,
     intervalDays: Int,
@@ -760,7 +866,7 @@ private fun ShowWhenPicker(
     chips.chunked(3).forEach { row ->
         Row(horizontalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.padding(bottom = 4.dp)) {
             row.forEach { (pr, label) ->
-                FilterChip(selected = preset == pr, onClick = { onPreset(pr) }, label = { Text(label, fontSize = 11.sp) })
+                ThemedFilterChip(selected = preset == pr, onClick = { onPreset(pr) }, label = { Text(label, fontSize = 11.sp) })
             }
         }
     }
@@ -768,7 +874,7 @@ private fun ShowWhenPicker(
         ShowPreset.CUSTOM_DAYS -> {
             Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                 listOf(1 to "M", 2 to "T", 3 to "W", 4 to "T", 5 to "F", 6 to "S", 7 to "S").forEach { (d, lab) ->
-                    FilterChip(
+                    ThemedFilterChip(
                         selected = d in weekdays,
                         onClick = {
                             onWeekdays(if (d in weekdays) weekdays - d else weekdays + d)
@@ -781,7 +887,7 @@ private fun ShowWhenPicker(
         ShowPreset.EVERY_N_DAYS -> {
             Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                 listOf(2, 3, 7).forEach { n ->
-                    FilterChip(
+                    ThemedFilterChip(
                         selected = intervalDays == n,
                         onClick = { onInterval(n); onPreset(ShowPreset.EVERY_N_DAYS) },
                         label = { Text("Every ${n}d", fontSize = 11.sp) }
@@ -838,6 +944,9 @@ private fun EditHabitDialog(
         )
     }
     var groupId by remember { mutableStateOf(habit.groupId) }
+    var additionalGroupIds by remember {
+        mutableStateOf(habit.additionalGroupIds.filter { it != habit.groupId }.toSet())
+    }
     var showPreset by remember { mutableStateOf(habit.showPreset) }
     var weekdays by remember { mutableStateOf(habit.weekdays) }
     var intervalDays by remember { mutableIntStateOf(habit.intervalDays.coerceAtLeast(1)) }
@@ -857,7 +966,7 @@ private fun EditHabitDialog(
                 Text("Type", fontSize = 11.sp)
                 Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                     HabitType.entries.forEach { t ->
-                        FilterChip(selected = type == t, onClick = { type = t }, label = { Text(t.name.take(6), fontSize = 10.sp) })
+                        ThemedFilterChip(selected = type == t, onClick = { type = t }, label = { Text(t.name.take(6), fontSize = 10.sp) })
                     }
                 }
                 Spacer(Modifier.height(8.dp))
@@ -872,10 +981,37 @@ private fun EditHabitDialog(
                     onDates = { specificDates = it }
                 )
                 Spacer(Modifier.height(8.dp))
-                Text("Timeline group (when)", fontSize = 11.sp)
+                Text("Primary timeline group (when)", fontSize = 11.sp)
                 Row(horizontalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.fillMaxWidth()) {
                     groups.forEach { g ->
-                        FilterChip(selected = groupId == g.id, onClick = { groupId = g.id }, label = { Text(g.name.take(10), fontSize = 10.sp) })
+                        ThemedFilterChip(
+                            selected = groupId == g.id,
+                            onClick = {
+                                groupId = g.id
+                                additionalGroupIds = additionalGroupIds - g.id
+                            },
+                            label = { Text(g.name.take(10), fontSize = 10.sp) }
+                        )
+                    }
+                }
+                Spacer(Modifier.height(6.dp))
+                Text("Also appear in (e.g. split-dose AM + PM)", fontSize = 11.sp)
+                Text(
+                    "Same habit, one log per day — shows in multiple sections on Today.",
+                    fontSize = 10.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.fillMaxWidth()) {
+                    groups.filter { it.id != groupId }.forEach { g ->
+                        ThemedFilterChip(
+                            selected = g.id in additionalGroupIds,
+                            onClick = {
+                                additionalGroupIds =
+                                    if (g.id in additionalGroupIds) additionalGroupIds - g.id
+                                    else additionalGroupIds + g.id
+                            },
+                            label = { Text(g.name.take(10), fontSize = 10.sp) }
+                        )
                     }
                 }
                 Spacer(Modifier.height(8.dp))
@@ -886,9 +1022,9 @@ private fun EditHabitDialog(
                 Spacer(Modifier.height(6.dp))
                 Text("Stack after", fontSize = 11.sp)
                 Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                    FilterChip(selected = afterId == null, onClick = { afterId = null }, label = { Text("None", fontSize = 10.sp) })
+                    ThemedFilterChip(selected = afterId == null, onClick = { afterId = null }, label = { Text("None", fontSize = 10.sp) })
                     allHabits.filter { it.id != habit.id }.take(8).forEach { o ->
-                        FilterChip(
+                        ThemedFilterChip(
                             selected = afterId == o.id,
                             onClick = { afterId = o.id },
                             label = { Text(o.name.take(12), fontSize = 10.sp) }
@@ -896,7 +1032,7 @@ private fun EditHabitDialog(
                     }
                 }
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Checkbox(checked = !canSkip, onCheckedChange = { canSkip = !it })
+                    ThemedCheckbox(checked = !canSkip, onCheckedChange = { canSkip = !it })
                     Text("Essential (harder to skip)", fontSize = 12.sp)
                 }
                 if (type != HabitType.CHECKBOX && type != HabitType.NOTE) {
@@ -922,6 +1058,7 @@ private fun EditHabitDialog(
                         isSupplement = TagIds.SUPPLEMENTS in tagList,
                         tags = tagList,
                         groupId = groupId,
+                        additionalGroupIds = additionalGroupIds.filter { it != groupId }.toList(),
                         showPreset = showPreset,
                         weekdays = if (weekdays.isEmpty()) setOf(1, 2, 3, 4, 5, 6, 7) else weekdays,
                         intervalDays = intervalDays,
@@ -1001,7 +1138,7 @@ private fun AddHabitWithTypeDialogLocal(
                 Text("Type", fontSize = 11.sp)
                 Row {
                     HabitType.entries.forEach { t ->
-                        FilterChip(selected = type == t, onClick = { type = t }, label = { Text(t.name.take(6), fontSize = 10.sp) })
+                        ThemedFilterChip(selected = type == t, onClick = { type = t }, label = { Text(t.name.take(6), fontSize = 10.sp) })
                     }
                 }
                 Spacer(Modifier.height(6.dp))
@@ -1040,7 +1177,7 @@ private fun TagChipRow(tags: List<Tag>, selected: Set<String>, onToggle: (String
         chunked.forEach { row ->
             Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                 row.forEach { t ->
-                    FilterChip(
+                    ThemedFilterChip(
                         selected = t.id in selected,
                         onClick = { onToggle(t.id) },
                         label = { Text(t.name, fontSize = 10.sp) }

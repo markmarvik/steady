@@ -11,7 +11,10 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.CornerRadius
@@ -24,10 +27,12 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.material3.TextButton
 import com.steady.habittracker.data.AppData
 import com.steady.habittracker.data.HabitDomain
 import com.steady.habittracker.data.HabitType
 import com.steady.habittracker.data.TagIds
+import com.steady.habittracker.data.WorkoutSession
 import java.text.SimpleDateFormat
 import java.time.LocalDate
 import java.util.Date
@@ -50,7 +55,10 @@ fun HistoryScreen(appData: AppData) {
     }
     val activeTags = remember(appData) { HabitDomain.getActiveTags(appData) }
     val allDatesSorted = remember(appData) { appData.entries.keys.sortedDescending() }
+    val recentWorkouts = remember(appData) { HabitDomain.recentWorkoutSessions(appData, 20) }
+    val workoutDays7 = remember(appData) { HabitDomain.workoutDaysInWindow(appData, 7) }
     val accent = MaterialTheme.colorScheme.primary
+    var expandedSessionId by remember { mutableStateOf<String?>(null) }
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -63,6 +71,32 @@ fun HistoryScreen(appData: AppData) {
                 fontSize = 16.sp,
                 fontWeight = FontWeight.SemiBold
             )
+        }
+
+        // Workout sessions (#22)
+        if (recentWorkouts.isNotEmpty()) {
+            item {
+                Text(
+                    "Workouts · $workoutDays7/7 exercise days",
+                    color = accent,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.SemiBold
+                )
+            }
+            items(recentWorkouts.take(12), key = { it.id }) { session ->
+                val routine = appData.routines.find { it.id == session.routineId }
+                WorkoutSessionHistoryCard(
+                    session = session,
+                    routineName = routine?.name ?: session.routineId,
+                    exerciseNames = routine?.exercises?.associate { it.id to it.name } ?: emptyMap(),
+                    expanded = expandedSessionId == session.id,
+                    onToggle = {
+                        expandedSessionId =
+                            if (expandedSessionId == session.id) null else session.id
+                    },
+                    accent = accent
+                )
+            }
         }
 
         // —— Summary strip (Anki-style big numbers) ——
@@ -445,6 +479,64 @@ private fun formatDateHeader(yyyyMmDd: String): String {
         sdfOut.format(sdfIn.parse(yyyyMmDd) ?: Date())
     } catch (_: Exception) {
         yyyyMmDd
+    }
+}
+
+@Composable
+private fun WorkoutSessionHistoryCard(
+    session: WorkoutSession,
+    routineName: String,
+    exerciseNames: Map<String, String>,
+    expanded: Boolean,
+    onToggle: () -> Unit,
+    accent: Color
+) {
+    val sets = HabitDomain.sessionSetCount(session)
+    val exCount = HabitDomain.sessionExerciseCount(session)
+    val dur = session.totalDurationMin?.let { "$it min" } ?: "—"
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        shape = RoundedCornerShape(12.dp)
+    ) {
+        Column(Modifier.padding(12.dp)) {
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text(routineName, color = MaterialTheme.colorScheme.onSurface, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+                    Text(
+                        "${session.date} · $dur · $exCount ex · $sets sets" +
+                            if (session.completed) "" else " · incomplete",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        fontSize = 11.sp
+                    )
+                }
+                TextButton(onClick = onToggle) {
+                    Text(if (expanded) "Hide" else "Detail", color = accent, fontSize = 12.sp)
+                }
+            }
+            if (expanded) {
+                if (session.overallNote.isNotBlank()) {
+                    Text("“${session.overallNote}”", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                session.performedExercises.forEach { (exId, setLogs) ->
+                    if (setLogs.isEmpty()) return@forEach
+                    val label = exerciseNames[exId] ?: exId
+                    Text(
+                        "$label — " + setLogs.joinToString { s ->
+                            "S${s.setNumber}:${s.actualReps ?: "?"}r" +
+                                (s.weightKg?.let { " ${it}kg" } ?: "")
+                        },
+                        fontSize = 11.sp,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.padding(top = 2.dp)
+                    )
+                }
+            }
+        }
     }
 }
 

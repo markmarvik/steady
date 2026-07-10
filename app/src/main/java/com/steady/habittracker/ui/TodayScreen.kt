@@ -7,17 +7,19 @@ import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import java.time.LocalDate
-import java.time.format.DateTimeFormatter
+import java.time.LocalTime
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.material3.MaterialTheme
@@ -30,6 +32,7 @@ import com.steady.habittracker.data.Habit
 import com.steady.habittracker.data.HabitDomain
 import com.steady.habittracker.data.HabitEntry
 import com.steady.habittracker.data.HabitType
+import com.steady.habittracker.data.TimelineSection
 import java.text.SimpleDateFormat
 import java.util.*
 
@@ -47,7 +50,8 @@ fun TodayScreen(
     onDeleteCapture: (id: String) -> Unit = {},
     // manual metric logging support (#19)
     onCreateMetric: (name: String) -> Unit = {},
-    onLogMetric: (habitId: String, value: Double, note: String, date: String) -> Unit = { _, _, _, _ -> }
+    onLogMetric: (habitId: String, value: Double, note: String, date: String) -> Unit = { _, _, _, _ -> },
+    onStartRoutine: (com.steady.habittracker.data.ExerciseRoutine) -> Unit = {}
 ) {
     if (appData.habits.isEmpty() || appData.groups.isEmpty()) {
         Text("No habits yet. Add via Manage tab!", color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(16.dp))
@@ -80,14 +84,38 @@ fun TodayScreen(
         )
     }
 
-    // Due today (show rules) + pending only; stack-ordered within groups
-    val currentGroupId = remember(appData) { HabitDomain.resolveCurrentGroup(appData)?.id }
-    val grouped = HabitDomain.pendingGroupedForDate(appData, LocalDate.now())
+    // Pure visual day progression: Morning → … → Sleep, soft Now marker (no clock numbers)
+    val sections = remember(appData, todayEntries) {
+        HabitDomain.timelineSectionsForToday(appData, LocalDate.now(), LocalTime.now())
+    }
+    val cue = remember(appData, todayEntries) {
+        HabitDomain.dayProgressionCue(appData, LocalDate.now(), LocalTime.now())
+    }
     val nameById = remember(appData.habits) { appData.habits.associate { it.id to it.name } }
-
     val pendingCaptures = appData.captures.filter { !it.processed }
+    val todayRoutines = remember(appData) {
+        HabitDomain.routinesDueOn(appData, LocalDate.now())
+    }
+    val workoutDays = remember(appData) { HabitDomain.workoutDaysInWindow(appData, 7) }
+    val listState = rememberLazyListState()
 
-    // Root Column + weight(1f) on the list guarantees the action buttons above it are always clickable and laid out correctly.
+    // Scroll so the current section sits near the top of the day spine
+    LaunchedEffect(sections.map { it.group.id to it.isNow }) {
+        val nowIndex = sections.indexOfFirst { it.isNow }
+        if (nowIndex < 0) return@LaunchedEffect
+        // Count list items before that section (inbox + cue + prior sections)
+        var itemIndex = 0
+        if (pendingCaptures.isNotEmpty()) {
+            itemIndex += 1 + pendingCaptures.take(5).size + 1 // header + rows + spacer
+        }
+        itemIndex += 1 // progression cue or spacer
+        for (i in 0 until nowIndex) {
+            itemIndex += 1 + sections[i].habits.size // header + habits
+        }
+        // header of now section
+        listState.animateScrollToItem(itemIndex.coerceAtLeast(0))
+    }
+
     Column(modifier = Modifier.fillMaxSize()) {
         Row(modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp), horizontalArrangement = Arrangement.End) {
             TextButton(onClick = { showCaptureDialog = true }) {
@@ -104,20 +132,24 @@ fun TodayScreen(
         }
 
         LazyColumn(
+            state = listState,
             modifier = Modifier.weight(1f),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
+            verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            // Quick captures / inbox integrated so it scrolls with the rest of Today
+            // Inbox above the day spine
             if (pendingCaptures.isNotEmpty()) {
-                item {
-                    Text("Quick Captures / Inbox", color = MaterialTheme.colorScheme.primary, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(start = 4.dp).padding(bottom = 4.dp))
+                item(key = "inbox_header") {
+                    Text(
+                        "Quick Captures / Inbox",
+                        color = MaterialTheme.colorScheme.primary,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.padding(start = 4.dp)
+                    )
                 }
-                items(pendingCaptures.take(5)) { cap ->
+                items(pendingCaptures.take(5), key = { "cap_${it.id}" }) { cap ->
                     Card(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 4.dp)
-                            .padding(bottom = 4.dp),
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp),
                         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
                         shape = RoundedCornerShape(10.dp)
                     ) {
@@ -137,13 +169,81 @@ fun TodayScreen(
                         }
                     }
                 }
-                item { Spacer(Modifier.height(4.dp)) }
             }
 
-            if (grouped.isEmpty()) {
-                item {
+            // Day spine cue (names only — pure visual progression)
+            item(key = "day_cue") {
+                DayProgressionBanner(cue = cue)
+            }
+
+            // Workouts scheduled for today (#22)
+            if (todayRoutines.isNotEmpty()) {
+                item(key = "workouts_header") {
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Column(Modifier.padding(12.dp)) {
+                            Row(
+                                Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    "Workouts today",
+                                    color = MaterialTheme.colorScheme.primary,
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                                Text(
+                                    "Exercise days: $workoutDays/7",
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    fontSize = 11.sp
+                                )
+                            }
+                            todayRoutines.forEach { rt ->
+                                val done = HabitDomain.isRoutineCompletedOn(
+                                    appData, rt.id, LocalDate.now().toString()
+                                )
+                                Row(
+                                    Modifier
+                                        .fillMaxWidth()
+                                        .padding(vertical = 4.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Column(Modifier.weight(1f)) {
+                                        Text(
+                                            (if (done) "✓ " else "") + rt.name,
+                                            color = MaterialTheme.colorScheme.onSurface,
+                                            fontSize = 14.sp,
+                                            fontWeight = FontWeight.Medium
+                                        )
+                                        Text(
+                                            "${rt.exercises.size} exercises · ~${rt.estimatedDurationMin} min" +
+                                                (if (rt.tags.isNotEmpty()) " · ${rt.tags.take(2).joinToString()}" else ""),
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            fontSize = 11.sp
+                                        )
+                                    }
+                                    TextButton(onClick = { onStartRoutine(rt) }) {
+                                        Text(
+                                            if (done) "Again" else "Start",
+                                            color = MaterialTheme.colorScheme.primary,
+                                            fontSize = 12.sp
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (sections.isEmpty()) {
+                item(key = "empty") {
                     Text(
-                        "Nothing due today — enjoy the space.\nAdd or configure items in Manage.",
+                        "Nothing left for today — enjoy the space.\nAdd or configure items in Manage.",
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         fontSize = 13.sp,
                         modifier = Modifier.padding(16.dp)
@@ -151,18 +251,12 @@ fun TodayScreen(
                 }
             }
 
-            grouped.forEach { (group, habits) ->
-                item {
-                    val isNow = group.id == currentGroupId
-                    Text(
-                        if (isNow) "NOW · ${group.name.uppercase()}" else group.name.uppercase(),
-                        color = MaterialTheme.colorScheme.primary,
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        modifier = Modifier.padding(start = 4.dp, top = 4.dp, bottom = 2.dp)
-                    )
+            sections.forEach { section ->
+                item(key = "sec_${section.group.id}") {
+                    TimelineSectionHeader(section = section)
                 }
-                items(habits, key = { it.id }) { habit ->
+                // Key includes group so multi-group habits (#24) don't collide in LazyColumn
+                items(section.habits, key = { "${section.group.id}_${it.id}" }) { habit ->
                     val entry = todayEntries[habit.id]
                     val isDone = (entry?.value ?: 0.0) >= 0.5
                     val isSkipped = entry?.skipped == true
@@ -182,7 +276,7 @@ fun TodayScreen(
                         onLog = {
                             if (isSimpleTapAdd) {
                                 val v = habit.target ?: 1.0
-                                onLogEntry(habit.id, v, "", java.time.LocalDate.now().toString())
+                                onLogEntry(habit.id, v, "", LocalDate.now().toString())
                             } else {
                                 onRequestLog(habit)
                             }
@@ -191,6 +285,91 @@ fun TodayScreen(
                         showSkipPrompt = { onShowSkipPrompt(habit.id) }
                     )
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun DayProgressionBanner(cue: com.steady.habittracker.data.DayProgressionCue) {
+    val nowName = cue.nowGroupName
+    if (nowName == null && cue.nextGroupName == null) return
+    val line = when {
+        nowName != null && cue.nowHasPending -> "Now · $nowName"
+        nowName != null && cue.nextGroupName != null -> "Now · $nowName (done) · next: ${cue.nextGroupName}"
+        nowName != null -> "Now · $nowName"
+        cue.nextGroupName != null -> "Up next · ${cue.nextGroupName}"
+        else -> return
+    }
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.12f), RoundedCornerShape(10.dp))
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(
+            Modifier
+                .size(8.dp)
+                .background(MaterialTheme.colorScheme.primary, RoundedCornerShape(50))
+        )
+        Spacer(Modifier.width(8.dp))
+        Text(
+            line,
+            color = MaterialTheme.colorScheme.primary,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.SemiBold
+        )
+    }
+}
+
+@Composable
+private fun TimelineSectionHeader(section: TimelineSection) {
+    val accent = MaterialTheme.colorScheme.primary
+    val muted = MaterialTheme.colorScheme.onSurfaceVariant
+    val titleColor = when {
+        section.isNow -> accent
+        section.isPast -> muted.copy(alpha = 0.85f)
+        else -> MaterialTheme.colorScheme.onSurface
+    }
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .then(
+                if (section.isNow) {
+                    Modifier
+                        .background(accent.copy(alpha = 0.1f), RoundedCornerShape(8.dp))
+                        .padding(horizontal = 8.dp, vertical = 6.dp)
+                } else {
+                    Modifier.padding(horizontal = 4.dp, vertical = 4.dp)
+                }
+            ),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        if (section.isNow) {
+            Box(
+                Modifier
+                    .width(3.dp)
+                    .height(16.dp)
+                    .background(accent, RoundedCornerShape(2.dp))
+            )
+            Spacer(Modifier.width(8.dp))
+            Text(
+                "●  ${section.group.name}",
+                color = titleColor,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Bold
+            )
+        } else {
+            Text(
+                section.group.name,
+                color = titleColor,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.SemiBold
+            )
+            if (section.isPast) {
+                Spacer(Modifier.width(6.dp))
+                Text("earlier", color = muted, fontSize = 10.sp)
             }
         }
     }

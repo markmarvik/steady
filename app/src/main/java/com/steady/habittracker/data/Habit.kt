@@ -3,10 +3,12 @@ package com.steady.habittracker.data
 import kotlinx.serialization.Serializable
 
 /**
- * Data model v6.
+ * Data model v7.
  * - Groups = time-of-day slots on the 24h timeline (when you do it).
  * - Tags = category identity for History (what it is: Supplements, Movement…).
  * - SleepSettings anchors Morning + Bedtime routines to bed/wake times.
+ * - Habit.additionalGroupIds: same habit can appear in multiple timeline groups (#24).
+ * - Exercise routines + workout sessions for structured training (#20–#22).
  * - archived + canSkip, parentId, skip/loggedAt, themes, schedules (v5).
  * All @Serializable for DataStore JSON (portable).
  */
@@ -173,7 +175,66 @@ data class Habit(
     /** Used by SPECIFIC_DATES (yyyy-MM-dd). */
     val specificDates: List<String> = emptyList(),
     /** Soft stack: previous habit in sequence (Atomic Habits style). Null = standalone / root. */
-    val afterHabitId: String? = null
+    val afterHabitId: String? = null,
+    /**
+     * Extra timeline groups where this habit also appears on Today (display only).
+     * Primary [groupId] remains canonical for Manage catalog, widget, reminders (#24).
+     * One HabitEntry per day regardless of which appearance is tapped.
+     */
+    val additionalGroupIds: List<String> = emptyList()
+)
+
+// --- Exercise routines & workout sessions (#20–#22) ---
+
+@Serializable
+data class ExerciseDef(
+    val id: String,
+    val name: String,
+    val sets: Int = 3,
+    val reps: String = "8-12",
+    val restSec: Int = 60,
+    val notes: String = "",
+    val muscleGroup: String = "",
+    val order: Int = 0
+)
+
+@Serializable
+data class ExerciseRoutine(
+    val id: String,
+    val name: String,
+    val description: String = "",
+    val exercises: List<ExerciseDef> = emptyList(),
+    val estimatedDurationMin: Int = 45,
+    val tags: List<String> = emptyList(),
+    val showPreset: ShowPreset = ShowPreset.DAILY,
+    val weekdays: Set<Int> = setOf(1, 2, 3, 4, 5, 6, 7),
+    val groupId: String? = null,
+    val archived: Boolean = false,
+    val order: Int = 0,
+    /** Optional habit auto-logged on session complete (streaks / progress ring). */
+    val linkedHabitId: String? = null
+)
+
+@Serializable
+data class SetLog(
+    val setNumber: Int,
+    val actualReps: Int? = null,
+    val weightKg: Double? = null,
+    val rpe: Int? = null,
+    val note: String = ""
+)
+
+@Serializable
+data class WorkoutSession(
+    val id: String,
+    val routineId: String,
+    val date: String,
+    val startedAt: Long,
+    val completedAt: Long? = null,
+    val performedExercises: Map<String, List<SetLog>> = emptyMap(),
+    val totalDurationMin: Int? = null,
+    val overallNote: String = "",
+    val completed: Boolean = false
 )
 
 @Serializable
@@ -183,7 +244,7 @@ data class AppData(
     // date (yyyy-MM-dd) -> habitId -> entry
     val entries: Map<String, Map<String, HabitEntry>> = emptyMap(),
     val reminders: List<Reminder> = emptyList(),
-    val schemaVersion: Int = 6,
+    val schemaVersion: Int = 7,
     val onboarded: Boolean = false,
     val colorScheme: String = "default",   // accent: "default" | "blue" | "orange" | "purple" | "slate"
     val backgroundMode: String = "dark",   // "dark" | "amoled" | "light"  (OLED pure black supported)
@@ -195,7 +256,11 @@ data class AppData(
     /** Category tags for History (Supplements, Movement, …). */
     val tags: List<Tag> = emptyList(),
     /** Bed/wake spine that anchors Morning + Bedtime groups on the 24h timeline. */
-    val sleep: SleepSettings = SleepSettings()
+    val sleep: SleepSettings = SleepSettings(),
+    /** Structured exercise routines catalog (#21). */
+    val routines: List<ExerciseRoutine> = emptyList(),
+    /** Completed / in-progress workout sessions (newest-friendly flat list). */
+    val workoutSessions: List<WorkoutSession> = emptyList()
 )
 
 /**
@@ -320,3 +385,28 @@ fun AppData.withAddedCapture(capture: CaptureItem): AppData = copy(captures = ca
 fun AppData.withUpdatedCapture(updated: CaptureItem): AppData =
     copy(captures = captures.map { if (it.id == updated.id) updated else it })
 fun AppData.withoutCapture(id: String): AppData = copy(captures = captures.filter { it.id != id })
+
+// Exercise routine helpers (#21)
+fun AppData.withAddedRoutine(routine: ExerciseRoutine): AppData = copy(routines = routines + routine)
+fun AppData.withUpdatedRoutine(routine: ExerciseRoutine): AppData =
+    copy(routines = routines.map { if (it.id == routine.id) routine else it })
+fun AppData.withArchivedRoutine(routineId: String): AppData =
+    copy(routines = routines.map { if (it.id == routineId) it.copy(archived = true) else it })
+fun AppData.withUnarchivedRoutine(routineId: String): AppData =
+    copy(routines = routines.map { if (it.id == routineId) it.copy(archived = false) else it })
+fun AppData.withoutRoutine(routineId: String): AppData =
+    copy(routines = routines.filter { it.id != routineId })
+fun AppData.withLoggedWorkoutSession(session: WorkoutSession): AppData {
+    val others = workoutSessions.filter { it.id != session.id }
+    return copy(workoutSessions = others + session)
+}
+fun AppData.withUpdatedWorkoutSession(session: WorkoutSession): AppData =
+    copy(workoutSessions = workoutSessions.map { if (it.id == session.id) session else it })
+fun AppData.withoutWorkoutSession(sessionId: String): AppData =
+    copy(workoutSessions = workoutSessions.filter { it.id != sessionId })
+/** Merge Blueprint template routines that are not already present (by id). */
+fun AppData.withBlueprintRoutinesIfMissing(templates: List<ExerciseRoutine>): AppData {
+    val existingIds = routines.map { it.id }.toSet()
+    val toAdd = templates.filter { it.id !in existingIds }
+    return if (toAdd.isEmpty()) this else copy(routines = routines + toAdd)
+}

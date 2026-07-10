@@ -23,29 +23,30 @@ data class WidgetRow(
 )
 
 /**
- * Build ordered widget rows: pending *due* habits for today, grouped.
- * Current time-of-day group is listed first and labeled "Now".
- * Safety cap of 40 rows total (headers + habits).
+ * Pure visual day progression for the widget (same order as Today):
+ * top = earlier, bottom = later. Current block labeled "● Name" — no clock times,
+ * and current group is **not** moved to the top.
  */
 fun buildWidgetRows(data: AppData, now: LocalTime = LocalTime.now()): List<WidgetRow> {
-    val currentGroup = HabitDomain.resolveCurrentGroup(data, now)
-    val pendingByGroup = HabitDomain.pendingGroupedForDate(data, LocalDate.now())
-
-    if (pendingByGroup.isEmpty()) return emptyList()
-
-    val ordered = buildList {
-        val current = pendingByGroup.firstOrNull { it.first.id == currentGroup?.id }
-        if (current != null) add(current)
-        pendingByGroup.filter { it.first.id != currentGroup?.id }.forEach { add(it) }
-    }
+    val sections = HabitDomain.timelineSectionsForToday(data, LocalDate.now(), now)
+    if (sections.isEmpty()) return emptyList()
 
     val rows = mutableListOf<WidgetRow>()
-    for ((group, habits) in ordered) {
+    for (section in sections) {
         if (rows.size >= 40) break
-        val isNow = group.id == currentGroup?.id
-        val header = if (isNow) "Now · ${group.name}" else group.name
-        rows.add(WidgetRow(kind = WidgetRowKind.SECTION, title = header, isCurrentGroup = isNow))
-        for (h in habits) {
+        val header = if (section.isNow) {
+            "● ${section.group.name}"
+        } else {
+            section.group.name
+        }
+        rows.add(
+            WidgetRow(
+                kind = WidgetRowKind.SECTION,
+                title = header,
+                isCurrentGroup = section.isNow
+            )
+        )
+        for (h in section.habits) {
             if (rows.size >= 40) break
             val prefix = if (h.afterHabitId != null) "↳ " else ""
             rows.add(
@@ -54,7 +55,7 @@ fun buildWidgetRows(data: AppData, now: LocalTime = LocalTime.now()): List<Widge
                     title = prefix + h.name,
                     habitId = h.id,
                     isCheckbox = h.type == HabitType.CHECKBOX,
-                    isCurrentGroup = isNow
+                    isCurrentGroup = section.isNow
                 )
             )
         }

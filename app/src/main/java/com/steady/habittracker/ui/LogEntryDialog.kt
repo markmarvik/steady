@@ -107,7 +107,7 @@ fun LogEntryDialog(
                         Text("Rate 1–5", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             (1..5).forEach { s ->
-                                FilterChip(
+                                ThemedFilterChip(
                                     selected = selectedScale == s,
                                     onClick = { selectedScale = s },
                                     label = { Text(s.toString()) }

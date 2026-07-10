@@ -59,6 +59,7 @@ import com.steady.habittracker.ui.TodayScreen
 import com.steady.habittracker.ui.TOUR_STEPS
 import com.steady.habittracker.ui.TourCoach
 import com.steady.habittracker.ui.TourHeaderIndicator
+import com.steady.habittracker.ui.WorkoutSessionScreen
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -157,6 +158,10 @@ fun SteadyApp(
 
     // For NOTE / richer type log dialogs (gratitude, duration, counters etc.)
     var logHabit by remember { mutableStateOf<Habit?>(null) }
+    // Active workout session (full-screen logger)
+    var activeWorkoutRoutine by remember {
+        mutableStateOf<com.steady.habittracker.data.ExerciseRoutine?>(null)
+    }
 
     val context = LocalContext.current
     val activity = context as? MainActivity
@@ -254,10 +259,23 @@ fun SteadyApp(
         else -> Color(0xFF334155)
     }
 
+    // Map secondary/primary containers to accent so FilterChips, checkboxes, etc. follow scheme (#23)
+    val onAccent = if (isLight) Color.White else Color.Black
+    val accentMuted = accent.copy(alpha = 0.22f)
     val colorScheme = if (isLight) {
         lightColorScheme(
             primary = accent,
-            onPrimary = Color.Black,
+            onPrimary = onAccent,
+            primaryContainer = accentMuted,
+            onPrimaryContainer = accent,
+            secondary = accent,
+            onSecondary = onAccent,
+            secondaryContainer = accentMuted,
+            onSecondaryContainer = accent,
+            tertiary = accent,
+            onTertiary = onAccent,
+            tertiaryContainer = accentMuted,
+            onTertiaryContainer = accent,
             background = bgColor,
             onBackground = onSurfaceColor,
             surface = surfaceColor,
@@ -269,7 +287,17 @@ fun SteadyApp(
     } else {
         darkColorScheme(
             primary = accent,
-            onPrimary = Color.Black,
+            onPrimary = onAccent,
+            primaryContainer = accentMuted,
+            onPrimaryContainer = accent,
+            secondary = accent,
+            onSecondary = onAccent,
+            secondaryContainer = accentMuted,
+            onSecondaryContainer = accent,
+            tertiary = accent,
+            onTertiary = onAccent,
+            tertiaryContainer = accentMuted,
+            onTertiaryContainer = accent,
             background = bgColor,
             onBackground = onSurfaceColor,
             surface = surfaceColor,
@@ -289,6 +317,21 @@ fun SteadyApp(
         }
     } else {
     MaterialTheme(colorScheme = colorScheme) {
+    // Full-screen workout session takes over content (#22)
+    val workoutRt = activeWorkoutRoutine
+    if (workoutRt != null) {
+        Surface(modifier = Modifier.fillMaxSize(), color = bgColor) {
+            WorkoutSessionScreen(
+                routine = workoutRt,
+                onFinish = { session ->
+                    viewModel.finishWorkoutSession(session)
+                    activeWorkoutRoutine = null
+                    Toast.makeText(context, "Workout saved — great work!", Toast.LENGTH_SHORT).show()
+                },
+                onDiscard = { activeWorkoutRoutine = null }
+            )
+        }
+    } else {
     Scaffold(
         containerColor = bgColor
         // No FAB: removed per request (adds only via Manage now)
@@ -499,7 +542,8 @@ fun SteadyApp(
                         onProcessCapture = viewModel::markCaptureProcessed,
                         onDeleteCapture = viewModel::deleteCapture,
                         onCreateMetric = { name -> viewModel.addMetricHabit(name) },
-                        onLogMetric = viewModel::logEntry
+                        onLogMetric = viewModel::logEntry,
+                        onStartRoutine = { rt -> activeWorkoutRoutine = rt }
                     )
                     1 -> HistoryScreen(appData = appData)
                     2 -> ManageScreen(
@@ -535,6 +579,10 @@ fun SteadyApp(
                         onAddTag = viewModel::addTag,
                         onUpdateSleep = viewModel::updateSleepSettings,
                         onApplySleepSchedule = viewModel::applySleepAnchoredSchedule,
+                        onSaveRoutine = viewModel::saveRoutine,
+                        onArchiveRoutine = viewModel::archiveRoutine,
+                        onLoadBlueprintRoutines = viewModel::loadBlueprintRoutines,
+                        onStartRoutine = { rt -> activeWorkoutRoutine = rt },
                         schedules = appData.schedules,
                         activeScheduleId = appData.activeScheduleId
                     )
@@ -933,6 +981,7 @@ fun SteadyApp(
         )
     }
     } // end Scaffold
+    } // end else (not in workout session)
     } // end MaterialTheme + else (non-onboarding)
 }
 

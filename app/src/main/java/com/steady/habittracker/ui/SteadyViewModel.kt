@@ -42,6 +42,14 @@ import com.steady.habittracker.data.withAddedCapture
 import com.steady.habittracker.data.withoutCapture
 import com.steady.habittracker.data.withUpdatedCapture
 import com.steady.habittracker.data.withRemindersMasterEnabled
+import com.steady.habittracker.data.BlueprintRoutines
+import com.steady.habittracker.data.ExerciseRoutine
+import com.steady.habittracker.data.WorkoutSession
+import com.steady.habittracker.data.withAddedRoutine
+import com.steady.habittracker.data.withUpdatedRoutine
+import com.steady.habittracker.data.withArchivedRoutine
+import com.steady.habittracker.data.withLoggedWorkoutSession
+import com.steady.habittracker.data.withBlueprintRoutinesIfMissing
 import com.steady.habittracker.reminders.AlarmScheduler
 import com.steady.habittracker.widget.WidgetRenderer
 import android.app.Application
@@ -569,6 +577,72 @@ class SteadyViewModel(
         viewModelScope.launch {
             val current = appData.value
             repository.saveData(current.withoutCapture(id))
+        }
+    }
+
+    // --- Exercise routines (#20–#22) ---
+    fun saveRoutine(routine: ExerciseRoutine) {
+        viewModelScope.launch {
+            val current = appData.value
+            val updated = if (current.routines.any { it.id == routine.id }) {
+                current.withUpdatedRoutine(routine)
+            } else {
+                current.withAddedRoutine(routine)
+            }
+            repository.saveData(updated)
+        }
+    }
+
+    fun archiveRoutine(routineId: String) {
+        viewModelScope.launch {
+            repository.saveData(appData.value.withArchivedRoutine(routineId))
+        }
+    }
+
+    fun loadBlueprintRoutines() {
+        viewModelScope.launch {
+            val current = appData.value
+            repository.saveData(current.withBlueprintRoutinesIfMissing(BlueprintRoutines.templates()))
+        }
+    }
+
+    /**
+     * Persist a finished (or partial) workout session.
+     * Optionally upserts a linked habit entry for streaks / daily progress.
+     */
+    fun finishWorkoutSession(session: WorkoutSession) {
+        viewModelScope.launch {
+            var current = appData.value
+            val finished = session.copy(
+                completed = true,
+                completedAt = session.completedAt ?: System.currentTimeMillis()
+            )
+            current = current.withLoggedWorkoutSession(finished)
+            val routine = current.routines.find { it.id == finished.routineId }
+            val linkedId = routine?.linkedHabitId
+            if (linkedId != null && current.habits.any { it.id == linkedId && !it.archived }) {
+                val duration = finished.totalDurationMin?.toDouble()
+                    ?: ((finished.completedAt!! - finished.startedAt) / 60_000.0).coerceAtLeast(1.0)
+                val habit = current.habits.find { it.id == linkedId }
+                val value = when (habit?.type) {
+                    HabitType.DURATION_MIN -> duration
+                    HabitType.COUNTER -> HabitDomain.sessionSetCount(finished).toDouble().coerceAtLeast(1.0)
+                    else -> 1.0
+                }
+                current = current.withUpdatedEntry(
+                    finished.date,
+                    linkedId,
+                    HabitEntry(value = value, note = "Workout: ${routine.name}", loggedAt = finished.completedAt!!)
+                )
+            }
+            repository.saveData(current)
+            refreshWidget(current)
+        }
+    }
+
+    fun saveInProgressWorkoutSession(session: WorkoutSession) {
+        viewModelScope.launch {
+            repository.saveData(appData.value.withLoggedWorkoutSession(session.copy(completed = false)))
         }
     }
 

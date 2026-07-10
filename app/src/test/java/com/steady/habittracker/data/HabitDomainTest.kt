@@ -3,6 +3,7 @@ package com.steady.habittracker.data
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.Test
 import java.time.LocalDate
+import java.time.LocalTime
 
 /**
  * Unit tests for pure domain logic.
@@ -284,6 +285,45 @@ class HabitDomainTest {
     }
 
     @Test
+    fun `timelineSections order follows schedule top to bottom not catalog`() {
+        val groups = listOf(
+            Group("g_focus", "Focus", "WORK", 0), // catalog first
+            Group("g_morn", "Morning", "MORNING", 1),
+            Group("g_bed", "Bedtime", "BEDTIME", 2)
+        )
+        val schedule = Schedule(
+            "s1", "Day",
+            timeBlocks = listOf(
+                TimeBlock("07:00", "09:00", "g_morn"),
+                TimeBlock("09:00", "21:00", "g_focus"),
+                TimeBlock("21:00", "23:00", "g_bed")
+            )
+        )
+        val data = AppData(
+            groups = groups,
+            habits = listOf(
+                Habit("h_f", "Work", groupId = "g_focus"),
+                Habit("h_m", "Light", groupId = "g_morn"),
+                Habit("h_b", "Wind", groupId = "g_bed")
+            ),
+            schedules = listOf(schedule),
+            activeScheduleId = "s1"
+        )
+        val sections = HabitDomain.timelineSectionsForToday(data, LocalDate.now(), LocalTime.of(10, 0))
+        assertEquals(listOf("g_morn", "g_focus", "g_bed"), sections.map { it.group.id })
+        assertTrue(sections[1].isNow) // 10:00 is Focus
+        assertTrue(sections[0].isPast)
+        assertTrue(sections[2].isFuture)
+    }
+
+    @Test
+    fun `timelineSections without schedule uses timeHint order`() {
+        val data = sampleDataWithEntries() // g1 Morning order 0, g2 Work order 1
+        val ids = HabitDomain.orderedGroupIdsForDay(data)
+        assertEquals("g1", ids.first())
+    }
+
+    @Test
     fun `heatmap and hourly helpers run on empty and partial data`() {
         val data = sampleDataWithEntries(
             mapOf(
@@ -300,5 +340,112 @@ class HabitDomainTest {
         assertTrue(hours.sum() >= 1)
         assertEquals(1, HabitDomain.totalCompletedLogs(data))
         assertEquals(1, HabitDomain.daysWithActivity(data))
+    }
+
+    // --- #24 multi-group membership ---
+
+    @Test
+    fun `additionalGroupIds habit appears in both timeline sections once`() {
+        val groups = listOf(
+            Group("g_morn", "Morning", "MORNING", 0),
+            Group("g_even", "Evening", "EVENING", 1)
+        )
+        val nac = Habit(
+            "h_nac", "NAC", groupId = "g_morn",
+            additionalGroupIds = listOf("g_even"), order = 0
+        )
+        val data = AppData(groups = groups, habits = listOf(nac))
+        val sections = HabitDomain.timelineSectionsForToday(data, LocalDate.now(), LocalTime.of(8, 0))
+        val groupIds = sections.map { it.group.id }
+        assertTrue(groupIds.contains("g_morn"))
+        assertTrue(groupIds.contains("g_even"))
+        assertEquals(1, sections.find { it.group.id == "g_morn" }?.habits?.size)
+        assertEquals(1, sections.find { it.group.id == "g_even" }?.habits?.size)
+        // Single entry still: logging once clears both appearances
+        val withEntry = data.withUpdatedEntry(
+            LocalDate.now().toString(), "h_nac", HabitEntry(value = 1.0)
+        )
+        val after = HabitDomain.timelineSectionsForToday(withEntry, LocalDate.now(), LocalTime.of(8, 0))
+        assertTrue(after.none { sec -> sec.habits.any { it.id == "h_nac" } })
+    }
+
+    @Test
+    fun `groupHabits catalog shows habit only under primary group`() {
+        val groups = listOf(
+            Group("g_morn", "Morning", order = 0),
+            Group("g_even", "Evening", order = 1)
+        )
+        val h = Habit("h1", "Split", groupId = "g_morn", additionalGroupIds = listOf("g_even"))
+        val data = AppData(groups = groups, habits = listOf(h))
+        val grouped = HabitDomain.groupHabits(data)
+        assertEquals(1, grouped.find { it.first.id == "g_morn" }?.second?.size)
+        assertEquals(0, grouped.find { it.first.id == "g_even" }?.second?.size)
+    }
+
+    @Test
+    fun `getActiveHabitsForGroup includes additional membership`() {
+        val data = AppData(
+            groups = listOf(Group("g1", "A"), Group("g2", "B")),
+            habits = listOf(
+                Habit("h1", "X", groupId = "g1", additionalGroupIds = listOf("g2"))
+            )
+        )
+        assertEquals(1, HabitDomain.getActiveHabitsForGroup(data, "g1").size)
+        assertEquals(1, HabitDomain.getActiveHabitsForGroup(data, "g2").size)
+    }
+
+    // --- #21 routines / sessions ---
+
+    @Test
+    fun `withBlueprintRoutinesIfMissing is idempotent`() {
+        val templates = BlueprintRoutines.templates()
+        val empty = AppData()
+        val once = empty.withBlueprintRoutinesIfMissing(templates)
+        assertEquals(templates.size, once.routines.size)
+        val twice = once.withBlueprintRoutinesIfMissing(templates)
+        assertEquals(templates.size, twice.routines.size)
+    }
+
+    @Test
+    fun `isRoutineDueOn respects weekdays`() {
+        val rt = ExerciseRoutine(
+            id = "rt1", name = "Mon only",
+            showPreset = ShowPreset.CUSTOM_DAYS,
+            weekdays = setOf(1)
+        )
+        val mon = LocalDate.of(2024, 6, 3)
+        val tue = LocalDate.of(2024, 6, 4)
+        assertTrue(HabitDomain.isRoutineDueOn(rt, mon))
+        assertFalse(HabitDomain.isRoutineDueOn(rt, tue))
+    }
+
+    @Test
+    fun `workout session helpers count sets and completion`() {
+        val session = WorkoutSession(
+            id = "ws1",
+            routineId = "rt1",
+            date = LocalDate.now().toString(),
+            startedAt = 1L,
+            completedAt = 2L,
+            performedExercises = mapOf(
+                "ex1" to listOf(SetLog(1, actualReps = 10), SetLog(2, actualReps = 8)),
+                "ex2" to listOf(SetLog(1, actualReps = 5))
+            ),
+            completed = true
+        )
+        assertEquals(3, HabitDomain.sessionSetCount(session))
+        assertEquals(2, HabitDomain.sessionExerciseCount(session))
+        val data = AppData(workoutSessions = listOf(session))
+        assertTrue(HabitDomain.isRoutineCompletedOn(data, "rt1", LocalDate.now().toString()))
+        assertEquals(1, HabitDomain.workoutDaysInWindow(data, 7))
+    }
+
+    @Test
+    fun `withLoggedWorkoutSession replaces same id`() {
+        val s1 = WorkoutSession("ws1", "rt1", "2024-01-01", startedAt = 1L, completed = false)
+        val s2 = s1.copy(completed = true, completedAt = 2L)
+        val data = AppData().withLoggedWorkoutSession(s1).withLoggedWorkoutSession(s2)
+        assertEquals(1, data.workoutSessions.size)
+        assertTrue(data.workoutSessions.first().completed)
     }
 }

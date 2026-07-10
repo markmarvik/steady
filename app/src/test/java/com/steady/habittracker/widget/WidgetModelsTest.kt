@@ -6,6 +6,8 @@ import com.steady.habittracker.data.Habit
 import com.steady.habittracker.data.HabitEntry
 import com.steady.habittracker.data.HabitType
 import com.steady.habittracker.data.HabitDomain
+import com.steady.habittracker.data.Schedule
+import com.steady.habittracker.data.TimeBlock
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.Test
 import java.time.LocalTime
@@ -34,6 +36,40 @@ class WidgetModelsTest {
         val habitRows = rows.filter { it.kind == WidgetRowKind.HABIT }
         assertEquals(5, habitRows.size)
         assertTrue(rows.any { it.kind == WidgetRowKind.SECTION && it.title.contains("Morning") })
+    }
+
+    @Test
+    fun `buildWidgetRows keeps chronological order not now-first`() {
+        val groups = listOf(
+            Group("g_morn", "Morning", "MORNING", 0),
+            Group("g_work", "Work", "WORK", 1),
+            Group("g_even", "Evening", "EVENING", 2)
+        )
+        val schedule = Schedule(
+            "s1", "Day",
+            timeBlocks = listOf(
+                TimeBlock("07:00", "09:00", "g_morn"),
+                TimeBlock("09:00", "18:00", "g_work"),
+                TimeBlock("18:00", "23:00", "g_even")
+            )
+        )
+        val d = AppData(
+            groups = groups,
+            habits = listOf(
+                Habit("h1", "A", groupId = "g_morn"),
+                Habit("h2", "B", groupId = "g_work"),
+                Habit("h3", "C", groupId = "g_even")
+            ),
+            schedules = listOf(schedule),
+            activeScheduleId = "s1"
+        )
+        // Afternoon: Work is Now, but Morning section still first
+        val rows = buildWidgetRows(d, LocalTime.of(14, 0))
+        val sections = rows.filter { it.kind == WidgetRowKind.SECTION }
+        assertEquals("Morning", sections[0].title)
+        assertTrue(sections[1].title.startsWith("●"))
+        assertTrue(sections[1].title.contains("Work"))
+        assertEquals("Evening", sections[2].title)
     }
 
     @Test

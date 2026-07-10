@@ -12,13 +12,22 @@ import java.time.LocalTime
  */
 object HabitDomain {
 
-    /** Returns sorted groups + habits in each for Manage catalog (non-archived only). */
+    /** Returns sorted groups + habits in each for Manage catalog (non-archived only).
+     * Primary [Habit.groupId] only — additional groups are display-only on Today (#24). */
     fun groupHabits(data: AppData): List<Pair<Group, List<Habit>>> {
         val sortedGroups = data.groups.filter { !it.archived }.sortedBy { it.order }
         return sortedGroups.map { g ->
             g to data.habits.filter { it.groupId == g.id && !it.archived }.sortedBy { it.order }
         }
     }
+
+    /** Timeline groups this habit should appear under (primary + additional). */
+    fun membershipGroupIds(habit: Habit): List<String> =
+        (listOf(habit.groupId) + habit.additionalGroupIds).distinct()
+
+    /** Whether habit belongs to [groupId] via primary or additional membership. */
+    fun belongsToGroup(habit: Habit, groupId: String): Boolean =
+        habit.groupId == groupId || groupId in habit.additionalGroupIds
 
     // --- Show rules (when habit appears on Today) ---
 
@@ -64,7 +73,8 @@ object HabitDomain {
 
     /**
      * Pending (due + not done/skipped) habits for a date, sorted by group → stack → order.
-     * Returns list of (group, ordered habits).
+     * Returns list of (group, ordered habits) in **catalog** order.
+     * Prefer [timelineSectionsForToday] for day progression UI.
      */
     fun pendingGroupedForDate(
         data: AppData,
@@ -73,11 +83,155 @@ object HabitDomain {
         val dateStr = date.toString()
         val entries = data.entries[dateStr] ?: emptyMap()
         val due = habitsDueOn(data, date).filter { isPendingEntry(entries[it.id]) }
-        val byGroup = due.groupBy { it.groupId }
+        // Expand multi-group membership so one habit can appear in several sections (#24)
+        val byGroup = mutableMapOf<String, MutableList<Habit>>()
+        due.forEach { h ->
+            membershipGroupIds(h).forEach { gid ->
+                byGroup.getOrPut(gid) { mutableListOf() }.add(h)
+            }
+        }
         return getActiveGroups(data).mapNotNull { g ->
             val inGroup = byGroup[g.id] ?: return@mapNotNull null
             if (inGroup.isEmpty()) null else g to sortByStack(inGroup, data.habits)
         }
+    }
+
+    /**
+     * Pure visual day progression: sections top→bottom in day order (Morning → … → Sleep).
+     * No clock labels — only names + isNow / isPast for a soft “you are here” cue.
+     * Only sections with pending habits are returned (action-oriented Today).
+     */
+    fun timelineSectionsForToday(
+        data: AppData,
+        date: LocalDate = LocalDate.now(),
+        now: LocalTime = LocalTime.now()
+    ): List<TimelineSection> {
+        val dateStr = date.toString()
+        val entries = data.entries[dateStr] ?: emptyMap()
+        val duePending = habitsDueOn(data, date).filter { isPendingEntry(entries[it.id]) }
+        if (duePending.isEmpty()) return emptyList()
+
+        // Multi-group expansion (#24): habit appears under every membership group
+        val byGroup = mutableMapOf<String, MutableList<Habit>>()
+        duePending.forEach { h ->
+            membershipGroupIds(h).forEach { gid ->
+                byGroup.getOrPut(gid) { mutableListOf() }.add(h)
+            }
+        }
+        val orderedIds = orderedGroupIdsForDay(data, now)
+        val currentId = resolveCurrentGroup(data, now)?.id
+        val currentIndex = orderedIds.indexOf(currentId).takeIf { it >= 0 }
+
+        val sections = mutableListOf<TimelineSection>()
+        orderedIds.forEachIndexed { index, gid ->
+            val habits = byGroup[gid] ?: return@forEachIndexed
+            if (habits.isEmpty()) return@forEachIndexed
+            val group = data.groups.find { it.id == gid && !it.archived } ?: return@forEachIndexed
+            val isNow = gid == currentId
+            val isPast = currentIndex != null && index < currentIndex
+            val isFuture = currentIndex != null && index > currentIndex
+            sections.add(
+                TimelineSection(
+                    group = group,
+                    habits = sortByStack(habits, data.habits),
+                    isNow = isNow,
+                    isPast = isPast && !isNow,
+                    isFuture = isFuture && !isNow
+                )
+            )
+        }
+        // Pending in groups missing from spine (shouldn't happen often)
+        val seen = sections.map { it.group.id }.toSet()
+        byGroup.forEach { (gid, habits) ->
+            if (gid in seen || habits.isEmpty()) return@forEach
+            val group = data.groups.find { it.id == gid && !it.archived } ?: return@forEach
+            sections.add(
+                TimelineSection(
+                    group = group,
+                    habits = sortByStack(habits, data.habits),
+                    isNow = gid == currentId,
+                    isPast = false,
+                    isFuture = true
+                )
+            )
+        }
+        return sections
+    }
+
+    /**
+     * Day spine group ids: schedule blocks in visual day order, then unscheduled groups.
+     * Overnight blocks (start > end) sort by start time (typically late evening → bottom).
+     */
+    fun orderedGroupIdsForDay(data: AppData, now: LocalTime = LocalTime.now()): List<String> {
+        val schedule = getActiveSchedule(data)
+        val useSchedule = schedule != null &&
+            isScheduleApplicableToday(data, schedule) &&
+            schedule.timeBlocks.isNotEmpty()
+
+        val fromSchedule = if (useSchedule) {
+            schedule!!.timeBlocks
+                .sortedWith(
+                    compareBy<TimeBlock> { blockSortKey(it) }
+                        .thenBy { parseTimeToMinutes(it.start) }
+                )
+                .map { it.groupId }
+                .distinct()
+        } else {
+            // Fallback: timeHint progression, then catalog order
+            val hintRank = mapOf(
+                "MORNING" to 0,
+                "WORK" to 1,
+                "REVIEW" to 2,
+                "EVENING" to 3,
+                "BEDTIME" to 3,
+                "SLEEP" to 4,
+                "ANY" to 5
+            )
+            getActiveGroups(data)
+                .sortedWith(
+                    compareBy<Group> { hintRank[it.timeHint.uppercase()] ?: 5 }
+                        .thenBy { it.order }
+                )
+                .map { it.id }
+        }
+
+        val scheduledSet = fromSchedule.toSet()
+        val extras = getActiveGroups(data)
+            .filter { it.id !in scheduledSet }
+            .sortedBy { it.order }
+            .map { it.id }
+        return fromSchedule + extras
+    }
+
+    /** Sort key so the day reads top→bottom; overnight sleep sits near the end. */
+    private fun blockSortKey(block: TimeBlock): Int {
+        val start = parseTimeToMinutes(block.start)
+        val end = parseTimeToMinutes(block.end)
+        // Overnight block: treat as late-day (start near end of day)
+        return if (start > end) start else start
+    }
+
+    /** Short spine line: current group name + next group with pending work (names only). */
+    fun dayProgressionCue(
+        data: AppData,
+        date: LocalDate = LocalDate.now(),
+        now: LocalTime = LocalTime.now()
+    ): DayProgressionCue {
+        val sections = timelineSectionsForToday(data, date, now)
+        val ordered = orderedGroupIdsForDay(data, now)
+        val current = resolveCurrentGroup(data, now)
+        val currentId = current?.id
+        val idx = ordered.indexOf(currentId).takeIf { it >= 0 } ?: -1
+        val nextPending = sections.firstOrNull { s ->
+            val si = ordered.indexOf(s.group.id)
+            !s.isNow && (idx < 0 || si > idx)
+        } ?: sections.firstOrNull { !it.isNow && it.isFuture }
+        val nowHasPending = sections.any { it.isNow }
+        return DayProgressionCue(
+            nowGroupName = current?.name,
+            nowHasPending = nowHasPending,
+            nextGroupName = nextPending?.group?.name
+        )
     }
 
     /**
@@ -490,9 +644,59 @@ object HabitDomain {
     fun getActiveGroups(data: AppData): List<Group> =
         data.groups.filter { !it.archived }.sortedBy { it.order }
 
-    /** Habits for a group (active only). Supports parent for subgroups. */
+    /** Habits for a group (active only), including additionalGroupIds membership (#24). */
     fun getActiveHabitsForGroup(data: AppData, groupId: String): List<Habit> =
-        data.habits.filter { it.groupId == groupId && !it.archived }.sortedBy { it.order }
+        data.habits.filter { !it.archived && belongsToGroup(it, groupId) }.sortedBy { it.order }
+
+    // --- Exercise routines (#21) ---
+
+    /** Active (non-archived) routines, catalog order. */
+    fun getActiveRoutines(data: AppData): List<ExerciseRoutine> =
+        data.routines.filter { !it.archived }.sortedBy { it.order }
+
+    /** Whether a routine should appear on [date] (same show presets as habits). */
+    fun isRoutineDueOn(routine: ExerciseRoutine, date: LocalDate): Boolean {
+        if (routine.archived) return false
+        val asHabit = Habit(
+            id = routine.id,
+            name = routine.name,
+            groupId = routine.groupId ?: "",
+            showPreset = routine.showPreset,
+            weekdays = routine.weekdays
+        )
+        return isDueOn(asHabit, date)
+    }
+
+    fun routinesDueOn(data: AppData, date: LocalDate = LocalDate.now()): List<ExerciseRoutine> =
+        getActiveRoutines(data).filter { isRoutineDueOn(it, date) }
+
+    /** True if a completed session exists for routine on that date. */
+    fun isRoutineCompletedOn(data: AppData, routineId: String, date: String): Boolean =
+        data.workoutSessions.any { it.routineId == routineId && it.date == date && it.completed }
+
+    /** Recent sessions newest first. */
+    fun recentWorkoutSessions(data: AppData, limit: Int = 30): List<WorkoutSession> =
+        data.workoutSessions.sortedByDescending { it.startedAt }.take(limit)
+
+    /** Days in last [daysBack] with ≥1 completed workout. */
+    fun workoutDaysInWindow(data: AppData, daysBack: Int = 7): Int {
+        val today = LocalDate.now()
+        val dates = data.workoutSessions
+            .filter { it.completed }
+            .map { it.date }
+            .toSet()
+        return (0 until daysBack).count { offset ->
+            today.minusDays(offset.toLong()).toString() in dates
+        }
+    }
+
+    /** Total sets logged in a session. */
+    fun sessionSetCount(session: WorkoutSession): Int =
+        session.performedExercises.values.sumOf { it.size }
+
+    /** Total exercises with at least one set. */
+    fun sessionExerciseCount(session: WorkoutSession): Int =
+        session.performedExercises.count { it.value.isNotEmpty() }
 
     /** Return nested view for a parent (e.g. Workouts and its plan subgroups). */
     fun getSubGroups(data: AppData, parentId: String): List<Group> =
@@ -595,7 +799,28 @@ fun moveHabit(currentHabits: List<Habit>, habitId: String, newGroupId: String, n
 fun isDueOn(habit: Habit, date: LocalDate): Boolean = HabitDomain.isDueOn(habit, date)
 fun habitsDueOn(data: AppData, date: LocalDate = LocalDate.now()): List<Habit> = HabitDomain.habitsDueOn(data, date)
 fun pendingGroupedForDate(data: AppData, date: LocalDate = LocalDate.now()) = HabitDomain.pendingGroupedForDate(data, date)
+fun timelineSectionsForToday(
+    data: AppData,
+    date: LocalDate = LocalDate.now(),
+    now: LocalTime = LocalTime.now()
+) = HabitDomain.timelineSectionsForToday(data, date, now)
 fun showRuleLabel(habit: Habit): String = HabitDomain.showRuleLabel(habit)
+
+/** One spine section on Today / widget (pure visual day order). */
+data class TimelineSection(
+    val group: Group,
+    val habits: List<Habit>,
+    val isNow: Boolean,
+    val isPast: Boolean,
+    val isFuture: Boolean
+)
+
+/** Tiny “where am I / what’s next” cue without clock numbers. */
+data class DayProgressionCue(
+    val nowGroupName: String?,
+    val nowHasPending: Boolean,
+    val nextGroupName: String?
+)
 
 /** Stable default tag ids (seeded + migration). */
 object TagIds {

@@ -44,8 +44,9 @@ private class WidgetListFactory(
             WidgetRowKind.SECTION -> {
                 val rv = RemoteViews(context.packageName, R.layout.widget_section_header)
                 rv.setTextViewText(R.id.section_title, row.title)
+                // Current block (●) uses full accent; earlier/later slightly softer via same accent
                 rv.setTextColor(R.id.section_title, WidgetRenderer.readAccent(context))
-                // Headers are not clickable; empty fill-in still required by some launchers
+                // Headers are not clickable
                 rv.setOnClickFillInIntent(R.id.section_title, Intent())
                 rv
             }

@@ -76,12 +76,17 @@ class AndroidHabitRepository(private val context: Context) : HabitRepository {
     }
 
     /**
-     * Migrate older schemas to v6 (tags + sleep spine).
+     * Migrate older schemas to v7 (routines + multi-group; v6 tags + sleep spine).
      * v5: schedules. Pre-v5: archive/skip fields.
+     * Missing new fields default safely via kotlinx.serialization.
      */
     private fun migrateIfNeeded(data: AppData): AppData {
-        if (data.schemaVersion >= 6 && data.groups.isNotEmpty() && data.habits.isNotEmpty() && data.tags.isNotEmpty()) {
+        if (data.schemaVersion >= 7 && data.groups.isNotEmpty() && data.habits.isNotEmpty() && data.tags.isNotEmpty()) {
             return data
+        }
+        if (data.schemaVersion >= 6 && data.groups.isNotEmpty() && data.habits.isNotEmpty() && data.tags.isNotEmpty()) {
+            // Soft bump: ensure routines/sessions lists exist (already defaulted on decode)
+            return data.copy(schemaVersion = 7)
         }
         // Start from current or fresh
         var d = if (data.groups.isNotEmpty() && data.habits.isNotEmpty()) data else getDefaultData()
@@ -170,10 +175,12 @@ class AndroidHabitRepository(private val context: Context) : HabitRepository {
         }
 
         return withSleep.copy(
-            schemaVersion = 6,
+            schemaVersion = 7,
             onboarded = d.onboarded || d.schemaVersion >= 1,
             colorScheme = if (d.colorScheme.isNotBlank()) d.colorScheme else "default",
-            backgroundMode = if (d.backgroundMode.isNotBlank()) d.backgroundMode else "dark"
+            backgroundMode = if (d.backgroundMode.isNotBlank()) d.backgroundMode else "dark",
+            routines = d.routines,
+            workoutSessions = d.workoutSessions
         )
     }
 
@@ -306,14 +313,16 @@ class AndroidHabitRepository(private val context: Context) : HabitRepository {
             habits = habits,
             entries = emptyMap(),
             reminders = reminders,
-            schemaVersion = 6,
+            schemaVersion = 7,
             onboarded = false,
             colorScheme = "default",
             backgroundMode = "dark",
             schedules = listOf(schedule),
             activeScheduleId = "s_sleep",
             tags = tags,
-            sleep = sleep
+            sleep = sleep,
+            routines = emptyList(),
+            workoutSessions = emptyList()
         )
     }
 

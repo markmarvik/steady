@@ -47,7 +47,7 @@ fun ReminderDialog(
                 Text("Days", style = MaterialTheme.typography.labelMedium)
                 Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                     listOf(1 to "M", 2 to "T", 3 to "W", 4 to "T", 5 to "F", 6 to "S", 7 to "S").forEach { (d, label) ->
-                        FilterChip(
+                        ThemedFilterChip(
                             selected = d in days,
                             onClick = {
                                 if (d in days) days.remove(d) else days.add(d)
