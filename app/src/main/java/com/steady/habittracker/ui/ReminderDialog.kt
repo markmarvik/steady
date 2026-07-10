@@ -7,7 +7,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.steady.habittracker.data.AppData
 import com.steady.habittracker.data.Group
+import com.steady.habittracker.data.HabitDomain
 import com.steady.habittracker.data.Reminder
 
 @Composable
@@ -15,9 +17,19 @@ fun ReminderDialog(
     group: Group?,
     existing: Reminder?,
     onDismiss: () -> Unit,
-    onSave: (Reminder) -> Unit
+    onSave: (Reminder) -> Unit,
+    appData: AppData? = null
 ) {
-    var time by remember { mutableStateOf(existing?.time ?: "08:30") }
+    val suggested = remember(group?.id, appData) {
+        when {
+            appData == null -> null
+            group != null -> HabitDomain.suggestedReminderTimeForGroup(appData, group.id)
+            else -> HabitDomain.suggestedDailyReviewTime(appData)
+        }
+    }
+    var time by remember {
+        mutableStateOf(existing?.time ?: suggested ?: "08:30")
+    }
     val days = remember {
         mutableStateListOf<Int>().apply { addAll(existing?.days ?: setOf(1, 2, 3, 4, 5, 6, 7)) }
     }
@@ -43,6 +55,12 @@ fun ReminderDialog(
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
+                if (suggested != null) {
+                    Spacer(Modifier.height(4.dp))
+                    TextButton(onClick = { time = suggested }) {
+                        Text("Use schedule time ($suggested)", fontSize = 11.sp)
+                    }
+                }
                 Spacer(Modifier.height(8.dp))
                 Text("Days", style = MaterialTheme.typography.labelMedium)
                 Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -66,7 +84,7 @@ fun ReminderDialog(
         },
         confirmButton = {
             TextButton(onClick = {
-                val normalized = normalizeTime(time)
+                val normalized = normalizeReminderTime(time)
                 val r = Reminder(
                     id = existing?.id ?: "rem_${System.currentTimeMillis()}",
                     groupId = group?.id,
@@ -82,7 +100,7 @@ fun ReminderDialog(
     )
 }
 
-private fun normalizeTime(raw: String): String {
+private fun normalizeReminderTime(raw: String): String {
     val parts = raw.trim().split(":")
     val h = (parts.getOrNull(0)?.toIntOrNull() ?: 8).coerceIn(0, 23)
     val m = (parts.getOrNull(1)?.toIntOrNull() ?: 0).coerceIn(0, 59)

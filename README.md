@@ -1,88 +1,140 @@
 # Steady
 
-Evidence-based habit tracker for consistency, energy, focus and longevity. Native Android (Kotlin + Jetpack Compose).
+**Evidence-based habit tracker for consistency, energy, focus, and longevity.**
 
-Groups, flexible logging (checkbox / counter / duration / scale / notes), configurable reminders, and a dedicated home-screen widget for time-of-day prompts — designed from real usage patterns in TrackAndGraph.
+Native Android app built with **Kotlin** and **Jetpack Compose**. Local-first: no accounts, no ads, no cloud lock-in.
 
-**New**: Onboarding for first-time users, in-app color scheme settings, rich weekly progress tracker (with trend arrows and per-group expandable circles), reliable export (works even with empty data), archived items view + restore in Manage, and the floating action button has been removed (use Manage for deliberate habit/group creation).
+<p align="center">
+  <img src="docs/app-icon.png" alt="Steady app icon" width="128" height="128" />
+</p>
 
-## Key Features
-- **Grouping by time-of-day / routine**: Morning Routine, Focus & Work, Evening / Wind Down, Mindset & Review (fully customizable in Manage tab).
-- **Richer habit types**: 
-  - Checkbox (tap to toggle)
-  - Counter (reps, doses, liters)
-  - Duration (minutes)
-  - Scale 1-5 (energy/mood)
-  - Note/journal (gratitude, wins, reflections)
-- **Today screen**: Grouped sections, current period highlighted, quick log for non-binary habits.
-- **History**: 14-day completion bars + streak tracking.
-- **Reminders & alarms**: Per-group (or daily review) — set time + weekdays directly in the app. Notifications prompt you.
-- **Dedicated Widget**: Shows current time-of-day habits at a glance. Tap to open app. Time-aware.
-- **Customization**: Add/edit/delete groups + habits, change type, set targets/units. Reorder via Manage.
-- **Motivation**: Current streak (🔥), progress ring + weekly tracker with trend arrow, expandable per-group circles, rich notes preserved in history.
-- **Onboarding / Help**: Friendly first-run guide + anytime "Run guided tour / onboarding" (header ⓘ button and in Settings). The interactive tour walks through Today, History, Manage, progress, reminders, widget and key gestures. Welcome guide replays the quick-start bullets.
-- **Settings**: Choose color scheme (green/blue/orange/purple/slate) — live update.
-- **Backup**: Export button now fully works (even with minimal/empty data) via JSON backup.
-- **Manage**: Drill-down editing, reminders, CSV/backup export (fully functional, works on empty projects), and an Archived section to view + restore items.
-- **All local**: DataStore + JSON. No accounts, no ads.
+---
 
-Default starter set includes the original 7 high-ROI habits plus several patterns from real tracking (Box Breathing, supplements, strength, NSDR, wins, reflections).
+## What Steady is for
+
+Steady helps you run a **daily routine** (sleep-anchored morning → focus → wind-down) and stay pointed at **longer-term goals** (Dreamline / Path). Log flexibly, see trends, get gentle reminders when a group starts, and keep a home-screen widget that shows *what to do right now*.
+
+---
+
+## Features
+
+### Today
+- Timeline groups ordered by your **Daily Planner** (24h schedule)
+- Current period highlighted; past / now / next sections
+- Habit types: checkbox, counter, duration, scale, notes
+- Multi-group habits, stacking (“after …”), skip when needed
+- Quick capture inbox + workout session logger for exercise routines
+
+### Path
+- **Dreamline wizard** — Having / Being / Doing across 6- and 12-month horizons
+- Goal cards with progress, confidence, first steps, and notes
+- **“Am I on path?”** alignment check-ins (vision · energy · identity)
+- Mindset anchors tied to Being goals
+
+### History
+- Streaks, weekly bars, Anki-style heatmap
+- Tag-based trends (Supplements, Movement, Sleep, …)
+- Workout session history
+
+### Manage
+| Section | What it does |
+|--------|----------------|
+| **Daily Planner** | Sleep spine (wake / bed / wind-down) + **24h timeline** editor in one place |
+| **Timeline groups** | Catalog of when you do things (Morning, Focus, Bedtime, Sleep, …) |
+| **Reminders** | Master switch, per-reminder toggles, times **aligned to your schedule** |
+| **Tags** | What it is for History (independent of timeline group) |
+| **Exercise routines** | Blueprint templates + custom workouts |
+| **Backup / Archive** | JSON export, restore archived groups and habits |
+
+### Widget & notifications
+- Home-screen widget: current group, missed items, what’s next
+- Exact alarms for group / daily-review reminders (reschedule on boot)
+- Deep links from notifications and widget into the app
+
+### Appearance
+- Background: Dark · AMOLED · Light
+- Accent: Green · Blue · Orange · Purple · Slate · Teal · Red
+- Guided tour + welcome guide anytime from Settings
+
+---
 
 ## Using Steady
-- **First run**: You'll see a short onboarding explaining groups, the widget, and key flows.
-- **Today tab**: Tap habits to log. The header shows today's completion circle. It includes:
-  - A 7-day weekly tracker row.
-  - Trend arrow (▲ / ▼) comparing to yesterday.
-  - Tap the card to expand and see weekly % circles for every group.
-- **Settings**: Tap the gear icon (top right) to switch color schemes instantly (Green / Blue / Orange / Purple / Slate).
-- **Help / Tour**: Tap the ⓘ icon next to the gear (or Settings → "Guided tour" / "Welcome guide") to run the interactive onboarding that takes you around the app: explains the progress bar, switches tabs for you, details every screen, gestures (tap/log/long-press), reminders, widget, and backup.
-- **Manage tab**: Create/edit groups and habits here (including defaults + units for counters/durations). Set per-group reminders. Use "Export Backup" to save a full JSON (groups + habits + history). Scroll to the Archived section to restore anything.
-- **No quick + button**: We removed the floating action button. Add things deliberately from Manage.
-- **Widget**: Add from your launcher. It shows the current time-of-day group, missed items from the previous, and a peek at the upcoming group. Taps open the app (or toggle simple checkboxes directly in some cases).
 
-Tip: Everything is logged with exact timestamps. Export regularly for backup or analysis.
+1. **First run** — short onboarding; starter high-ROI habits are preloaded.
+2. **Today** — tap to log; expand the header for weekly trends and per-group averages.
+3. **Path** — run **Start Dreamline** to define dreams; check in with **Am I on path?**
+4. **Manage → Daily Planner** — set wake/bed, apply sleep-centered day, edit the 24h timeline.
+5. **Manage → Reminders** — enable notifications; use **Align times to schedule** after changing the planner.
+6. **Settings (gear)** — theme only; help/tour lives there too.
+7. **Export** — Manage → Backup → Export Backup (works even with empty history).
 
-## Build & Run (Artix Linux CLI, no Android Studio)
+Tips:
+- Grant **notifications** and **exact alarms** (Android 12+) for reliable reminders.
+- Add the **Steady widget** from your launcher’s widget picker.
+- Archive instead of delete so history stays intact.
+
+---
+
+## Build & run (CLI)
 
 ```bash
-# 1. Packages
+# Packages (Arch / Artix example)
 sudo pacman -S --needed jdk17-openjdk unzip wget curl git
 
-# 2. SDK (one time)
+# One-time SDK setup
 ./scripts/setup-android-sdk.sh
 
-# 3. Build
+# Debug APK
 ./build.sh clean assembleDebug
+# → app/build/outputs/apk/debug/app-debug.apk
+
+# Install on a connected device
+./build.sh installDebug
 ```
 
-APK: `app/build/outputs/apk/debug/app-debug.apk`
+Or with Gradle directly:
 
-Install:
 ```bash
-./build.sh installDebug   # (device via adb)
+./gradlew assembleDebug
+./gradlew testDebugUnitTest
 ```
 
-After install:
-- Grant notification permission when prompted.
-- For exact alarms (Android 12+): if a toast or card appears, go to system Settings → Apps → Steady → Alarms & reminders → Allow.
-- Add the Steady widget from your launcher’s widget picker for the best experience.
-- The first time you open the app you'll see onboarding.
-- Use the gear icon for color themes. Tap the ⓘ (info) icon for the interactive guided tour / onboarding anytime. All adds/edits happen in the Manage tab. Export your data from Manage anytime.
+---
 
-## Widget + Reminders
-- Widget automatically shows the active period group (morning before noon, etc.).
-- Reminders configured in Manage fire notifications that deep-link into the app.
-- Boot-safe (reschedules on restart).
+## Project layout
 
-## Future iOS / Portability
-Core models (Group, Habit, HabitEntry, Reminder, AppData) and the `HabitRepository` interface are intentionally simple and serializable. Date handling uses kotlinx-datetime. The Android-specific pieces (AlarmManager, widgets, DataStore) live only in the Android impl.
+```
+app/src/main/java/com/steady/habittracker/
+  data/          # models, HabitDomain (pure), repository / DataStore
+  reminders/     # AlarmManager, BootReceiver, notifications
+  ui/            # Compose screens (Today, Path, History, Manage, wizards)
+  widget/        # App widget models + rendering
+```
 
-When ready, a KMP `:shared` module can be extracted in <1 day.
+- **Schema** versioned JSON in DataStore (current schema v8: routines, goals, path checks).
+- **Domain** logic is unit-tested under `app/src/test/`.
 
-## Tips for best results (matching evidence-based + user patterns)
-- Use groups for time-of-day to keep cognitive load low.
-- Use notes on Mindset/Review habits — they become powerful when you look back.
-- Set realistic reminders and actually use the widget for 1-tap access.
-- Streaks are forgiving (≥60% or a few items logged counts).
+---
 
-Built to be the simple, motivating daily driver that TrackAndGraph was missing.
+## Privacy
+
+All data stays on device. No analytics SDKs, no accounts. Export is a local JSON backup you control.
+
+---
+
+## Portability
+
+Core models (`Group`, `Habit`, `HabitEntry`, `Schedule`, `GoalStory`, `AppData`) and domain helpers are intentionally platform-light. Android-specific pieces (AlarmManager, widgets, DataStore) sit in Android modules so a KMP shared core can be extracted later.
+
+---
+
+## License / contribution
+
+Open development on GitHub. Issues and PRs welcome for bugs, UX polish, and evidence-backed habit defaults.
+
+---
+
+<p align="center">
+  <img src="docs/app-icon.png" alt="Steady" width="64" height="64" /><br/>
+  <sub>Stay on path. Stay steady.</sub>
+</p>

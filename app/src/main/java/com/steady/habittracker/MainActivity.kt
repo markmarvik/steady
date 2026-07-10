@@ -597,6 +597,8 @@ fun SteadyApp(
                         onDeleteHabit = viewModel::deleteHabit,
                         onSetReminder = viewModel::setReminder,
                         onToggleReminder = viewModel::toggleReminder,
+                        onSetRemindersMasterEnabled = viewModel::setRemindersMasterEnabled,
+                        onAlignRemindersToSchedule = viewModel::alignRemindersToSchedule,
                         onArchiveGroup = { viewModel.deleteGroup(it) },
                         onExportCsv = { exportLauncher.launch("steady_backup_${java.time.LocalDate.now()}.json") },
                         onImportCsv = { },
@@ -609,8 +611,7 @@ fun SteadyApp(
                         onSetActiveSchedule = viewModel::setActiveSchedule,
                         onUpdateScheduleBlocks = viewModel::updateScheduleBlocks,
                         onAddTag = viewModel::addTag,
-                        onUpdateSleep = viewModel::updateSleepSettings,
-                        onApplySleepSchedule = viewModel::applySleepAnchoredSchedule,
+                        onApplySleepSchedule = { sleep -> viewModel.applySleepAnchoredSchedule(sleep) },
                         onSaveRoutine = viewModel::saveRoutine,
                         onArchiveRoutine = viewModel::archiveRoutine,
                         onLoadBlueprintRoutines = viewModel::loadBlueprintRoutines,
@@ -702,78 +703,11 @@ fun SteadyApp(
             title = { Text("Settings") },
             text = {
                 Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
-                    // --- Reminders ---
-                    Text("Reminders", fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurface, fontSize = 13.sp)
-                    Spacer(Modifier.height(6.dp))
-                    Row(
-                        Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Box(Modifier.weight(1f)) {
-                            Column {
-                                Text("Habit reminders", color = MaterialTheme.colorScheme.onSurface, fontSize = 13.sp)
-                                Text("Regular notifications for your routines", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 10.sp)
-                            }
-                        }
-                        Switch(
-                            checked = appData.remindersMasterEnabled,
-                            onCheckedChange = { viewModel.setRemindersMasterEnabled(it) }
-                        )
-                    }
-                    Spacer(Modifier.height(4.dp))
-                    appData.reminders.sortedBy { it.time }.forEach { rem ->
-                        val gName = rem.groupId?.let { gid -> appData.groups.find { it.id == gid }?.name } ?: "Daily Review"
-                        Row(
-                            Modifier.fillMaxWidth().padding(vertical = 2.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Box(Modifier.weight(1f)) {
-                                Column {
-                                    Text("$gName - ${rem.time}", color = MaterialTheme.colorScheme.onSurface, fontSize = 12.sp)
-                                    Text("${rem.days.size} day(s)/week", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 10.sp)
-                                }
-                            }
-                            Switch(
-                                checked = rem.enabled && appData.remindersMasterEnabled,
-                                enabled = appData.remindersMasterEnabled,
-                                onCheckedChange = { viewModel.toggleReminder(rem.id) }
-                            )
-                        }
-                    }
-                    Text("Edit times in Manage > open a group > bell icon.", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 10.sp)
-                    Spacer(Modifier.height(6.dp))
-                    val notifOk = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                        ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
-                    } else true
-                    val am = context.getSystemService(AlarmManager::class.java)
-                    val exactOk = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                        am?.canScheduleExactAlarms() == true
-                    } else true
-                    if (!notifOk) {
-                        TextButton(onClick = {
-                            notifPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
-                        }) { Text("Allow notifications", fontSize = 12.sp) }
-                    }
-                    if (!exactOk) {
-                        TextButton(onClick = {
-                            try {
-                                val i = Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM)
-                                i.data = Uri.parse("package:${context.packageName}")
-                                context.startActivity(i)
-                            } catch (_: Exception) {
-                                try {
-                                    val i2 = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
-                                    i2.data = Uri.parse("package:${context.packageName}")
-                                    context.startActivity(i2)
-                                } catch (_: Exception) {}
-                            }
-                        }) { Text("Allow exact alarms", fontSize = 12.sp) }
-                    }
-                    if (notifOk && exactOk) {
-                        Text("Notifications & exact alarms: OK", color = MaterialTheme.colorScheme.primary, fontSize = 10.sp)
-                    }
-
+                    Text(
+                        "Reminders live in Manage → Reminders (times follow your Daily Planner).",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        fontSize = 11.sp
+                    )
                     Spacer(Modifier.height(16.dp))
                     Text("Background Mode (OLED / Light / Dark)", fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurface, fontSize = 13.sp)
                     Spacer(Modifier.height(6.dp))

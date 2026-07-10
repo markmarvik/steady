@@ -46,9 +46,9 @@ import java.time.LocalDate
 
 /**
  * Manage = catalog workshop:
- * - Groups = when on the 24h timeline (Morning, Focus, Bedtime, Sleep)
- * - Tags = what it is for History (Supplements, Movement…)
- * - Sleep settings anchor Morning + Bedtime to bed/wake
+ * - Daily Planner = sleep spine + 24h timeline
+ * - Groups = when on the timeline; Tags = what for History
+ * - Reminders aligned to schedule
  */
 @Composable
 fun ManageScreen(
@@ -68,6 +68,8 @@ fun ManageScreen(
     onDeleteHabit: (String) -> Unit,  // now archives
     onSetReminder: (Reminder) -> Unit,
     onToggleReminder: (String) -> Unit,
+    onSetRemindersMasterEnabled: (Boolean) -> Unit = {},
+    onAlignRemindersToSchedule: () -> Unit = {},
     onArchiveGroup: (String) -> Unit = {},
     onExportCsv: () -> Unit = {},
     onImportCsv: () -> Unit = {},
@@ -80,8 +82,7 @@ fun ManageScreen(
     onSetActiveSchedule: (String?) -> Unit = {},
     onUpdateScheduleBlocks: (scheduleId: String, blocks: List<TimeBlock>) -> Unit = { _, _ -> },
     onAddTag: (String) -> Unit = {},
-    onUpdateSleep: (SleepSettings) -> Unit = {},
-    onApplySleepSchedule: () -> Unit = {},
+    onApplySleepSchedule: (SleepSettings) -> Unit = {},
     onSaveRoutine: (com.steady.habittracker.data.ExerciseRoutine) -> Unit = {},
     onArchiveRoutine: (String) -> Unit = {},
     onLoadBlueprintRoutines: () -> Unit = {},
@@ -92,7 +93,8 @@ fun ManageScreen(
     var selectedGroupId by remember { mutableStateOf<String?>(null) }
     var showAddGroup by remember { mutableStateOf(false) }
     var showAddHabitFor by remember { mutableStateOf<String?>(null) }
-    var showReminderFor by remember { mutableStateOf<Group?>(null) }
+    var showReminderDialog by remember { mutableStateOf(false) }
+    var reminderDialogGroup by remember { mutableStateOf<Group?>(null) }
     var showEditHabit by remember { mutableStateOf<Habit?>(null) }
     var moveHabitId by remember { mutableStateOf<String?>(null) }
     var stackHabitId by remember { mutableStateOf<String?>(null) }
@@ -113,44 +115,64 @@ fun ManageScreen(
 
     Column(modifier = Modifier.fillMaxSize()) {
         if (selectedGroupId == null) {
-            // Group list header (fixed)
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Column(Modifier.weight(1f)) {
-                    Text("Timeline groups", color = MaterialTheme.colorScheme.primary, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
-                    Text("When you do it · Tags = what it is", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 10.sp)
-                }
-                TextButton(onClick = { showAddGroup = true }) {
-                    Icon(Icons.Default.Add, null, tint = MaterialTheme.colorScheme.primary)
-                    Text("Group", color = MaterialTheme.colorScheme.primary, fontSize = 12.sp)
-                }
+            Column(Modifier.fillMaxWidth().padding(bottom = 4.dp)) {
+                Text("Manage", color = MaterialTheme.colorScheme.primary, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                Text(
+                    "Daily plan, groups, reminders, tags",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontSize = 11.sp
+                )
             }
 
-            // Scrollable content: groups + sleep + tags + scheduling + backup + archived
             LazyColumn(
                 modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
+                verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                // --- Sleep spine (Bryan Johnson priority) ---
                 item {
-                    SleepSettingsCard(
-                        sleep = appData.sleep,
+                    DailyPlannerCard(
+                        appData = appData,
                         groups = activeGroups,
-                        onUpdate = onUpdateSleep,
-                        onApply = onApplySleepSchedule
+                        schedules = schedules,
+                        activeScheduleId = activeScheduleId,
+                        isEditingSchedule = isEditingSchedule,
+                        editBlocks = editBlocks,
+                        onEditBlocksChange = { editBlocks = it },
+                        onToggleEditing = {
+                            if (!isEditingSchedule) {
+                                editBlocks = schedules.firstOrNull { it.id == activeScheduleId }?.timeBlocks
+                                    ?: emptyList()
+                            }
+                            isEditingSchedule = !isEditingSchedule
+                        },
+                        onCloseEditing = { isEditingSchedule = false },
+                        onApplySleep = onApplySleepSchedule,
+                        onSetActiveSchedule = onSetActiveSchedule,
+                        onUpdateScheduleBlocks = onUpdateScheduleBlocks,
+                        onApplySchedulePreset = onApplySchedulePreset
                     )
                 }
 
-                items(activeGroups) { group ->
+                item {
+                    ManageSectionHeader(
+                        title = "Timeline groups",
+                        subtitle = "When you do it · tap to edit items",
+                        action = {
+                            TextButton(onClick = { showAddGroup = true }) {
+                                Icon(Icons.Default.Add, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(16.dp))
+                                Spacer(Modifier.width(2.dp))
+                                Text("Group", color = MaterialTheme.colorScheme.primary, fontSize = 12.sp)
+                            }
+                        }
+                    )
+                }
+
+                items(activeGroups, key = { it.id }) { group ->
                     val subCount = appData.groups.count { it.parentId == group.id && !it.archived }
                     val count = appData.habits.count { it.groupId == group.id && !it.archived }
                     val linked = when (group.id) {
-                        appData.sleep.morningGroupId -> " · linked to wake"
-                        appData.sleep.bedtimeGroupId -> " · linked to bed"
-                        appData.sleep.sleepGroupId -> " · overnight sleep"
+                        appData.sleep.morningGroupId -> " · wake"
+                        appData.sleep.bedtimeGroupId -> " · bed"
+                        appData.sleep.sleepGroupId -> " · sleep"
                         else -> ""
                     }
                     Card(
@@ -174,240 +196,25 @@ fun ManageScreen(
                     }
                 }
 
-                // --- Category tags ---
+                item {
+                    RemindersCard(
+                        appData = appData,
+                        onToggleMaster = onSetRemindersMasterEnabled,
+                        onToggleReminder = onToggleReminder,
+                        onEditReminder = { rem ->
+                            reminderDialogGroup = rem.groupId?.let { gid -> appData.groups.find { it.id == gid } }
+                            showReminderDialog = true
+                        },
+                        onAlignToSchedule = onAlignRemindersToSchedule
+                    )
+                }
+
                 item {
                     TagManagerCard(
                         tags = HabitDomain.getActiveTags(appData),
                         habits = appData.habits.filter { !it.archived },
                         onAddTag = onAddTag
                     )
-                }
-
-                // Daily group scheduling (advanced time blocks for current group/widget; key for reminders & 24h)
-                item {
-                    Spacer(Modifier.height(12.dp))
-                    Text("24h Timeline (groups on the clock)", color = MaterialTheme.colorScheme.primary, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-                    val activeSched = schedules.firstOrNull { it.id == activeScheduleId }
-                    if (activeSched != null) {
-                        Text("Active: ${activeSched.name} (${activeSched.timeBlocks.size} blocks)", color = MaterialTheme.colorScheme.primary, fontSize = 11.sp)
-                    } else {
-                        Text("Using legacy time hints (no advanced schedule active)", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp)
-                    }
-
-                    // Focus on custom schedules (no hardcoded presets per UX feedback)
-                    Text("Create and edit your own 24-hour schedules below. Add blocks, assign groups (incl. Sleep), set custom colors.", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 10.sp)
-
-                    val allActiveGroups = activeGroups
-
-                    Spacer(Modifier.height(8.dp))
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                        TextButton(onClick = {
-                            if (!isEditingSchedule) {
-                                editBlocks = activeSched?.timeBlocks ?: emptyList()
-                            }
-                            isEditingSchedule = !isEditingSchedule
-                        }) {
-                            Text(if (isEditingSchedule) "Close Editor" else "Edit 24h Timeline", color = MaterialTheme.colorScheme.primary, fontSize = 12.sp)
-                        }
-                        if (activeSched != null && !isEditingSchedule) {
-                            OutlinedButton(
-                                onClick = { onSetActiveSchedule(null) },
-                                modifier = Modifier.height(36.dp)
-                            ) {
-                                Text("Deactivate", fontSize = 12.sp)
-                            }
-                        }
-                    }
-
-                    if (isEditingSchedule) {
-                        // Visual 24h timeline (Canvas)
-                        val timelineHeight = 48.dp
-                        Card(
-                            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
-                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-                            shape = RoundedCornerShape(8.dp)
-                        ) {
-                            Column(Modifier.padding(8.dp)) {
-                                Text("24h Timeline", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 10.sp)
-                                Spacer(Modifier.height(4.dp))
-                                val accent = MaterialTheme.colorScheme.primary
-                                Canvas(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .height(timelineHeight)
-                                        .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(4.dp))
-                                ) {
-                                    val w = size.width
-                                    val h = size.height
-                                    for (hIdx in 0..24 step 4) {
-                                        val x = (hIdx / 24f) * w
-                                        drawLine(color = Color.Gray.copy(alpha = 0.5f), start = Offset(x, 0f), end = Offset(x, h), strokeWidth = 1f)
-                                    }
-                                    editBlocks.forEachIndexed { idx, blk ->
-                                        val sMin = parseHhMmToMin(blk.start) ?: 0
-                                        val eMin = parseHhMmToMin(blk.end) ?: (24*60)
-                                        val startFrac = (sMin / (24f * 60)).coerceIn(0f, 1f)
-                                        val endFrac = (eMin / (24f * 60)).coerceIn(0f, 1f)
-                                        val blockColor = blk.color?.let { Color(it) } ?: accent
-                                        if (sMin < eMin) {
-                                            // normal non-overnight
-                                            val bw = ((endFrac - startFrac).coerceAtLeast(0.02f)) * w
-                                            val bx = startFrac * w
-                                            drawRoundRect(
-                                                color = blockColor.copy(alpha = 0.75f),
-                                                topLeft = Offset(bx, 4f),
-                                                size = Size(bw, h - 8f),
-                                                cornerRadius = CornerRadius(3.dp.toPx())
-                                            )
-                                        } else {
-                                            // overnight: draw tail (start->24) + head (0->end)
-                                            // tail
-                                            val tailW = (1f - startFrac).coerceAtLeast(0.01f) * w
-                                            drawRoundRect(
-                                                color = blockColor.copy(alpha = 0.75f),
-                                                topLeft = Offset(startFrac * w, 4f),
-                                                size = Size(tailW, h - 8f),
-                                                cornerRadius = CornerRadius(3.dp.toPx())
-                                            )
-                                            // head from midnight
-                                            val headW = endFrac.coerceAtLeast(0.01f) * w
-                                            drawRoundRect(
-                                                color = blockColor.copy(alpha = 0.75f),
-                                                topLeft = Offset(0f, 4f),
-                                                size = Size(headW, h - 8f),
-                                                cornerRadius = CornerRadius(3.dp.toPx())
-                                            )
-                                        }
-                                    }
-                                }
-                                Row(Modifier.fillMaxWidth().padding(top = 2.dp), horizontalArrangement = Arrangement.SpaceBetween) {
-                                    Text("00", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 8.sp)
-                                    Text("06", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 8.sp)
-                                    Text("12", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 8.sp)
-                                    Text("18", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 8.sp)
-                                    Text("24", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 8.sp)
-                                }
-                            }
-                        }
-
-                        Text("Time Blocks (HH:mm; overnight ok)", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 10.sp)
-                        // Use Column + regular for (body stays in @Composable context)
-                        Column {
-                            // Color palette for custom segment colors (persisted)
-                            val colorPalette = listOf(
-                                0xFF22C55E.toInt(), // green
-                                0xFF3B82F6.toInt(), // blue
-                                0xFFF97316.toInt(), // orange
-                                0xFF8B5CF6.toInt(), // purple
-                                0xFF14B8A6.toInt(), // teal
-                                0xFFEF4444.toInt(), // red
-                                0xFFFBBF24.toInt(), // amber
-                                0xFFEC4899.toInt(), // pink
-                            )
-                            for (index in editBlocks.indices) {
-                                val block = editBlocks[index]
-                                Row(
-                                    modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    OutlinedTextField(value = block.start, onValueChange = { nv -> if (nv.length <= 5) { val m = editBlocks.toMutableList(); m[index] = block.copy(start = nv); editBlocks = m } }, label = { Text("Start") }, modifier = Modifier.width(78.dp), singleLine = true, textStyle = androidx.compose.ui.text.TextStyle(fontSize = 11.sp))
-                                    Spacer(Modifier.width(3.dp))
-                                    OutlinedTextField(value = block.end, onValueChange = { nv -> if (nv.length <= 5) { val m = editBlocks.toMutableList(); m[index] = block.copy(end = nv); editBlocks = m } }, label = { Text("End") }, modifier = Modifier.width(78.dp), singleLine = true, textStyle = androidx.compose.ui.text.TextStyle(fontSize = 11.sp))
-                                    Spacer(Modifier.width(4.dp))
-                                    // Per-block color swatch (click to cycle)
-                                    val currentColor = block.color ?: MaterialTheme.colorScheme.primary.value.toInt()
-                                    Box(
-                                        modifier = Modifier
-                                            .size(22.dp)
-                                            .background(Color(currentColor), CircleShape)
-                                            .border(1.dp, MaterialTheme.colorScheme.outline, CircleShape)
-                                            .clickable {
-                                                val curIdx = colorPalette.indexOfFirst { it == (block.color ?: -1) }.coerceAtLeast(-1)
-                                                val nextColor = colorPalette[(curIdx + 1) % colorPalette.size]
-                                                val m = editBlocks.toMutableList()
-                                                m[index] = block.copy(color = nextColor)
-                                                editBlocks = m
-                                            }
-                                    )
-                                    Spacer(Modifier.width(4.dp))
-                                    val grp = allActiveGroups.find { it.id == block.groupId }
-                                    Box(modifier = Modifier.weight(1f).background(MaterialTheme.colorScheme.surface, RoundedCornerShape(6.dp)).clickable {
-                                        val cur = allActiveGroups.indexOfFirst { it.id == block.groupId }.coerceAtLeast(0)
-                                        val nextG = allActiveGroups.getOrNull((cur + 1) % allActiveGroups.size)
-                                        if (nextG != null) { val m = editBlocks.toMutableList(); m[index] = block.copy(groupId = nextG.id); editBlocks = m }
-                                    }.padding(6.dp)) {
-                                        Text(grp?.name ?: "?", color = MaterialTheme.colorScheme.onSurface, fontSize = 10.sp, maxLines = 1)
-                                    }
-                                    IconButton(onClick = { val m = editBlocks.toMutableList(); m.removeAt(index); editBlocks = m }, modifier = Modifier.size(26.dp)) {
-                                        Icon(Icons.Default.Close, null, tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(14.dp))
-                                    }
-                                }
-                            }
-                        }
-
-                        // Wrap so labels are not clipped; allow horizontal scroll on small screens
-                        Row(
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(top = 8.dp, bottom = 4.dp)
-                        ) {
-                            OutlinedButton(
-                                onClick = {
-                                    val fg = allActiveGroups.firstOrNull()?.id ?: ""
-                                    editBlocks = editBlocks + TimeBlock("09:00", "10:00", fg)
-                                },
-                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
-                                modifier = Modifier.heightIn(min = 40.dp)
-                            ) { Text("+ Block", fontSize = 12.sp) }
-                            Button(
-                                onClick = {
-                                    val sId = appData.sleep.sleepGroupId
-                                        ?: allActiveGroups.firstOrNull { it.timeHint == "SLEEP" || it.name.equals("Sleep", true) }?.id
-                                    if (sId != null) {
-                                        val bed = appData.sleep.bedTime
-                                        val wake = appData.sleep.wakeTime
-                                        editBlocks = editBlocks + TimeBlock(bed, wake, sId, color = 0xFF64748B.toInt())
-                                    } else {
-                                        onApplySleepSchedule()
-                                    }
-                                },
-                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
-                                modifier = Modifier.heightIn(min = 40.dp)
-                            ) { Text("+ Sleep", fontSize = 12.sp) }
-                        }
-                        Row(
-                            horizontalArrangement = Arrangement.End,
-                            modifier = Modifier.fillMaxWidth().padding(bottom = 4.dp)
-                        ) {
-                            TextButton(
-                                onClick = { isEditingSchedule = false },
-                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)
-                            ) { Text("Cancel", fontSize = 12.sp) }
-                            Button(
-                                onClick = {
-                                    val cleaned = editBlocks.filter { it.start.contains(":") && it.end.contains(":") && it.groupId.isNotBlank() }
-                                        .map { it.copy(start = normalizeTime(it.start), end = normalizeTime(it.end)) }
-                                    if (activeSched != null) {
-                                        onUpdateScheduleBlocks(activeSched.id, cleaned)
-                                    } else {
-                                        onApplySchedulePreset("Custom", cleaned)
-                                    }
-                                    isEditingSchedule = false
-                                },
-                                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
-                                modifier = Modifier.heightIn(min = 40.dp)
-                            ) { Text("Apply", fontSize = 12.sp) }
-                        }
-                    } else if (activeSched != null && activeSched.timeBlocks.isNotEmpty()) {
-                        Row(Modifier.padding(top = 2.dp)) {
-                            val bs = activeSched.timeBlocks.take(3)
-                            if (bs.isNotEmpty()) { val b = bs[0]; val gn = allActiveGroups.find { it.id == b.groupId }?.name?.take(6) ?: "?"; Text("${b.start}-${b.end} ${gn}  ", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 9.sp) }
-                            if (bs.size > 1) { val b = bs[1]; val gn = allActiveGroups.find { it.id == b.groupId }?.name?.take(6) ?: "?"; Text("${b.start}-${b.end} ${gn}  ", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 9.sp) }
-                            if (bs.size > 2) { val b = bs[2]; val gn = allActiveGroups.find { it.id == b.groupId }?.name?.take(6) ?: "?"; Text("${b.start}-${b.end} ${gn}  ", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 9.sp) }
-                        }
-                    }
-                    Text("Editor updates schedule. Sleep group + overnight supported for resolveCurrentGroup/widget.", color = Color(0xFF475569), fontSize = 9.sp)
                 }
 
                 // Exercise routines (#20–#22)
@@ -665,7 +472,10 @@ fun ManageScreen(
 
             val rem = appData.reminders.firstOrNull { it.groupId == group.id }
             Row {
-                IconButton(onClick = { showReminderFor = group }) {
+                IconButton(onClick = {
+                    reminderDialogGroup = group
+                    showReminderDialog = true
+                }) {
                     Icon(Icons.Default.Notifications, null, tint = if (rem?.enabled == true) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
                 }
                 if (rem != null) Text("${rem.time} (${rem.days.size}d)", color = MaterialTheme.colorScheme.primary, fontSize = 12.sp)
@@ -688,9 +498,20 @@ fun ManageScreen(
             onAdd = onAddHabit
         )
     }
-    showReminderFor?.let { g ->
-        val ex = appData.reminders.firstOrNull { it.groupId == g.id }
-        ReminderDialog(g, ex, { showReminderFor = null }, onSetReminder)
+    if (showReminderDialog) {
+        val g = reminderDialogGroup
+        val ex = if (g != null) {
+            appData.reminders.firstOrNull { it.groupId == g.id }
+        } else {
+            appData.reminders.firstOrNull { it.groupId == null }
+        }
+        ReminderDialog(
+            group = g,
+            existing = ex,
+            appData = appData,
+            onDismiss = { showReminderDialog = false },
+            onSave = onSetReminder
+        )
     }
     showEditHabit?.let { h ->
         EditHabitDialog(
@@ -1183,90 +1004,6 @@ private fun TagChipRow(tags: List<Tag>, selected: Set<String>, onToggle: (String
                         label = { Text(t.name, fontSize = 10.sp) }
                     )
                 }
-            }
-        }
-    }
-}
-
-@Composable
-private fun SleepSettingsCard(
-    sleep: SleepSettings,
-    groups: List<Group>,
-    onUpdate: (SleepSettings) -> Unit,
-    onApply: () -> Unit
-) {
-    var bed by remember(sleep.bedTime) { mutableStateOf(sleep.bedTime) }
-    var wake by remember(sleep.wakeTime) { mutableStateOf(sleep.wakeTime) }
-    var wind by remember(sleep.windDownMinutes) { mutableIntStateOf(sleep.windDownMinutes) }
-    var mornMin by remember(sleep.morningMinutes) { mutableIntStateOf(sleep.morningMinutes) }
-
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        shape = RoundedCornerShape(12.dp)
-    ) {
-        Column(Modifier.padding(12.dp)) {
-            Text("Sleep (day spine)", color = MaterialTheme.colorScheme.primary, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-            Text(
-                "Morning starts at wake · Bedtime ends at bed · Sleep fills overnight. Protect sleep first.",
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                fontSize = 10.sp
-            )
-            Spacer(Modifier.height(8.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedTextField(
-                    value = wake,
-                    onValueChange = { if (it.length <= 5) wake = it },
-                    label = { Text("Wake") },
-                    modifier = Modifier.weight(1f),
-                    singleLine = true,
-                    textStyle = androidx.compose.ui.text.TextStyle(fontSize = 13.sp)
-                )
-                OutlinedTextField(
-                    value = bed,
-                    onValueChange = { if (it.length <= 5) bed = it },
-                    label = { Text("Bed") },
-                    modifier = Modifier.weight(1f),
-                    singleLine = true,
-                    textStyle = androidx.compose.ui.text.TextStyle(fontSize = 13.sp)
-                )
-            }
-            Spacer(Modifier.height(6.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text("Morning ${mornMin}m", fontSize = 11.sp, modifier = Modifier.weight(1f))
-                TextButton(onClick = { mornMin = (mornMin - 15).coerceAtLeast(30) }) { Text("−", fontSize = 12.sp) }
-                TextButton(onClick = { mornMin = (mornMin + 15).coerceAtMost(180) }) { Text("+", fontSize = 12.sp) }
-            }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text("Wind-down ${wind}m", fontSize = 11.sp, modifier = Modifier.weight(1f))
-                TextButton(onClick = { wind = (wind - 15).coerceAtLeast(15) }) { Text("−", fontSize = 12.sp) }
-                TextButton(onClick = { wind = (wind + 15).coerceAtMost(180) }) { Text("+", fontSize = 12.sp) }
-            }
-            val mornName = groups.find { it.id == sleep.morningGroupId }?.name ?: "Morning"
-            val bedName = groups.find { it.id == sleep.bedtimeGroupId }?.name ?: "Bedtime"
-            Text(
-                "Linked: $mornName @ wake · $bedName before bed · Sleep overnight",
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                fontSize = 10.sp,
-                modifier = Modifier.padding(top = 4.dp)
-            )
-            Spacer(Modifier.height(8.dp))
-            Button(
-                onClick = {
-                    onUpdate(
-                        sleep.copy(
-                            bedTime = normalizeTime(bed),
-                            wakeTime = normalizeTime(wake),
-                            windDownMinutes = wind,
-                            morningMinutes = mornMin
-                        )
-                    )
-                    onApply()
-                },
-                modifier = Modifier.fillMaxWidth(),
-                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
-            ) {
-                Text("Apply sleep-centered day", fontSize = 12.sp)
             }
         }
     }

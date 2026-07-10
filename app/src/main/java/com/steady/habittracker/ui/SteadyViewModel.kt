@@ -240,11 +240,14 @@ class SteadyViewModel(
 
     /**
      * Apply sleep spine: ensure Morning / Bedtime / Sleep groups exist, rebuild 24h blocks
-     * from bed/wake, activate schedule. Preserves middle (Focus) blocks when possible.
+     * from bed/wake, activate schedule, and align reminder times to the new blocks.
+     * [sleep] when non-null is saved first (avoids race with a separate updateSleepSettings call).
      */
-    fun applySleepAnchoredSchedule() {
+    fun applySleepAnchoredSchedule(sleep: SleepSettings? = null) {
         viewModelScope.launch {
-            var current = HabitDomain.ensureSleepLinkedGroups(appData.value)
+            var current = appData.value
+            if (sleep != null) current = current.withSleep(sleep)
+            current = HabitDomain.ensureSleepLinkedGroups(current)
             val s = current.sleep
             val morn = s.morningGroupId ?: return@launch
             val bed = s.bedtimeGroupId ?: return@launch
@@ -263,8 +266,18 @@ class SteadyViewModel(
                 current.withAddedSchedule(schedule)
             }
             current = current.withActiveSchedule(schedule.id).withSleep(s)
+            current = HabitDomain.withRemindersAlignedToSchedule(current)
             repository.saveData(current)
             refreshWidget(current)
+            rescheduleReminders(current)
+        }
+    }
+
+    /** Re-derive all reminder times from the active schedule / sleep spine. */
+    fun alignRemindersToSchedule() {
+        viewModelScope.launch {
+            val current = HabitDomain.withRemindersAlignedToSchedule(appData.value)
+            repository.saveData(current)
             rescheduleReminders(current)
         }
     }
@@ -537,7 +550,11 @@ class SteadyViewModel(
             val current = appData.value
             val sched = current.schedules.find { it.id == scheduleId } ?: return@launch
             val updated = sched.copy(timeBlocks = blocks)
-            repository.saveData(current.withUpdatedSchedule(updated))
+            var next = current.withUpdatedSchedule(updated)
+            next = HabitDomain.withRemindersAlignedToSchedule(next)
+            repository.saveData(next)
+            refreshWidget(next)
+            rescheduleReminders(next)
         }
     }
 
@@ -702,7 +719,10 @@ class SteadyViewModel(
             }
             var newData = if (existing != null) current.withUpdatedSchedule(schedule) else current.withAddedSchedule(schedule)
             newData = newData.withActiveSchedule(schedule.id)
+            newData = HabitDomain.withRemindersAlignedToSchedule(newData)
             repository.saveData(newData)
+            refreshWidget(newData)
+            rescheduleReminders(newData)
         }
     }
 }

@@ -55,15 +55,15 @@ val TOUR_STEPS = listOf(
     ),
     TourStep(
         "Manage Tab — Full control",
-        "• Groups = when on the timeline (Morning, Focus, Bedtime, Sleep)\n• Tags = what it is for History (Supplements, Movement…) — move items freely\n• Exercise routines + Blueprint templates\n• Sleep card, reminders, export backup"
+        "• Daily Planner = sleep times + 24h timeline in one place\n• Groups = when on the timeline (Morning, Focus, Bedtime, Sleep)\n• Reminders = notifications that follow your schedule\n• Tags = what it is for History · exercise routines · export backup"
     ),
     TourStep(
         "Settings (gear icon)",
-        "Tap the gear any time to switch:\n• Background: Dark / AMOLED (pure black) / Light\n• Accent color: Green, Blue, Orange, Purple, Slate, Teal, Red\n\nChanges apply instantly everywhere including the widget."
+        "Tap the gear any time to switch:\n• Background: Dark / AMOLED (pure black) / Light\n• Accent color: Green, Blue, Orange, Purple, Slate, Teal, Red\n\nReminders are under Manage. Theme changes apply instantly including the widget."
     ),
     TourStep(
         "Widget & Reminders",
-        "Add the Steady widget to your home screen — it shows exactly the right group for right now + what you missed + what's next.\n\nReminders are configured in Manage per group. They fire as notifications that open the app.\n\nTip: Grant notification + exact alarm permissions for best results."
+        "Add the Steady widget to your home screen — it shows exactly the right group for right now + what you missed + what's next.\n\nReminders are in Manage → Reminders. Times align to your Daily Planner (wake, wind-down, blocks). Grant notification + exact alarm permissions for best results."
     ),
     TourStep(
         "You're ready!",

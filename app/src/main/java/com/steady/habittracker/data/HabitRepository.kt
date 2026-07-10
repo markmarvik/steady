@@ -191,29 +191,48 @@ class AndroidHabitRepository(private val context: Context) : HabitRepository {
         return HabitDomain.minutesToHhMm(base)
     }
 
-    private fun defaultReminders(groups: List<Group>): List<Reminder> = listOf(
-        Reminder(
-            id = "r_morn",
-            groupId = groups.firstOrNull { it.timeHint == "MORNING" }?.id,
-            time = "08:30",
-            days = setOf(1,2,3,4,5,6,7),
-            enabled = true
-        ),
-        Reminder(
-            id = "r_even",
-            groupId = groups.firstOrNull { it.timeHint == "EVENING" }?.id,
-            time = "21:00",
-            days = setOf(1,2,3,4,5,6,7),
-            enabled = true
-        ),
-        Reminder(
-            id = "r_review",
-            groupId = null,
-            time = "21:45",
-            days = setOf(1,2,3,4,5,6,7),
-            enabled = true
+    /** Seed reminders with times derived from schedule blocks / sleep spine. */
+    private fun defaultReminders(
+        groups: List<Group>,
+        sleep: SleepSettings,
+        schedule: Schedule
+    ): List<Reminder> {
+        val seed = AppData(
+            groups = groups,
+            sleep = sleep,
+            schedules = listOf(schedule),
+            activeScheduleId = schedule.id
         )
-    )
+        val mornId = groups.firstOrNull { it.timeHint == "MORNING" }?.id
+        val bedId = groups.firstOrNull {
+            it.timeHint == "BEDTIME" || it.timeHint == "EVENING"
+        }?.id
+        return listOf(
+            Reminder(
+                id = "r_morn",
+                groupId = mornId,
+                time = mornId?.let { HabitDomain.suggestedReminderTimeForGroup(seed, it) }
+                    ?: sleep.wakeTime,
+                days = setOf(1, 2, 3, 4, 5, 6, 7),
+                enabled = true
+            ),
+            Reminder(
+                id = "r_even",
+                groupId = bedId,
+                time = bedId?.let { HabitDomain.suggestedReminderTimeForGroup(seed, it) }
+                    ?: "22:00",
+                days = setOf(1, 2, 3, 4, 5, 6, 7),
+                enabled = true
+            ),
+            Reminder(
+                id = "r_review",
+                groupId = null,
+                time = HabitDomain.suggestedDailyReviewTime(seed),
+                days = setOf(1, 2, 3, 4, 5, 6, 7),
+                enabled = true
+            )
+        )
+    }
 
     /**
      * Seeded day: timeline groups (when) + tags (what). Sleep is the spine.
@@ -308,7 +327,7 @@ class AndroidHabitRepository(private val context: Context) : HabitRepository {
             )
         )
         val schedule = Schedule(id = "s_sleep", name = "Sleep-centered", timeBlocks = blocks)
-        val reminders = defaultReminders(groups)
+        val reminders = defaultReminders(groups, sleep, schedule)
 
         return AppData(
             groups = groups,

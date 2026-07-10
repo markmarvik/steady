@@ -902,6 +902,62 @@ object HabitDomain {
         return h * 60 + m
     }
 
+    /**
+     * Suggested HH:mm for a group-linked reminder from the active schedule (block start),
+     * falling back to sleep spine (wake / wind-down start / bed).
+     */
+    fun suggestedReminderTimeForGroup(data: AppData, groupId: String): String? {
+        val schedule = getActiveSchedule(data)
+        schedule?.timeBlocks?.firstOrNull { it.groupId == groupId }?.let { return it.start }
+
+        val group = data.groups.find { it.id == groupId }
+        val sleep = data.sleep
+        val hint = group?.timeHint?.uppercase().orEmpty()
+        return when {
+            groupId == sleep.morningGroupId || hint == "MORNING" -> sleep.wakeTime
+            groupId == sleep.bedtimeGroupId || hint == "BEDTIME" || hint == "EVENING" -> {
+                val bed = parseTimeToMinutes(sleep.bedTime)
+                val wind = sleep.windDownMinutes.coerceIn(15, 180)
+                val raw = bed - wind
+                minutesToHhMm(if (raw < 0) raw + 24 * 60 else raw)
+            }
+            groupId == sleep.sleepGroupId || hint == "SLEEP" -> sleep.bedTime
+            else -> null
+        }
+    }
+
+    /**
+     * Global daily-review time: end of bedtime block if present, else bed time, else 21:45.
+     */
+    fun suggestedDailyReviewTime(data: AppData): String {
+        val sleep = data.sleep
+        val bedId = sleep.bedtimeGroupId
+        val schedule = getActiveSchedule(data)
+        if (bedId != null) {
+            schedule?.timeBlocks?.firstOrNull { it.groupId == bedId }?.let { return it.end }
+        }
+        val bed = sleep.bedTime.trim()
+        return if (bed.contains(":")) bed else "21:45"
+    }
+
+    /**
+     * Recompute each reminder's [Reminder.time] from the active schedule / sleep spine.
+     * Preserves id, groupId, days, and enabled.
+     */
+    fun alignRemindersToSchedule(data: AppData): List<Reminder> {
+        return data.reminders.map { r ->
+            val suggested = if (r.groupId == null) {
+                suggestedDailyReviewTime(data)
+            } else {
+                suggestedReminderTimeForGroup(data, r.groupId) ?: r.time
+            }
+            if (suggested == r.time) r else r.copy(time = suggested)
+        }
+    }
+
+    fun withRemindersAlignedToSchedule(data: AppData): AppData =
+        data.copy(reminders = alignRemindersToSchedule(data))
+
     /** Pure function to reorder/move a habit between or within groups. Returns new immutable list. */
     fun moveHabit(currentHabits: List<Habit>, habitId: String, newGroupId: String, newOrder: Int): List<Habit> {
         val habit = currentHabits.find { it.id == habitId } ?: return currentHabits

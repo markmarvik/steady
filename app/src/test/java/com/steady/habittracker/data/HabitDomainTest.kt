@@ -394,6 +394,82 @@ class HabitDomainTest {
         assertEquals(1, HabitDomain.getActiveHabitsForGroup(data, "g2").size)
     }
 
+    // --- Reminder times from Daily Planner schedule ---
+
+    @Test
+    fun `suggestedReminderTimeForGroup uses block start then sleep fallback`() {
+        val groups = listOf(
+            Group("g_morn", "Morning", "MORNING", 0),
+            Group("g_even", "Bedtime", "BEDTIME", 1),
+            Group("g_sleep", "Sleep", "SLEEP", 2)
+        )
+        val sleep = SleepSettings(
+            bedTime = "23:00",
+            wakeTime = "07:00",
+            windDownMinutes = 60,
+            morningMinutes = 90,
+            morningGroupId = "g_morn",
+            bedtimeGroupId = "g_even",
+            sleepGroupId = "g_sleep"
+        )
+        val blocks = HabitDomain.buildSleepAnchoredBlocks(sleep, "g_morn", "g_even", "g_sleep")
+        val data = AppData(
+            groups = groups,
+            sleep = sleep,
+            schedules = listOf(Schedule("s1", "Day", timeBlocks = blocks)),
+            activeScheduleId = "s1"
+        )
+        assertEquals("07:00", HabitDomain.suggestedReminderTimeForGroup(data, "g_morn"))
+        assertEquals("22:00", HabitDomain.suggestedReminderTimeForGroup(data, "g_even"))
+        assertEquals("23:00", HabitDomain.suggestedReminderTimeForGroup(data, "g_sleep"))
+        assertEquals("23:00", HabitDomain.suggestedDailyReviewTime(data))
+    }
+
+    @Test
+    fun `alignRemindersToSchedule updates times preserves days and enabled`() {
+        val groups = listOf(
+            Group("g_morn", "Morning", "MORNING", 0),
+            Group("g_even", "Bedtime", "BEDTIME", 1)
+        )
+        val sleep = SleepSettings(
+            bedTime = "22:30",
+            wakeTime = "06:30",
+            windDownMinutes = 30,
+            morningGroupId = "g_morn",
+            bedtimeGroupId = "g_even"
+        )
+        val blocks = listOf(
+            TimeBlock("06:30", "08:00", "g_morn"),
+            TimeBlock("22:00", "22:30", "g_even")
+        )
+        val reminders = listOf(
+            Reminder("r_morn", "g_morn", "08:30", setOf(1, 2, 3), enabled = true),
+            Reminder("r_even", "g_even", "21:00", setOf(1, 2, 3, 4, 5, 6, 7), enabled = false),
+            Reminder("r_review", null, "21:45", setOf(1, 2, 3, 4, 5, 6, 7), enabled = true)
+        )
+        val data = AppData(
+            groups = groups,
+            sleep = sleep,
+            schedules = listOf(Schedule("s1", "Day", timeBlocks = blocks)),
+            activeScheduleId = "s1",
+            reminders = reminders
+        )
+        val aligned = HabitDomain.alignRemindersToSchedule(data)
+        assertEquals("06:30", aligned.find { it.id == "r_morn" }?.time)
+        assertEquals(setOf(1, 2, 3), aligned.find { it.id == "r_morn" }?.days)
+        assertEquals("22:00", aligned.find { it.id == "r_even" }?.time)
+        assertEquals(false, aligned.find { it.id == "r_even" }?.enabled)
+        assertEquals("22:30", aligned.find { it.id == "r_review" }?.time)
+    }
+
+    @Test
+    fun `suggestedReminderTime falls back to sleep when no schedule`() {
+        val groups = listOf(Group("g_morn", "Morning", "MORNING", 0))
+        val sleep = SleepSettings(wakeTime = "05:45", morningGroupId = "g_morn")
+        val data = AppData(groups = groups, sleep = sleep, activeScheduleId = null)
+        assertEquals("05:45", HabitDomain.suggestedReminderTimeForGroup(data, "g_morn"))
+    }
+
     // --- #21 routines / sessions ---
 
     @Test

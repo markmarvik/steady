@@ -288,7 +288,8 @@ fun PathScreen(
                     fontSize = 13.sp
                 )
             }
-            items(firstSteps, key = { it.first.id }) { (goal, step) ->
+            // Keys must not collide with goal cards below (same goal ids appear in both sections).
+            items(firstSteps, key = { "first_step_${it.first.id}" }) { (goal, step) ->
                 Card(
                     modifier = Modifier.fillMaxWidth(),
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
@@ -318,7 +319,7 @@ fun PathScreen(
                     modifier = Modifier.padding(top = 4.dp)
                 )
             }
-            items(goals, key = { it.id }) { goal ->
+            items(goals, key = { "goal_card_${it.id}" }) { goal ->
                 GoalStoryCard(
                     goal = goal,
                     expanded = expandedGoalId == goal.id,
