@@ -159,6 +159,7 @@ class SteadyViewModel(
 
     private fun refreshWidget(data: AppData) {
         val ctx = appContext ?: return
+        // Keep home-screen widget in lockstep with in-app toggles / edits (#28)
         WidgetRenderer.updateAll(ctx, data)
     }
 

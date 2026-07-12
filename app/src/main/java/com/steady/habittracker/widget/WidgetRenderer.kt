@@ -52,13 +52,13 @@ object WidgetRenderer {
         val theme = HabitDomain.resolveThemeColors(appData)
         val textColor = if (appData.backgroundMode == "light") 0xFF0F172A.toInt() else 0xFFE2E8F0.toInt()
 
-        // Snapshot for RemoteViewsFactory (collection adapter)
+        // commit() (not apply): RemoteViewsFactory may re-read immediately after notify
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
             .putString(KEY_ROWS, json.encodeToString(rows))
             .putInt(KEY_ROW_BG, theme.widgetRowBg)
             .putInt(KEY_ACCENT, theme.accent)
             .putInt(KEY_TEXT, textColor)
-            .apply()
+            .commit()
 
         val title = widgetTitle(appData)
         val empty = rows.isEmpty()
@@ -83,7 +83,9 @@ object WidgetRenderer {
                 views.setEmptyView(R.id.widget_list, R.id.widget_empty)
 
                 // Template for habit row clicks → ToggleReceiver
-                val template = Intent(context, ToggleReceiver::class.java)
+                val template = Intent(context, ToggleReceiver::class.java).apply {
+                    this.action = ToggleReceiver.ACTION_TOGGLE
+                }
                 val templatePi = PendingIntent.getBroadcast(
                     context,
                     2000 + id,
@@ -103,7 +105,7 @@ object WidgetRenderer {
             views.setOnClickPendingIntent(R.id.open_btn, openPi)
 
             appWidgetManager.updateAppWidget(id, views)
-            // Force list reload after snapshot write
+            // Force list reload after snapshot write (must follow commit)
             appWidgetManager.notifyAppWidgetViewDataChanged(id, R.id.widget_list)
         }
     }

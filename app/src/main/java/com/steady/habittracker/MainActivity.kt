@@ -12,6 +12,7 @@ import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
@@ -38,11 +39,14 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
+import androidx.core.view.WindowCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.steady.habittracker.data.AndroidHabitRepository
 import com.steady.habittracker.data.AppData
@@ -91,6 +95,7 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        enableEdgeToEdge()
         super.onCreate(savedInstanceState)
         captureDeepLinks(intent)
 
@@ -313,10 +318,25 @@ fun SteadyApp(
         )
     }
 
+    // Status / nav bar icon contrast under edge-to-edge (issue #27)
+    val view = LocalView.current
+    SideEffect {
+        val window = (view.context as? android.app.Activity)?.window ?: return@SideEffect
+        val controller = WindowCompat.getInsetsController(window, view)
+        val lightIcons = bgColor.luminance() > 0.5f
+        controller.isAppearanceLightStatusBars = lightIcons
+        controller.isAppearanceLightNavigationBars = lightIcons
+    }
+
     if (!appData.onboarded) {
         // Onboarding must use themed colors (was outside theme → dark text on dark bg)
         MaterialTheme(colorScheme = colorScheme) {
-            Surface(modifier = Modifier.fillMaxSize(), color = bgColor) {
+            Surface(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .safeDrawingPadding(),
+                color = bgColor
+            ) {
                 OnboardingScreen(onComplete = { viewModel.completeOnboarding() })
             }
         }
@@ -326,7 +346,12 @@ fun SteadyApp(
     val workoutRt = activeWorkoutRoutine
     when {
         workoutRt != null -> {
-            Surface(modifier = Modifier.fillMaxSize(), color = bgColor) {
+            Surface(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .safeDrawingPadding(),
+                color = bgColor
+            ) {
                 WorkoutSessionScreen(
                     routine = workoutRt,
                     onFinish = { session ->
@@ -339,7 +364,12 @@ fun SteadyApp(
             }
         }
         showDreamlineWizard -> {
-            Surface(modifier = Modifier.fillMaxSize(), color = bgColor) {
+            Surface(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .safeDrawingPadding(),
+                color = bgColor
+            ) {
                 DreamlineWizard(
                     onComplete = { goals ->
                         viewModel.applyDreamlineGoals(goals, replaceExistingDreamline = true)
@@ -357,7 +387,9 @@ fun SteadyApp(
         }
         else -> {
     Scaffold(
-        containerColor = bgColor
+        containerColor = bgColor,
+        // Edge-to-edge (API 35+ / enableEdgeToEdge): pad content below status & nav bars
+        contentWindowInsets = WindowInsets.safeDrawing
         // No FAB: removed per request (adds only via Manage now)
     ) { padding ->
         Column(

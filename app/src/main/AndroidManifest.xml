@@ -50,11 +50,15 @@
             android:enabled="true"
             android:exported="true" />
 
-        <!-- Widget toggle action receiver -->
+        <!-- Widget toggle action receiver (not exported: only our PendingIntents target it) -->
         <receiver
             android:name=".widget.ToggleReceiver"
             android:enabled="true"
-            android:exported="true" />
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.steady.habittracker.widget.ACTION_TOGGLE" />
+            </intent-filter>
+        </receiver>
 
         <!-- Home screen widget provider -->
         <receiver

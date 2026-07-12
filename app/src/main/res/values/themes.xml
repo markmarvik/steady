@@ -1,9 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- Base app theme for Compose (dark-only, full screen handled in Compose) -->
+    <!-- Edge-to-edge: transparent system bars; Compose applies WindowInsets.safeDrawing (#27) -->
     <style name="Theme.Steady" parent="android:Theme.Material.NoActionBar">
         <item name="android:windowBackground">@android:color/black</item>
         <item name="android:statusBarColor">@android:color/transparent</item>
         <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowDrawsSystemBarBackgrounds">true</item>
     </style>
 </resources>

@@ -26,6 +26,7 @@ private class WidgetListFactory(
     }
 
     override fun onDataSetChanged() {
+        // Called on a binder thread after notifyAppWidgetViewDataChanged — re-read snapshot
         rows = WidgetRenderer.readCachedRows(context)
     }
 
@@ -44,9 +45,8 @@ private class WidgetListFactory(
             WidgetRowKind.SECTION -> {
                 val rv = RemoteViews(context.packageName, R.layout.widget_section_header)
                 rv.setTextViewText(R.id.section_title, row.title)
-                // Current block (●) uses full accent; earlier/later slightly softer via same accent
                 rv.setTextColor(R.id.section_title, WidgetRenderer.readAccent(context))
-                // Headers are not clickable
+                // Headers are not clickable (empty fill-in)
                 rv.setOnClickFillInIntent(R.id.section_title, Intent())
                 rv
             }
@@ -63,8 +63,9 @@ private class WidgetListFactory(
                 rv.setInt(R.id.habit_row_root, "setBackgroundColor", rowBg)
 
                 val fillIn = Intent().apply {
-                    putExtra("habitId", row.habitId)
-                    putExtra("action", "COMPLETE")
+                    action = ToggleReceiver.ACTION_TOGGLE
+                    putExtra(ToggleReceiver.EXTRA_HABIT_ID, row.habitId)
+                    putExtra(ToggleReceiver.EXTRA_ACTION, ToggleReceiver.ACTION_TOGGLE)
                 }
                 // Entire row is one big hit target
                 rv.setOnClickFillInIntent(R.id.habit_row_root, fillIn)
@@ -77,10 +78,9 @@ private class WidgetListFactory(
 
     override fun getViewTypeCount(): Int = 2
 
-    override fun getItemId(position: Int): Long =
-        rows.getOrNull(position)?.habitId?.hashCode()?.toLong()
-            ?: rows.getOrNull(position)?.title?.hashCode()?.toLong()
-            ?: position.toLong()
+    // Unstable IDs so completed rows actually disappear after notifyAppWidgetViewDataChanged
+    // (stable IDs + recycled RemoteViews can leave stale rows on some launchers).
+    override fun getItemId(position: Int): Long = position.toLong()
 
-    override fun hasStableIds(): Boolean = true
+    override fun hasStableIds(): Boolean = false
 }
