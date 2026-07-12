@@ -21,13 +21,49 @@ object HabitDomain {
         }
     }
 
-    /** Timeline groups this habit should appear under (primary + additional). */
+    /**
+     * Timeline groups this habit belongs to (distinct, stable order).
+     * Storage still uses [Habit.groupId] + [Habit.additionalGroupIds]; UI treats membership as a flat set.
+     */
     fun membershipGroupIds(habit: Habit): List<String> =
-        (listOf(habit.groupId) + habit.additionalGroupIds).distinct()
+        (listOf(habit.groupId) + habit.additionalGroupIds)
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+            .distinct()
 
-    /** Whether habit belongs to [groupId] via primary or additional membership. */
+    /** Whether habit belongs to [groupId] (once per group — no duplicates). */
     fun belongsToGroup(habit: Habit, groupId: String): Boolean =
-        habit.groupId == groupId || groupId in habit.additionalGroupIds
+        groupId in membershipGroupIds(habit)
+
+    /**
+     * Rewrite membership from an ordered group id list (first becomes [Habit.groupId]).
+     * Empty input returns the habit unchanged (always keep ≥1 group).
+     */
+    fun withMembership(habit: Habit, groupIds: List<String>): Habit {
+        val ids = groupIds.map { it.trim() }.filter { it.isNotEmpty() }.distinct()
+        if (ids.isEmpty()) return habit
+        return habit.copy(
+            groupId = ids.first(),
+            additionalGroupIds = ids.drop(1)
+        )
+    }
+
+    /** Add habit to [groupId] if not already a member (no-op if already in). */
+    fun addToGroup(habit: Habit, groupId: String): Habit {
+        val gid = groupId.trim()
+        if (gid.isEmpty() || belongsToGroup(habit, gid)) return habit
+        return withMembership(habit, membershipGroupIds(habit) + gid)
+    }
+
+    /**
+     * Remove habit from [groupId]. Returns null if that would leave zero groups
+     * (caller should refuse or archive instead).
+     */
+    fun removeFromGroup(habit: Habit, groupId: String): Habit? {
+        val ids = membershipGroupIds(habit).filter { it != groupId }
+        if (ids.isEmpty()) return null
+        return withMembership(habit, ids)
+    }
 
     // --- Show rules (when habit appears on Today) ---
 
@@ -958,17 +994,46 @@ object HabitDomain {
     fun withRemindersAlignedToSchedule(data: AppData): AppData =
         data.copy(reminders = alignRemindersToSchedule(data))
 
-    /** Pure function to reorder/move a habit between or within groups. Returns new immutable list. */
+    /**
+     * Set primary group to [newGroupId] while keeping other memberships.
+     * If already a member, that id becomes primary; if not, it is added as primary.
+     */
     fun moveHabit(currentHabits: List<Habit>, habitId: String, newGroupId: String, newOrder: Int): List<Habit> {
         val habit = currentHabits.find { it.id == habitId } ?: return currentHabits
+        val others = membershipGroupIds(habit).filter { it != newGroupId }
+        val updated = withMembership(habit, listOf(newGroupId) + others).copy(order = newOrder)
         val without = currentHabits.filter { it.id != habitId }
-        val updated = habit.copy(groupId = newGroupId, order = newOrder)
-        val newList = (without + updated).sortedWith(
-            compareBy<Habit> { if (it.groupId == newGroupId) 0 else 1 }.thenBy { it.order }
-        )
-        // Reindex orders per group
+        val newList = without + updated
+        // Reindex orders among habits that share the new primary group
         return newList.groupBy { it.groupId }.flatMap { (_, list) ->
             list.sortedBy { it.order }.mapIndexed { i, h -> h.copy(order = i) }
+        }
+    }
+
+    /**
+     * Swap display order among habits that belong to [withinGroupId]
+     * (primary or additional membership — multi-group habits behave the same).
+     */
+    fun reorderWithinGroup(
+        currentHabits: List<Habit>,
+        habitId: String,
+        withinGroupId: String,
+        direction: Int
+    ): List<Habit> {
+        val siblings = currentHabits
+            .filter { !it.archived && belongsToGroup(it, withinGroupId) }
+            .sortedBy { it.order }
+        val idx = siblings.indexOfFirst { it.id == habitId }
+        val swapIdx = idx + direction
+        if (idx < 0 || swapIdx !in siblings.indices) return currentHabits
+        val a = siblings[idx]
+        val b = siblings[swapIdx]
+        return currentHabits.map {
+            when (it.id) {
+                a.id -> it.copy(order = b.order)
+                b.id -> it.copy(order = a.order)
+                else -> it
+            }
         }
     }
 }

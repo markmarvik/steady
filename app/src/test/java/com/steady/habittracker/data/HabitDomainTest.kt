@@ -394,6 +394,39 @@ class HabitDomainTest {
         assertEquals(1, HabitDomain.getActiveHabitsForGroup(data, "g2").size)
     }
 
+    @Test
+    fun `membership add is idempotent and remove refuses empty set`() {
+        val h = Habit("h1", "X", groupId = "g1")
+        val two = HabitDomain.addToGroup(h, "g2")
+        assertEquals(listOf("g1", "g2"), HabitDomain.membershipGroupIds(two))
+        // once per group
+        assertEquals(two, HabitDomain.addToGroup(two, "g2"))
+        val back = HabitDomain.removeFromGroup(two, "g1")
+        assertNotNull(back)
+        assertEquals(listOf("g2"), HabitDomain.membershipGroupIds(back!!))
+        assertNull(HabitDomain.removeFromGroup(back, "g2"))
+        // withMembership dedupes
+        val d = HabitDomain.withMembership(h, listOf("g1", "g1", "g3", "g2"))
+        assertEquals(listOf("g1", "g3", "g2"), HabitDomain.membershipGroupIds(d))
+    }
+
+    @Test
+    fun `reorderWithinGroup works for multi-group members`() {
+        val a = Habit("a", "A", groupId = "g1", order = 0, additionalGroupIds = listOf("g2"))
+        val b = Habit("b", "B", groupId = "g2", order = 1) // only g2
+        val c = Habit("c", "C", groupId = "g1", order = 2, additionalGroupIds = listOf("g2"))
+        val list = listOf(a, b, c)
+        // In g2 order by order field: a(0), b(1), c(2) — swap a down
+        val reordered = HabitDomain.reorderWithinGroup(list, "a", "g2", +1)
+        val a2 = reordered.find { it.id == "a" }!!
+        val b2 = reordered.find { it.id == "b" }!!
+        assertEquals(1, a2.order)
+        assertEquals(0, b2.order)
+        // still multi-group
+        assertTrue(HabitDomain.belongsToGroup(a2, "g1"))
+        assertTrue(HabitDomain.belongsToGroup(a2, "g2"))
+    }
+
     // --- Reminder times from Daily Planner schedule ---
 
     @Test

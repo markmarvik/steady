@@ -17,7 +17,6 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Edit
-import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -45,10 +44,10 @@ import com.steady.habittracker.data.TimeBlock
 import java.time.LocalDate
 
 /**
- * Manage = catalog workshop:
- * - Daily Planner = sleep spine + 24h timeline
- * - Groups = when on the timeline; Tags = what for History
- * - Reminders aligned to schedule
+ * Manage = three focused areas:
+ * - Habits: create / edit / archive habits (+ tags, exercise routines)
+ * - Groups: timeline groups + membership (attach existing habits, order, move)
+ * - Planner: sleep/schedule, reminders, backup
  */
 @Composable
 fun ManageScreen(
@@ -63,7 +62,8 @@ fun ManageScreen(
         showPreset: ShowPreset,
         weekdays: Set<Int>,
         intervalDays: Int,
-        specificDates: List<String>
+        specificDates: List<String>,
+        additionalGroupIds: List<String>
     ) -> Unit,
     onDeleteHabit: (String) -> Unit,  // now archives
     onSetReminder: (Reminder) -> Unit,
@@ -76,7 +76,9 @@ fun ManageScreen(
     onUpdateHabit: (Habit) -> Unit = {},
     onUnarchiveGroup: (String) -> Unit = {},
     onUnarchiveHabit: (String) -> Unit = {},
-    onReorderHabit: (habitId: String, direction: Int) -> Unit = { _, _ -> },
+    onReorderHabit: (habitId: String, direction: Int, withinGroupId: String) -> Unit = { _, _, _ -> },
+    onAddHabitToGroup: (habitId: String, groupId: String) -> Unit = { _, _ -> },
+    onRemoveHabitFromGroup: (habitId: String, groupId: String) -> Unit = { _, _ -> },
     onMoveHabitToGroup: (habitId: String, groupId: String) -> Unit = { _, _ -> },
     onApplySchedulePreset: (name: String, blocks: List<TimeBlock>) -> Unit = { _, _ -> },
     onSetActiveSchedule: (String?) -> Unit = {},
@@ -90,16 +92,20 @@ fun ManageScreen(
     schedules: List<Schedule> = emptyList(),
     activeScheduleId: String? = null
 ) {
+    // 0 Habits · 1 Groups · 2 Planner
+    var manageTab by remember { mutableIntStateOf(0) }
     var selectedGroupId by remember { mutableStateOf<String?>(null) }
     var showAddGroup by remember { mutableStateOf(false) }
-    var showAddHabitFor by remember { mutableStateOf<String?>(null) }
+    /** Habits tab: create a new habit (optional initial group id). */
+    var showCreateHabit by remember { mutableStateOf(false) }
+    /** Groups tab: attach an existing habit into this group. */
+    var attachHabitToGroupId by remember { mutableStateOf<String?>(null) }
     var showReminderDialog by remember { mutableStateOf(false) }
     var reminderDialogGroup by remember { mutableStateOf<Group?>(null) }
     var showEditHabit by remember { mutableStateOf<Habit?>(null) }
-    var moveHabitId by remember { mutableStateOf<String?>(null) }
-    var stackHabitId by remember { mutableStateOf<String?>(null) }
     var showRoutineEditor by remember { mutableStateOf<com.steady.habittracker.data.ExerciseRoutine?>(null) }
     var showNewRoutine by remember { mutableStateOf(false) }
+    var habitSearch by remember { mutableStateOf("") }
 
     // Confirmation for archive (do not archive immediately; tap away / cancel = nothing)
     var confirmArchiveGroupId by remember { mutableStateOf<String?>(null) }
@@ -107,378 +113,552 @@ fun ManageScreen(
 
     // Hoisted 24h schedule editor state (must be at composable root, not inside Lazy item)
     var isEditingSchedule by remember { mutableStateOf(false) }
-    var editBlocks by remember(activeScheduleId) { mutableStateOf( (schedules.firstOrNull { it.id == activeScheduleId }?.timeBlocks ?: emptyList()) ) }
+    var editBlocks by remember(activeScheduleId) {
+        mutableStateOf(schedules.firstOrNull { it.id == activeScheduleId }?.timeBlocks ?: emptyList())
+    }
 
     val activeGroups = appData.groups.filter { !it.archived }.sortedBy { it.order }
     val archivedGroups = appData.groups.filter { it.archived }.sortedBy { it.order }
     val archivedHabits = appData.habits.filter { it.archived }
+    val groupOrder = remember(activeGroups) { activeGroups.mapIndexed { i, g -> g.id to i }.toMap() }
 
+    // Leaving Groups clears drill-down so Habits always feels top-level
+    LaunchedEffect(manageTab) {
+        if (manageTab != 1) selectedGroupId = null
+    }
+
+    // Sub-tabs sit directly under the main app tabs (no extra "Manage" title)
     Column(modifier = Modifier.fillMaxSize()) {
-        if (selectedGroupId == null) {
-            Column(Modifier.fillMaxWidth().padding(bottom = 4.dp)) {
-                Text("Manage", color = MaterialTheme.colorScheme.primary, fontSize = 16.sp, fontWeight = FontWeight.Bold)
-                Text(
-                    "Daily plan, groups, reminders, tags",
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    fontSize = 11.sp
-                )
-            }
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(50))
+                .padding(4.dp)
+        ) {
+            TabButton("Habits", manageTab == 0, modifier = Modifier.weight(1f)) { manageTab = 0 }
+            TabButton("Groups", manageTab == 1, modifier = Modifier.weight(1f)) { manageTab = 1 }
+            TabButton("Planner", manageTab == 2, modifier = Modifier.weight(1f)) { manageTab = 2 }
+        }
 
-            LazyColumn(
-                modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
-                item {
-                    DailyPlannerCard(
-                        appData = appData,
-                        groups = activeGroups,
-                        schedules = schedules,
-                        activeScheduleId = activeScheduleId,
-                        isEditingSchedule = isEditingSchedule,
-                        editBlocks = editBlocks,
-                        onEditBlocksChange = { editBlocks = it },
-                        onToggleEditing = {
-                            if (!isEditingSchedule) {
-                                editBlocks = schedules.firstOrNull { it.id == activeScheduleId }?.timeBlocks
-                                    ?: emptyList()
-                            }
-                            isEditingSchedule = !isEditingSchedule
-                        },
-                        onCloseEditing = { isEditingSchedule = false },
-                        onApplySleep = onApplySleepSchedule,
-                        onSetActiveSchedule = onSetActiveSchedule,
-                        onUpdateScheduleBlocks = onUpdateScheduleBlocks,
-                        onApplySchedulePreset = onApplySchedulePreset
+        Spacer(Modifier.height(8.dp))
+
+        when (manageTab) {
+            0 -> {
+                // ——— Habits: flat catalog ———
+                val activeHabits = appData.habits
+                    .filter { !it.archived }
+                    .sortedWith(
+                        compareBy<Habit> { groupOrder[it.groupId] ?: Int.MAX_VALUE }
+                            .thenBy { it.order }
+                            .thenBy { it.name.lowercase() }
                     )
-                }
-
-                item {
-                    ManageSectionHeader(
-                        title = "Timeline groups",
-                        subtitle = "When you do it · tap to edit items",
-                        action = {
-                            TextButton(onClick = { showAddGroup = true }) {
-                                Icon(Icons.Default.Add, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(16.dp))
-                                Spacer(Modifier.width(2.dp))
-                                Text("Group", color = MaterialTheme.colorScheme.primary, fontSize = 12.sp)
-                            }
-                        }
-                    )
-                }
-
-                items(activeGroups, key = { it.id }) { group ->
-                    val subCount = appData.groups.count { it.parentId == group.id && !it.archived }
-                    val count = appData.habits.count { it.groupId == group.id && !it.archived }
-                    val linked = when (group.id) {
-                        appData.sleep.morningGroupId -> " · wake"
-                        appData.sleep.bedtimeGroupId -> " · bed"
-                        appData.sleep.sleepGroupId -> " · sleep"
-                        else -> ""
-                    }
-                    Card(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable { selectedGroupId = group.id },
-                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                        shape = RoundedCornerShape(12.dp)
-                    ) {
-                        Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Column(Modifier.weight(1f)) {
-                                Text(group.name, color = MaterialTheme.colorScheme.onSurface, fontSize = 16.sp, fontWeight = FontWeight.Bold)
-                                Text(
-                                    "$count items · ${group.timeHint}$linked" + if (subCount > 0) " · $subCount subgroups" else "",
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    fontSize = 11.sp
-                                )
-                            }
-                            Icon(Icons.Default.Edit, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
+                val q = habitSearch.trim()
+                val filteredHabits = if (q.isEmpty()) activeHabits else {
+                    activeHabits.filter { h ->
+                        h.name.contains(q, ignoreCase = true) ||
+                            activeGroups.find { it.id == h.groupId }?.name?.contains(q, ignoreCase = true) == true
                     }
                 }
 
-                item {
-                    RemindersCard(
-                        appData = appData,
-                        onToggleMaster = onSetRemindersMasterEnabled,
-                        onToggleReminder = onToggleReminder,
-                        onEditReminder = { rem ->
-                            reminderDialogGroup = rem.groupId?.let { gid -> appData.groups.find { it.id == gid } }
-                            showReminderDialog = true
-                        },
-                        onAlignToSchedule = onAlignRemindersToSchedule
-                    )
-                }
-
-                item {
-                    TagManagerCard(
-                        tags = HabitDomain.getActiveTags(appData),
-                        habits = appData.habits.filter { !it.archived },
-                        onAddTag = onAddTag
-                    )
-                }
-
-                // Exercise routines (#20–#22)
-                item {
-                    Spacer(Modifier.height(16.dp))
-                    Row(
-                        Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column {
-                            Text("Exercise routines", color = MaterialTheme.colorScheme.primary, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
-                            Text("Structured workouts · Start from Today or here", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 10.sp)
-                        }
-                        Row {
-                            TextButton(onClick = onLoadBlueprintRoutines) {
-                                Text("Templates", color = MaterialTheme.colorScheme.primary, fontSize = 11.sp)
-                            }
-                            TextButton(onClick = { showNewRoutine = true }) {
-                                Text("+ New", color = MaterialTheme.colorScheme.primary, fontSize = 11.sp)
-                            }
-                        }
-                    }
-                }
-                val activeRoutines = HabitDomain.getActiveRoutines(appData)
-                if (activeRoutines.isEmpty()) {
+                LazyColumn(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
                     item {
-                        Text(
-                            "No routines yet. Load Blueprint templates or create one.",
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            fontSize = 12.sp,
-                            modifier = Modifier.padding(vertical = 4.dp)
-                        )
-                    }
-                } else {
-                    items(activeRoutines, key = { it.id }) { rt ->
-                        Card(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(vertical = 4.dp),
-                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
-                        ) {
-                            Column(Modifier.padding(12.dp)) {
-                                Text(rt.name, color = MaterialTheme.colorScheme.onSurface, fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
-                                Text(
-                                    listOfNotNull(
-                                        "${rt.exercises.size} exercises",
-                                        "~${rt.estimatedDurationMin} min",
-                                        HabitDomain.showRuleLabel(
-                                            com.steady.habittracker.data.Habit(
-                                                id = rt.id, name = rt.name, groupId = "",
-                                                showPreset = rt.showPreset, weekdays = rt.weekdays
-                                            )
-                                        ),
-                                        rt.tags.take(2).joinToString(", ").ifBlank { null }
-                                    ).joinToString(" · "),
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    fontSize = 11.sp
-                                )
-                                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                                    TextButton(onClick = { onStartRoutine(rt) }) {
-                                        Text("Start", color = MaterialTheme.colorScheme.primary, fontSize = 12.sp)
-                                    }
-                                    TextButton(onClick = { showRoutineEditor = rt }) {
-                                        Text("Edit", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
-                                    }
-                                    TextButton(onClick = { onArchiveRoutine(rt.id) }) {
-                                        Text("Archive", color = MaterialTheme.colorScheme.error, fontSize = 11.sp)
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-
-                // Backup section inside the scrollable list
-                item {
-                    Spacer(Modifier.height(16.dp))
-                    Text("Backup", color = MaterialTheme.colorScheme.primary, fontSize = 13.sp)
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Button(onClick = onExportCsv, colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)) {
-                            Text("Export Backup")
-                        }
-                        OutlinedButton(onClick = onImportCsv) {
-                            Text("Import CSV")
-                        }
-                    }
-                    Text("Exports full backup (JSON) + structure even with no entries. CSV helpers also available.", color = Color(0xFF475569), fontSize = 10.sp)
-                }
-
-                // Archived items + restore (inside scroll)
-                if (archivedGroups.isNotEmpty() || archivedHabits.isNotEmpty()) {
-                    item {
-                        Spacer(Modifier.height(20.dp))
-                        Text("Archived (tap restore to bring back)", color = MaterialTheme.colorScheme.error, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
-                    }
-                    items(archivedGroups) { g ->
-                        Card(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(vertical = 4.dp),
-                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
-                        ) {
-                            Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                                Text("📁 ${g.name}", color = MaterialTheme.colorScheme.onSurface, modifier = Modifier.weight(1f))
-                                TextButton(onClick = { onUnarchiveGroup(g.id) }) {
-                                    Text("Restore", color = MaterialTheme.colorScheme.primary, fontSize = 12.sp)
-                                }
-                            }
-                        }
-                    }
-                    items(archivedHabits.take(6)) { h ->
                         Row(
-                            Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 8.dp, vertical = 2.dp),
+                            Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Text("• ${h.name}", color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f), fontSize = 13.sp)
-                            TextButton(onClick = { onUnarchiveHabit(h.id) }) {
-                                Text("Restore", color = MaterialTheme.colorScheme.primary, fontSize = 11.sp)
+                            Text(
+                                "${activeHabits.size} habits",
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                fontSize = 12.sp
+                            )
+                            TextButton(
+                                onClick = { showCreateHabit = true },
+                                enabled = activeGroups.isNotEmpty()
+                            ) {
+                                Icon(Icons.Default.Add, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(16.dp))
+                                Spacer(Modifier.width(2.dp))
+                                Text("Habit", color = MaterialTheme.colorScheme.primary, fontSize = 12.sp)
                             }
                         }
                     }
-                }
-            }
-
-        } else {
-            // Drill-down detail for selected group
-            val group = activeGroups.find { it.id == selectedGroupId } ?: run {
-                selectedGroupId = null
-                return@Column
-            }
-            val habitsInGroup = appData.habits.filter { it.groupId == group.id && !it.archived }.sortedBy { it.order }
-            val subs = appData.groups.filter { it.parentId == group.id && !it.archived }
-
-            // Fixed header — arrow + title both go back (not only the icon)
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier
-                        .weight(1f)
-                        .clickable { selectedGroupId = null }
-                        .padding(vertical = 4.dp)
-                ) {
-                    Icon(
-                        Icons.AutoMirrored.Filled.ArrowBack,
-                        contentDescription = "Back to groups",
-                        tint = MaterialTheme.colorScheme.onSurface,
-                        modifier = Modifier.padding(end = 8.dp)
-                    )
-                    Text(
-                        group.name,
-                        color = MaterialTheme.colorScheme.onSurface,
-                        fontSize = 18.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                }
-                TextButton(onClick = { confirmArchiveGroupId = group.id }) {
-                    Text("Archive", color = MaterialTheme.colorScheme.error, fontSize = 11.sp)
-                }
-            }
-
-            if (subs.isNotEmpty()) {
-                Text("Subgroups / Plans", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
-                subs.forEach { sub ->
-                    Text("  • ${sub.name}", color = MaterialTheme.colorScheme.onSurface, modifier = Modifier.padding(4.dp))
-                }
-            }
-
-            Spacer(Modifier.height(8.dp))
-            Text(
-                "Timeline group = when. Tags = History category (move freely without losing Supplements etc.).",
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                fontSize = 10.sp,
-                modifier = Modifier.padding(bottom = 4.dp)
-            )
-            TextButton(onClick = { showAddHabitFor = group.id }) { Text("+ Add item") }
-
-            val nameById = appData.habits.associate { it.id to it.name }
-            LazyColumn(modifier = Modifier.weight(1f)) {
-                items(habitsInGroup, key = { it.id }) { h ->
-                    val afterLabel = h.afterHabitId?.let { nameById[it] }
-                    Column(
-                        Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = 4.dp)
-                            .clickable { showEditHabit = h }
-                    ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Column(Modifier.weight(1f).padding(start = if (afterLabel != null) 12.dp else 0.dp)) {
-                                Text(
-                                    (if (afterLabel != null) "↳ " else "• ") + h.name,
-                                    color = MaterialTheme.colorScheme.onSurface,
-                                    fontSize = 15.sp,
-                                    fontWeight = FontWeight.Medium
-                                )
-                                val tagLabels = HabitDomain.tagNamesForHabit(appData, h)
-                                Text(
-                                    listOfNotNull(
-                                        HabitDomain.showRuleLabel(h),
-                                        if (!h.canSkip) "essential" else null,
-                                        tagLabels.take(3).joinToString(", ").ifBlank { null }
-                                    ).joinToString(" · "),
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    fontSize = 11.sp
-                                )
-                                if (h.additionalGroupIds.isNotEmpty()) {
-                                    val alsoNames = h.additionalGroupIds.mapNotNull { aid ->
-                                        appData.groups.find { it.id == aid && !it.archived }?.name
+                    item {
+                        OutlinedTextField(
+                            value = habitSearch,
+                            onValueChange = { habitSearch = it },
+                            label = { Text("Search habits") },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth(),
+                            trailingIcon = {
+                                if (habitSearch.isNotEmpty()) {
+                                    IconButton(onClick = { habitSearch = "" }) {
+                                        Icon(Icons.Default.Close, contentDescription = "Clear")
                                     }
-                                    if (alsoNames.isNotEmpty()) {
+                                }
+                            }
+                        )
+                    }
+                    if (activeGroups.isEmpty()) {
+                        item {
+                            Text(
+                                "Create a timeline group first (Groups tab), then add habits.",
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                fontSize = 13.sp
+                            )
+                        }
+                    } else if (filteredHabits.isEmpty()) {
+                        item {
+                            Text(
+                                if (q.isEmpty()) "No habits yet. Tap + Habit to create one."
+                                else "No matches for “$q”.",
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                fontSize = 13.sp
+                            )
+                        }
+                    }
+                    items(filteredHabits, key = { it.id }) { h ->
+                        val groupNames = HabitDomain.membershipGroupIds(h).mapNotNull { gid ->
+                            activeGroups.find { it.id == gid }?.name
+                        }
+                        val tagLabels = HabitDomain.tagNamesForHabit(appData, h)
+                        Card(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { showEditHabit = h },
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                            shape = RoundedCornerShape(12.dp)
+                        ) {
+                            Row(
+                                Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(Modifier.weight(1f)) {
+                                    Text(
+                                        h.name,
+                                        color = MaterialTheme.colorScheme.onSurface,
+                                        fontSize = 15.sp,
+                                        fontWeight = FontWeight.SemiBold
+                                    )
+                                    Text(
+                                        listOfNotNull(
+                                            groupNames.joinToString(", ").ifBlank { null },
+                                            HabitDomain.showRuleLabel(h),
+                                            if (!h.canSkip) "essential" else null,
+                                            tagLabels.take(2).joinToString(", ").ifBlank { null }
+                                        ).joinToString(" · "),
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        fontSize = 11.sp
+                                    )
+                                }
+                                IconButton(onClick = { showEditHabit = h }) {
+                                    Icon(Icons.Default.Edit, contentDescription = "Edit", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+                                TextButton(onClick = { confirmArchiveHabitId = h.id }) {
+                                    Text("Archive", color = MaterialTheme.colorScheme.error, fontSize = 11.sp)
+                                }
+                            }
+                        }
+                    }
+
+                    if (archivedHabits.isNotEmpty()) {
+                        item {
+                            Spacer(Modifier.height(8.dp))
+                            Text(
+                                "Archived habits",
+                                color = MaterialTheme.colorScheme.error,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
+                        items(archivedHabits, key = { "arch_${it.id}" }) { h ->
+                            Row(
+                                Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 4.dp, vertical = 2.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    "• ${h.name}",
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.weight(1f),
+                                    fontSize = 13.sp
+                                )
+                                TextButton(onClick = { onUnarchiveHabit(h.id) }) {
+                                    Text("Restore", color = MaterialTheme.colorScheme.primary, fontSize = 11.sp)
+                                }
+                            }
+                        }
+                    }
+
+                    item {
+                        Spacer(Modifier.height(8.dp))
+                        TagManagerCard(
+                            tags = HabitDomain.getActiveTags(appData),
+                            habits = appData.habits.filter { !it.archived },
+                            onAddTag = onAddTag
+                        )
+                    }
+
+                    item {
+                        Spacer(Modifier.height(8.dp))
+                        Row(
+                            Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column {
+                                Text(
+                                    "Exercise routines",
+                                    color = MaterialTheme.colorScheme.primary,
+                                    fontSize = 14.sp,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                                Text(
+                                    "Structured workouts · Start from Today or here",
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    fontSize = 10.sp
+                                )
+                            }
+                            Row {
+                                TextButton(onClick = onLoadBlueprintRoutines) {
+                                    Text("Templates", color = MaterialTheme.colorScheme.primary, fontSize = 11.sp)
+                                }
+                                TextButton(onClick = { showNewRoutine = true }) {
+                                    Text("+ New", color = MaterialTheme.colorScheme.primary, fontSize = 11.sp)
+                                }
+                            }
+                        }
+                    }
+                    val activeRoutines = HabitDomain.getActiveRoutines(appData)
+                    if (activeRoutines.isEmpty()) {
+                        item {
+                            Text(
+                                "No routines yet. Load Blueprint templates or create one.",
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                fontSize = 12.sp
+                            )
+                        }
+                    } else {
+                        items(activeRoutines, key = { it.id }) { rt ->
+                            Card(
+                                modifier = Modifier.fillMaxWidth(),
+                                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+                            ) {
+                                Column(Modifier.padding(12.dp)) {
+                                    Text(
+                                        rt.name,
+                                        color = MaterialTheme.colorScheme.onSurface,
+                                        fontWeight = FontWeight.SemiBold,
+                                        fontSize = 15.sp
+                                    )
+                                    Text(
+                                        listOfNotNull(
+                                            "${rt.exercises.size} exercises",
+                                            "~${rt.estimatedDurationMin} min",
+                                            HabitDomain.showRuleLabel(
+                                                Habit(
+                                                    id = rt.id, name = rt.name, groupId = "",
+                                                    showPreset = rt.showPreset, weekdays = rt.weekdays
+                                                )
+                                            ),
+                                            rt.tags.take(2).joinToString(", ").ifBlank { null }
+                                        ).joinToString(" · "),
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        fontSize = 11.sp
+                                    )
+                                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                        TextButton(onClick = { onStartRoutine(rt) }) {
+                                            Text("Start", color = MaterialTheme.colorScheme.primary, fontSize = 12.sp)
+                                        }
+                                        TextButton(onClick = { showRoutineEditor = rt }) {
+                                            Text("Edit", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
+                                        }
+                                        TextButton(onClick = { onArchiveRoutine(rt.id) }) {
+                                            Text("Archive", color = MaterialTheme.colorScheme.error, fontSize = 11.sp)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    item { Spacer(Modifier.height(12.dp)) }
+                }
+            }
+
+            1 -> {
+                // ——— Groups: list or drill-down ———
+                if (selectedGroupId == null) {
+                    LazyColumn(
+                        modifier = Modifier.weight(1f),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        item {
+                            ManageSectionHeader(
+                                title = "Timeline groups",
+                                subtitle = "When on the day · attach habits from the Habits catalog",
+                                action = {
+                                    TextButton(onClick = { showAddGroup = true }) {
+                                        Icon(Icons.Default.Add, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(16.dp))
+                                        Spacer(Modifier.width(2.dp))
+                                        Text("Group", color = MaterialTheme.colorScheme.primary, fontSize = 12.sp)
+                                    }
+                                }
+                            )
+                        }
+                        items(activeGroups, key = { it.id }) { group ->
+                            val subCount = appData.groups.count { it.parentId == group.id && !it.archived }
+                            val count = HabitDomain.getActiveHabitsForGroup(appData, group.id).size
+                            val linked = when (group.id) {
+                                appData.sleep.morningGroupId -> " · wake"
+                                appData.sleep.bedtimeGroupId -> " · bed"
+                                appData.sleep.sleepGroupId -> " · sleep"
+                                else -> ""
+                            }
+                            Card(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable { selectedGroupId = group.id },
+                                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                                shape = RoundedCornerShape(12.dp)
+                            ) {
+                                Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+                                    Column(Modifier.weight(1f)) {
                                         Text(
-                                            "Also in: ${alsoNames.joinToString(", ")}",
-                                            color = MaterialTheme.colorScheme.primary,
-                                            fontSize = 10.sp
+                                            group.name,
+                                            color = MaterialTheme.colorScheme.onSurface,
+                                            fontSize = 16.sp,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                        Text(
+                                            "$count items · ${group.timeHint}$linked" +
+                                                if (subCount > 0) " · $subCount subgroups" else "",
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            fontSize = 11.sp
+                                        )
+                                    }
+                                    Icon(Icons.Default.Edit, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+                            }
+                        }
+                        if (archivedGroups.isNotEmpty()) {
+                            item {
+                                Spacer(Modifier.height(8.dp))
+                                Text(
+                                    "Archived groups",
+                                    color = MaterialTheme.colorScheme.error,
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                            }
+                            items(archivedGroups, key = { "ag_${it.id}" }) { g ->
+                                Card(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+                                ) {
+                                    Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                                        Text("📁 ${g.name}", color = MaterialTheme.colorScheme.onSurface, modifier = Modifier.weight(1f))
+                                        TextButton(onClick = { onUnarchiveGroup(g.id) }) {
+                                            Text("Restore", color = MaterialTheme.colorScheme.primary, fontSize = 12.sp)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        item { Spacer(Modifier.height(12.dp)) }
+                    }
+                } else {
+                    val group = activeGroups.find { it.id == selectedGroupId } ?: run {
+                        selectedGroupId = null
+                        return@Column
+                    }
+                    val habitsInGroup = HabitDomain.getActiveHabitsForGroup(appData, group.id)
+                    val subs = appData.groups.filter { it.parentId == group.id && !it.archived }
+
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier
+                                .weight(1f)
+                                .clickable { selectedGroupId = null }
+                                .padding(vertical = 4.dp)
+                        ) {
+                            Icon(
+                                Icons.AutoMirrored.Filled.ArrowBack,
+                                contentDescription = "Back to groups",
+                                tint = MaterialTheme.colorScheme.onSurface,
+                                modifier = Modifier.padding(end = 8.dp)
+                            )
+                            Text(
+                                group.name,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                fontSize = 18.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                        TextButton(onClick = { confirmArchiveGroupId = group.id }) {
+                            Text("Archive", color = MaterialTheme.colorScheme.error, fontSize = 11.sp)
+                        }
+                    }
+
+                    if (subs.isNotEmpty()) {
+                        Text("Subgroups / Plans", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
+                        subs.forEach { sub ->
+                            Text("  • ${sub.name}", color = MaterialTheme.colorScheme.onSurface, modifier = Modifier.padding(4.dp))
+                        }
+                    }
+
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        "Habits here appear on Today in this block. Same habit can be in many groups — once each. Create new habits on the Habits tab.",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        fontSize = 10.sp,
+                        modifier = Modifier.padding(bottom = 4.dp)
+                    )
+                    TextButton(onClick = { attachHabitToGroupId = group.id }) {
+                        Icon(Icons.Default.Add, null, modifier = Modifier.size(16.dp), tint = MaterialTheme.colorScheme.primary)
+                        Spacer(Modifier.width(2.dp))
+                        Text("Add habit", color = MaterialTheme.colorScheme.primary, fontSize = 12.sp)
+                    }
+
+                    LazyColumn(modifier = Modifier.weight(1f)) {
+                        items(habitsInGroup, key = { it.id }) { h ->
+                            val memberCount = HabitDomain.membershipGroupIds(h).size
+                            Card(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 4.dp),
+                                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                                shape = RoundedCornerShape(10.dp)
+                            ) {
+                                Row(
+                                    Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Column(Modifier.weight(1f)) {
+                                        Text(
+                                            h.name,
+                                            color = MaterialTheme.colorScheme.onSurface,
+                                            fontSize = 15.sp,
+                                            fontWeight = FontWeight.Medium
+                                        )
+                                        val tagLabels = HabitDomain.tagNamesForHabit(appData, h)
+                                        Text(
+                                            listOfNotNull(
+                                                HabitDomain.showRuleLabel(h),
+                                                if (memberCount > 1) "$memberCount groups" else null,
+                                                tagLabels.take(2).joinToString(", ").ifBlank { null }
+                                            ).joinToString(" · "),
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            fontSize = 11.sp
+                                        )
+                                    }
+                                    TextButton(onClick = { onReorderHabit(h.id, -1, group.id) }) {
+                                        Text("↑", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 14.sp)
+                                    }
+                                    TextButton(onClick = { onReorderHabit(h.id, 1, group.id) }) {
+                                        Text("↓", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 14.sp)
+                                    }
+                                    TextButton(
+                                        onClick = { onRemoveHabitFromGroup(h.id, group.id) },
+                                        enabled = memberCount > 1
+                                    ) {
+                                        Text(
+                                            "Remove",
+                                            color = if (memberCount > 1) MaterialTheme.colorScheme.error
+                                            else MaterialTheme.colorScheme.onSurfaceVariant,
+                                            fontSize = 11.sp
                                         )
                                     }
                                 }
-                                if (afterLabel != null) {
-                                    Text("after $afterLabel", color = MaterialTheme.colorScheme.primary, fontSize = 10.sp)
-                                }
-                            }
-                            TextButton(onClick = { onReorderHabit(h.id, -1) }) {
-                                Text("↑", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 14.sp)
-                            }
-                            TextButton(onClick = { onReorderHabit(h.id, 1) }) {
-                                Text("↓", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 14.sp)
-                            }
-                            IconButton(onClick = { showEditHabit = h }) {
-                                Icon(Icons.Default.Edit, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
                             }
                         }
-                        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                            TextButton(onClick = { moveHabitId = h.id }) {
-                                Text("Move", color = MaterialTheme.colorScheme.primary, fontSize = 11.sp)
-                            }
-                            TextButton(onClick = { stackHabitId = h.id }) {
-                                Text(if (h.afterHabitId != null) "Restack" else "Stack after…", color = MaterialTheme.colorScheme.primary, fontSize = 11.sp)
-                            }
-                            if (h.afterHabitId != null) {
-                                TextButton(onClick = {
-                                    onUpdateHabit(h.copy(afterHabitId = null))
-                                }) {
-                                    Text("Unstack", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp)
-                                }
+                        if (habitsInGroup.isEmpty()) {
+                            item {
+                                Text(
+                                    "No habits in this group yet. Create habits on the Habits tab, then add them here.",
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    fontSize = 13.sp,
+                                    modifier = Modifier.padding(vertical = 12.dp)
+                                )
                             }
                         }
                     }
                 }
             }
 
-            val rem = appData.reminders.firstOrNull { it.groupId == group.id }
-            Row {
-                IconButton(onClick = {
-                    reminderDialogGroup = group
-                    showReminderDialog = true
-                }) {
-                    Icon(Icons.Default.Notifications, null, tint = if (rem?.enabled == true) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
+            else -> {
+                // ——— Planner: schedule + reminders + backup ———
+                LazyColumn(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    item {
+                        DailyPlannerCard(
+                            appData = appData,
+                            groups = activeGroups,
+                            schedules = schedules,
+                            activeScheduleId = activeScheduleId,
+                            isEditingSchedule = isEditingSchedule,
+                            editBlocks = editBlocks,
+                            onEditBlocksChange = { editBlocks = it },
+                            onToggleEditing = {
+                                if (!isEditingSchedule) {
+                                    editBlocks = schedules.firstOrNull { it.id == activeScheduleId }?.timeBlocks
+                                        ?: emptyList()
+                                }
+                                isEditingSchedule = !isEditingSchedule
+                            },
+                            onCloseEditing = { isEditingSchedule = false },
+                            onApplySleep = onApplySleepSchedule,
+                            onSetActiveSchedule = onSetActiveSchedule,
+                            onUpdateScheduleBlocks = onUpdateScheduleBlocks,
+                            onApplySchedulePreset = onApplySchedulePreset
+                        )
+                    }
+                    item {
+                        RemindersCard(
+                            appData = appData,
+                            onToggleMaster = onSetRemindersMasterEnabled,
+                            onToggleReminder = onToggleReminder,
+                            onEditReminder = { rem ->
+                                reminderDialogGroup = rem.groupId?.let { gid ->
+                                    appData.groups.find { it.id == gid }
+                                }
+                                showReminderDialog = true
+                            },
+                            onAlignToSchedule = onAlignRemindersToSchedule
+                        )
+                    }
+                    item {
+                        Spacer(Modifier.height(4.dp))
+                        Text("Backup", color = MaterialTheme.colorScheme.primary, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                        Spacer(Modifier.height(6.dp))
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Button(
+                                onClick = onExportCsv,
+                                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
+                            ) {
+                                Text("Export Backup")
+                            }
+                            OutlinedButton(onClick = onImportCsv) {
+                                Text("Import CSV")
+                            }
+                        }
+                        Text(
+                            "Exports full backup (JSON) + structure even with no entries.",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            fontSize = 10.sp,
+                            modifier = Modifier.padding(top = 4.dp)
+                        )
+                    }
+                    item { Spacer(Modifier.height(12.dp)) }
                 }
-                if (rem != null) Text("${rem.time} (${rem.days.size}d)", color = MaterialTheme.colorScheme.primary, fontSize = 12.sp)
             }
         }
     }
@@ -490,12 +670,66 @@ fun ManageScreen(
             onAdd = { n, h, p -> onAddGroup(n, h, p); showAddGroup = false }
         )
     }
-    showAddHabitFor?.let { gid ->
+    if (showCreateHabit) {
         AddHabitWithTypeDialogLocal(
-            groupId = gid,
+            initialGroupId = activeGroups.firstOrNull()?.id.orEmpty(),
+            groups = activeGroups,
             tags = HabitDomain.getActiveTags(appData),
-            onDismiss = { showAddHabitFor = null },
+            onDismiss = { showCreateHabit = false },
             onAdd = onAddHabit
+        )
+    }
+    attachHabitToGroupId?.let { gid ->
+        val groupName = activeGroups.find { it.id == gid }?.name ?: "group"
+        val candidates = appData.habits
+            .filter { !it.archived }
+            .filter { h -> !HabitDomain.belongsToGroup(h, gid) }
+            .sortedBy { it.name.lowercase() }
+        AlertDialog(
+            onDismissRequest = { attachHabitToGroupId = null },
+            containerColor = MaterialTheme.colorScheme.surface,
+            titleContentColor = MaterialTheme.colorScheme.onSurface,
+            textContentColor = MaterialTheme.colorScheme.onSurface,
+            title = { Text("Add habit to $groupName") },
+            text = {
+                Column(Modifier.verticalScroll(rememberScrollState())) {
+                    Text(
+                        "Pick from your Habits catalog. Each habit joins a group only once, but can be in as many groups as you want. Still one log per day.",
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    if (candidates.isEmpty()) {
+                        Text(
+                            "Every habit is already in this group, or you have no habits yet. Create habits on the Habits tab first.",
+                            fontSize = 13.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    } else {
+                        candidates.forEach { h ->
+                            val inGroups = HabitDomain.membershipGroupIds(h).mapNotNull { id ->
+                                activeGroups.find { it.id == id }?.name
+                            }.joinToString(", ")
+                            TextButton(
+                                onClick = {
+                                    onAddHabitToGroup(h.id, gid)
+                                    attachHabitToGroupId = null
+                                },
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text(
+                                    if (inGroups.isBlank()) h.name else "${h.name}  ·  $inGroups",
+                                    color = MaterialTheme.colorScheme.primary,
+                                    fontSize = 13.sp
+                                )
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { attachHabitToGroupId = null }) { Text("Close") }
+            }
         )
     }
     if (showReminderDialog) {
@@ -516,7 +750,6 @@ fun ManageScreen(
     showEditHabit?.let { h ->
         EditHabitDialog(
             habit = h,
-            allHabits = appData.habits.filter { !it.archived },
             groups = activeGroups,
             tags = HabitDomain.getActiveTags(appData),
             onDismiss = { showEditHabit = null },
@@ -542,61 +775,6 @@ fun ManageScreen(
             onArchive = { onArchiveRoutine(rt.id); showRoutineEditor = null }
         )
     }
-    moveHabitId?.let { hid ->
-        AlertDialog(
-            onDismissRequest = { moveHabitId = null },
-            containerColor = MaterialTheme.colorScheme.surface,
-            title = { Text("Move to timeline group") },
-            text = {
-                Column {
-                    Text(
-                        "Tags (Supplements, etc.) stay on the item for History.",
-                        fontSize = 11.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Spacer(Modifier.height(6.dp))
-                    activeGroups.forEach { g ->
-                        TextButton(onClick = {
-                            onMoveHabitToGroup(hid, g.id)
-                            moveHabitId = null
-                        }) {
-                            Text(g.name, color = MaterialTheme.colorScheme.primary)
-                        }
-                    }
-                }
-            },
-            confirmButton = {
-                TextButton(onClick = { moveHabitId = null }) { Text("Cancel") }
-            }
-        )
-    }
-    stackHabitId?.let { hid ->
-        val candidates = appData.habits.filter { !it.archived && it.id != hid }
-        AlertDialog(
-            onDismissRequest = { stackHabitId = null },
-            containerColor = MaterialTheme.colorScheme.surface,
-            title = { Text("Stack after…") },
-            text = {
-                Column {
-                    Text("This item will sit under the chosen one on Today.", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Spacer(Modifier.height(8.dp))
-                    candidates.forEach { c ->
-                        TextButton(onClick = {
-                            val h = appData.habits.find { it.id == hid }
-                            if (h != null) onUpdateHabit(h.copy(afterHabitId = c.id))
-                            stackHabitId = null
-                        }) {
-                            Text("${c.name} (${appData.groups.find { it.id == c.groupId }?.name ?: "?"})", color = MaterialTheme.colorScheme.primary, fontSize = 13.sp)
-                        }
-                    }
-                }
-            },
-            confirmButton = {
-                TextButton(onClick = { stackHabitId = null }) { Text("Cancel") }
-            }
-        )
-    }
-
     // Archive confirmations - proper color, not immediate, tap away = nothing
     confirmArchiveGroupId?.let { gid ->
         AlertDialog(
@@ -744,10 +922,154 @@ internal fun ShowWhenPicker(
     }
 }
 
+
+private fun habitTypeLabel(type: HabitType): String = when (type) {
+    HabitType.CHECKBOX -> "Check"
+    HabitType.COUNTER -> "Counter"
+    HabitType.DURATION_MIN -> "Duration"
+    HabitType.SCALE_1_5 -> "Scale"
+    HabitType.NOTE -> "Note"
+}
+
+@Composable
+private fun HabitTypeChipRow(
+    selected: HabitType,
+    onSelect: (HabitType) -> Unit
+) {
+    HabitType.entries.chunked(3).forEach { row ->
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(bottom = 4.dp)
+        ) {
+            row.forEach { t ->
+                ThemedFilterChip(
+                    selected = selected == t,
+                    onClick = { onSelect(t) },
+                    label = { Text(habitTypeLabel(t), fontSize = 12.sp) }
+                )
+            }
+        }
+    }
+}
+
+/**
+ * Flat multi-group membership editor for habit create/edit.
+ * Shows every group the habit is in as a full row; + Add joins another group once.
+ * Storage: first id → groupId, rest → additionalGroupIds (transparent to the user).
+ */
+@Composable
+private fun GroupMembershipSection(
+    groups: List<Group>,
+    selectedIds: List<String>,
+    onSelectedIdsChange: (List<String>) -> Unit
+) {
+    var showAddPicker by remember { mutableStateOf(false) }
+    val byId = remember(groups) { groups.associateBy { it.id } }
+    val available = groups.filter { it.id !in selectedIds }
+
+    Text("Groups", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+    Text(
+        "Appears on Today in each listed group · once per group · one log per day",
+        fontSize = 10.sp,
+        color = MaterialTheme.colorScheme.onSurfaceVariant
+    )
+    Spacer(Modifier.height(6.dp))
+
+    selectedIds.forEach { id ->
+        val g = byId[id]
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 2.dp)
+                .background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(8.dp))
+                .padding(horizontal = 10.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                g?.name ?: id,
+                modifier = Modifier.weight(1f),
+                color = MaterialTheme.colorScheme.onSurface,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Medium
+            )
+            if (selectedIds.size > 1) {
+                TextButton(
+                    onClick = { onSelectedIdsChange(selectedIds.filter { it != id }) },
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)
+                ) {
+                    Text("Remove", color = MaterialTheme.colorScheme.error, fontSize = 12.sp)
+                }
+            } else {
+                Text(
+                    "required",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontSize = 11.sp
+                )
+            }
+        }
+    }
+
+    if (selectedIds.isEmpty()) {
+        Text(
+            "Add at least one group",
+            color = MaterialTheme.colorScheme.error,
+            fontSize = 11.sp
+        )
+    }
+
+    if (available.isNotEmpty()) {
+        Spacer(Modifier.height(6.dp))
+        OutlinedButton(
+            onClick = { showAddPicker = true },
+            modifier = Modifier.fillMaxWidth(),
+            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)
+        ) {
+            Icon(Icons.Default.Add, null, modifier = Modifier.size(18.dp))
+            Spacer(Modifier.width(4.dp))
+            Text("Add to another group", fontSize = 13.sp)
+        }
+    }
+
+    if (showAddPicker) {
+        AlertDialog(
+            onDismissRequest = { showAddPicker = false },
+            containerColor = MaterialTheme.colorScheme.surface,
+            titleContentColor = MaterialTheme.colorScheme.onSurface,
+            textContentColor = MaterialTheme.colorScheme.onSurface,
+            title = { Text("Add to group") },
+            text = {
+                Column(Modifier.verticalScroll(rememberScrollState())) {
+                    Text(
+                        "Choose a group this habit is not in yet.",
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    available.forEach { g ->
+                        TextButton(
+                            onClick = {
+                                onSelectedIdsChange((selectedIds + g.id).distinct())
+                                showAddPicker = false
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(g.name, color = MaterialTheme.colorScheme.primary)
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showAddPicker = false }) { Text("Cancel") }
+            }
+        )
+    }
+}
+
 @Composable
 private fun EditHabitDialog(
     habit: Habit,
-    allHabits: List<Habit>,
     groups: List<Group>,
     tags: List<Tag>,
     onDismiss: () -> Unit,
@@ -764,15 +1086,19 @@ private fun EditHabitDialog(
             habit.tags.toSet() + if (habit.isSupplement) setOf(TagIds.SUPPLEMENTS) else emptySet()
         )
     }
-    var groupId by remember { mutableStateOf(habit.groupId) }
-    var additionalGroupIds by remember {
-        mutableStateOf(habit.additionalGroupIds.filter { it != habit.groupId }.toSet())
+    // Flat membership set (first id is storage primary only)
+    var selectedGroupIds by remember {
+        mutableStateOf(HabitDomain.membershipGroupIds(habit))
     }
     var showPreset by remember { mutableStateOf(habit.showPreset) }
     var weekdays by remember { mutableStateOf(habit.weekdays) }
     var intervalDays by remember { mutableIntStateOf(habit.intervalDays.coerceAtLeast(1)) }
     var specificDates by remember { mutableStateOf(habit.specificDates) }
-    var afterId by remember { mutableStateOf(habit.afterHabitId) }
+
+    val tagIds = remember(tags) { tags.map { it.id }.toSet() }
+    LaunchedEffect(tagIds) {
+        selectedTags = selectedTags.filter { it in tagIds || it == TagIds.SUPPLEMENTS }.toSet()
+    }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -782,14 +1108,23 @@ private fun EditHabitDialog(
         title = { Text("Edit ${habit.name}") },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState())) {
-                OutlinedTextField(value = name, onValueChange = { name = it }, label = { Text("Name") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-                Spacer(Modifier.height(6.dp))
-                Text("Type", fontSize = 11.sp)
-                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                    HabitType.entries.forEach { t ->
-                        ThemedFilterChip(selected = type == t, onClick = { type = t }, label = { Text(t.name.take(6), fontSize = 10.sp) })
-                    }
-                }
+                OutlinedTextField(
+                    value = name,
+                    onValueChange = { name = it },
+                    label = { Text("Name") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Spacer(Modifier.height(8.dp))
+                Text("Type", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                Spacer(Modifier.height(4.dp))
+                HabitTypeChipRow(selected = type, onSelect = { type = it })
+                Spacer(Modifier.height(8.dp))
+                GroupMembershipSection(
+                    groups = groups,
+                    selectedIds = selectedGroupIds,
+                    onSelectedIdsChange = { selectedGroupIds = it }
+                )
                 Spacer(Modifier.height(8.dp))
                 ShowWhenPicker(
                     preset = showPreset,
@@ -802,93 +1137,61 @@ private fun EditHabitDialog(
                     onDates = { specificDates = it }
                 )
                 Spacer(Modifier.height(8.dp))
-                Text("Primary timeline group (when)", fontSize = 11.sp)
-                Row(horizontalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.fillMaxWidth()) {
-                    groups.forEach { g ->
-                        ThemedFilterChip(
-                            selected = groupId == g.id,
-                            onClick = {
-                                groupId = g.id
-                                additionalGroupIds = additionalGroupIds - g.id
-                            },
-                            label = { Text(g.name.take(10), fontSize = 10.sp) }
-                        )
-                    }
-                }
-                Spacer(Modifier.height(6.dp))
-                Text("Also appear in (e.g. split-dose AM + PM)", fontSize = 11.sp)
-                Text(
-                    "Same habit, one log per day — shows in multiple sections on Today.",
-                    fontSize = 10.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Row(horizontalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.fillMaxWidth()) {
-                    groups.filter { it.id != groupId }.forEach { g ->
-                        ThemedFilterChip(
-                            selected = g.id in additionalGroupIds,
-                            onClick = {
-                                additionalGroupIds =
-                                    if (g.id in additionalGroupIds) additionalGroupIds - g.id
-                                    else additionalGroupIds + g.id
-                            },
-                            label = { Text(g.name.take(10), fontSize = 10.sp) }
-                        )
-                    }
-                }
-                Spacer(Modifier.height(8.dp))
-                Text("Tags (what — for History)", fontSize = 11.sp)
+                Text("Tags (what — for History)", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                Spacer(Modifier.height(4.dp))
                 TagChipRow(tags = tags, selected = selectedTags) { id ->
                     selectedTags = if (id in selectedTags) selectedTags - id else selectedTags + id
                 }
-                Spacer(Modifier.height(6.dp))
-                Text("Stack after", fontSize = 11.sp)
-                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                    ThemedFilterChip(selected = afterId == null, onClick = { afterId = null }, label = { Text("None", fontSize = 10.sp) })
-                    allHabits.filter { it.id != habit.id }.take(8).forEach { o ->
-                        ThemedFilterChip(
-                            selected = afterId == o.id,
-                            onClick = { afterId = o.id },
-                            label = { Text(o.name.take(12), fontSize = 10.sp) }
-                        )
-                    }
-                }
+                Spacer(Modifier.height(8.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     ThemedCheckbox(checked = !canSkip, onCheckedChange = { canSkip = !it })
                     Text("Essential (harder to skip)", fontSize = 12.sp)
                 }
                 if (type != HabitType.CHECKBOX && type != HabitType.NOTE) {
-                    OutlinedTextField(value = defaultValue, onValueChange = { defaultValue = it }, label = { Text("Default value") }, modifier = Modifier.fillMaxWidth())
-                    OutlinedTextField(value = unit, onValueChange = { unit = it }, label = { Text("Unit") }, modifier = Modifier.fillMaxWidth())
+                    OutlinedTextField(
+                        value = defaultValue,
+                        onValueChange = { defaultValue = it },
+                        label = { Text("Default value") },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    OutlinedTextField(
+                        value = unit,
+                        onValueChange = { unit = it },
+                        label = { Text("Unit") },
+                        modifier = Modifier.fillMaxWidth()
+                    )
                 }
             }
         },
         confirmButton = {
-            TextButton(onClick = {
-                val target = defaultValue.toDoubleOrNull()
-                val anchor = if (showPreset == ShowPreset.EVERY_N_DAYS) {
-                    habit.anchorDate ?: LocalDate.now().toString()
-                } else habit.anchorDate
-                val tagList = selectedTags.toList()
-                onSave(
-                    habit.copy(
-                        name = name.trim(),
-                        type = type,
-                        canSkip = canSkip,
-                        target = target,
-                        unit = unit,
-                        isSupplement = TagIds.SUPPLEMENTS in tagList,
-                        tags = tagList,
-                        groupId = groupId,
-                        additionalGroupIds = additionalGroupIds.filter { it != groupId }.toList(),
-                        showPreset = showPreset,
-                        weekdays = if (weekdays.isEmpty()) setOf(1, 2, 3, 4, 5, 6, 7) else weekdays,
-                        intervalDays = intervalDays,
-                        anchorDate = anchor,
-                        specificDates = specificDates,
-                        afterHabitId = afterId
+            TextButton(
+                onClick = {
+                    if (selectedGroupIds.isEmpty()) return@TextButton
+                    val target = defaultValue.toDoubleOrNull()
+                    val anchor = if (showPreset == ShowPreset.EVERY_N_DAYS) {
+                        habit.anchorDate ?: LocalDate.now().toString()
+                    } else habit.anchorDate
+                    val tagList = selectedTags.filter { it in tagIds || it == TagIds.SUPPLEMENTS }
+                    val withGroups = HabitDomain.withMembership(habit, selectedGroupIds)
+                    onSave(
+                        withGroups.copy(
+                            name = name.trim(),
+                            type = type,
+                            canSkip = canSkip,
+                            target = target,
+                            unit = unit,
+                            isSupplement = TagIds.SUPPLEMENTS in tagList,
+                            tags = tagList,
+                            showPreset = showPreset,
+                            weekdays = if (weekdays.isEmpty()) setOf(1, 2, 3, 4, 5, 6, 7) else weekdays,
+                            intervalDays = intervalDays,
+                            anchorDate = anchor,
+                            specificDates = specificDates
+                        )
                     )
-                )
-            }) { Text("Save") }
+                },
+                enabled = selectedGroupIds.isNotEmpty() && name.isNotBlank()
+            ) { Text("Save") }
         },
         dismissButton = {
             Row {
@@ -901,7 +1204,8 @@ private fun EditHabitDialog(
 
 @Composable
 private fun AddHabitWithTypeDialogLocal(
-    groupId: String,
+    initialGroupId: String,
+    groups: List<Group>,
     tags: List<Tag>,
     onDismiss: () -> Unit,
     onAdd: (
@@ -913,11 +1217,15 @@ private fun AddHabitWithTypeDialogLocal(
         showPreset: ShowPreset,
         weekdays: Set<Int>,
         intervalDays: Int,
-        specificDates: List<String>
+        specificDates: List<String>,
+        additionalGroupIds: List<String>
     ) -> Unit
 ) {
     var name by remember { mutableStateOf("") }
     var type by remember { mutableStateOf(HabitType.CHECKBOX) }
+    var selectedGroupIds by remember {
+        mutableStateOf(if (initialGroupId.isNotBlank()) listOf(initialGroupId) else emptyList())
+    }
     var selectedTags by remember { mutableStateOf(setOf<String>()) }
     var showPreset by remember { mutableStateOf(ShowPreset.DAILY) }
     var weekdays by remember { mutableStateOf(setOf(1, 2, 3, 4, 5, 6, 7)) }
@@ -925,12 +1233,19 @@ private fun AddHabitWithTypeDialogLocal(
     var specificDates by remember { mutableStateOf(listOf<String>()) }
     var addedCount by remember { mutableIntStateOf(0) }
 
+    val tagIds = remember(tags) { tags.map { it.id }.toSet() }
+    LaunchedEffect(tagIds) {
+        selectedTags = selectedTags.filter { it in tagIds }.toSet()
+    }
+
     fun submit(close: Boolean) {
-        if (name.isNotBlank()) {
-            val list = selectedTags.toList()
+        val primary = selectedGroupIds.firstOrNull()
+        if (name.isNotBlank() && primary != null) {
+            val list = selectedTags.filter { it in tagIds }
             onAdd(
-                name.trim(), groupId, type, TagIds.SUPPLEMENTS in list, list,
-                showPreset, weekdays, intervalDays, specificDates
+                name.trim(), primary, type, TagIds.SUPPLEMENTS in list, list,
+                showPreset, weekdays, intervalDays, specificDates,
+                selectedGroupIds.drop(1)
             )
             name = ""
             selectedTags = emptySet()
@@ -945,7 +1260,7 @@ private fun AddHabitWithTypeDialogLocal(
         titleContentColor = MaterialTheme.colorScheme.onSurface,
         textContentColor = MaterialTheme.colorScheme.onSurface,
         title = {
-            Text(if (addedCount > 0) "New item (+$addedCount)" else "New item")
+            Text(if (addedCount > 0) "New habit (+$addedCount)" else "New habit")
         },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState())) {
@@ -956,13 +1271,17 @@ private fun AddHabitWithTypeDialogLocal(
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
-                Text("Type", fontSize = 11.sp)
-                Row {
-                    HabitType.entries.forEach { t ->
-                        ThemedFilterChip(selected = type == t, onClick = { type = t }, label = { Text(t.name.take(6), fontSize = 10.sp) })
-                    }
-                }
-                Spacer(Modifier.height(6.dp))
+                Spacer(Modifier.height(8.dp))
+                Text("Type", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                Spacer(Modifier.height(4.dp))
+                HabitTypeChipRow(selected = type, onSelect = { type = it })
+                Spacer(Modifier.height(8.dp))
+                GroupMembershipSection(
+                    groups = groups,
+                    selectedIds = selectedGroupIds,
+                    onSelectedIdsChange = { selectedGroupIds = it }
+                )
+                Spacer(Modifier.height(8.dp))
                 ShowWhenPicker(
                     preset = showPreset,
                     weekdays = weekdays,
@@ -973,8 +1292,9 @@ private fun AddHabitWithTypeDialogLocal(
                     onInterval = { intervalDays = it },
                     onDates = { specificDates = it }
                 )
-                Spacer(Modifier.height(6.dp))
-                Text("Tags (History category)", fontSize = 11.sp)
+                Spacer(Modifier.height(8.dp))
+                Text("Tags (History category)", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                Spacer(Modifier.height(4.dp))
                 TagChipRow(tags = tags, selected = selectedTags) { id ->
                     selectedTags = if (id in selectedTags) selectedTags - id else selectedTags + id
                 }
@@ -982,8 +1302,16 @@ private fun AddHabitWithTypeDialogLocal(
         },
         confirmButton = {
             Row {
-                TextButton(onClick = { submit(false) }) { Text("Add another") }
-                TextButton(onClick = { submit(true) }) { Text(if (name.isNotBlank() || addedCount == 0) "Add & close" else "Done") }
+                TextButton(
+                    onClick = { submit(false) },
+                    enabled = name.isNotBlank() && selectedGroupIds.isNotEmpty()
+                ) { Text("Add another") }
+                TextButton(
+                    onClick = { submit(true) },
+                    enabled = (name.isNotBlank() && selectedGroupIds.isNotEmpty()) || addedCount > 0
+                ) {
+                    Text(if (name.isNotBlank() || addedCount == 0) "Add & close" else "Done")
+                }
             }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }

@@ -180,7 +180,8 @@ class SteadyViewModel(
         weekdays: Set<Int> = setOf(1, 2, 3, 4, 5, 6, 7),
         intervalDays: Int = 2,
         specificDates: List<String> = emptyList(),
-        why: String = ""
+        why: String = "",
+        additionalGroupIds: List<String> = emptyList()
     ) {
         if (name.isBlank()) return
         viewModelScope.launch {
@@ -203,7 +204,8 @@ class SteadyViewModel(
                 weekdays = weekdays,
                 intervalDays = intervalDays,
                 anchorDate = if (showPreset == com.steady.habittracker.data.ShowPreset.EVERY_N_DAYS) todayStr else null,
-                specificDates = specificDates
+                specificDates = specificDates,
+                additionalGroupIds = additionalGroupIds.filter { it != groupId && it.isNotBlank() }.distinct()
             )
             val updated = current.withAddedHabit(newHabit)
             repository.saveData(updated)
@@ -283,24 +285,17 @@ class SteadyViewModel(
         }
     }
 
-    fun reorderHabit(habitId: String, direction: Int) {
-        // direction: -1 up, +1 down within group
+    /**
+     * Reorder within a timeline group list. Pass [withinGroupId] so multi-group
+     * habits reorder among peers in that group (not only primary-group siblings).
+     */
+    fun reorderHabit(habitId: String, direction: Int, withinGroupId: String? = null) {
         viewModelScope.launch {
             val current = appData.value
             val habit = current.habits.find { it.id == habitId } ?: return@launch
-            val siblings = current.habits.filter { it.groupId == habit.groupId && !it.archived }.sortedBy { it.order }
-            val idx = siblings.indexOfFirst { it.id == habitId }
-            val swapIdx = idx + direction
-            if (idx < 0 || swapIdx !in siblings.indices) return@launch
-            val a = siblings[idx]
-            val b = siblings[swapIdx]
-            val newHabits = current.habits.map {
-                when (it.id) {
-                    a.id -> it.copy(order = b.order)
-                    b.id -> it.copy(order = a.order)
-                    else -> it
-                }
-            }
+            val groupId = withinGroupId ?: habit.groupId
+            val newHabits = HabitDomain.reorderWithinGroup(current.habits, habitId, groupId, direction)
+            if (newHabits === current.habits) return@launch
             val updated = current.copy(habits = newHabits)
             repository.saveData(updated)
             refreshWidget(updated)
@@ -310,9 +305,36 @@ class SteadyViewModel(
     fun moveHabitToGroup(habitId: String, newGroupId: String) {
         viewModelScope.launch {
             val current = appData.value
-            val newOrder = current.habits.count { it.groupId == newGroupId && !it.archived }
+            val newOrder = current.habits.count {
+                !it.archived && HabitDomain.belongsToGroup(it, newGroupId)
+            }
             val newHabits = com.steady.habittracker.data.moveHabit(current.habits, habitId, newGroupId, newOrder)
             val updated = current.copy(habits = newHabits)
+            repository.saveData(updated)
+            refreshWidget(updated)
+        }
+    }
+
+    /** Attach existing habit to a group (no-op if already a member). */
+    fun addHabitToGroup(habitId: String, groupId: String) {
+        viewModelScope.launch {
+            val current = appData.value
+            val habit = current.habits.find { it.id == habitId } ?: return@launch
+            val next = HabitDomain.addToGroup(habit, groupId)
+            if (next == habit) return@launch
+            val updated = current.withHabit(next)
+            repository.saveData(updated)
+            refreshWidget(updated)
+        }
+    }
+
+    /** Detach habit from group; refuses if it would leave zero groups. */
+    fun removeHabitFromGroup(habitId: String, groupId: String) {
+        viewModelScope.launch {
+            val current = appData.value
+            val habit = current.habits.find { it.id == habitId } ?: return@launch
+            val next = HabitDomain.removeFromGroup(habit, groupId) ?: return@launch
+            val updated = current.withHabit(next)
             repository.saveData(updated)
             refreshWidget(updated)
         }

@@ -177,9 +177,10 @@ data class Habit(
     /** Soft stack: previous habit in sequence (Atomic Habits style). Null = standalone / root. */
     val afterHabitId: String? = null,
     /**
-     * Extra timeline groups where this habit also appears on Today (display only).
-     * Primary [groupId] remains canonical for Manage catalog, widget, reminders (#24).
-     * One HabitEntry per day regardless of which appearance is tapped.
+     * Extra timeline groups for multi-group membership (#24).
+     * Together with [groupId] this is a flat set: habit appears once per group on Today,
+     * may join any number of groups, and still has one HabitEntry per day.
+     * [groupId] is the first/canonical member of that set (storage shape only).
      */
     val additionalGroupIds: List<String> = emptyList()
 )

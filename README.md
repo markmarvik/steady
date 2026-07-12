@@ -37,14 +37,13 @@ Steady helps you run a **daily routine** (sleep-anchored morning → focus → w
 - Workout session history
 
 ### Manage
-| Section | What it does |
+Three focused sub-tabs:
+
+| Sub-tab | What it does |
 |--------|----------------|
-| **Daily Planner** | Sleep spine (wake / bed / wind-down) + **24h timeline** editor in one place |
-| **Timeline groups** | Catalog of when you do things (Morning, Focus, Bedtime, Sleep, …) |
-| **Reminders** | Master switch, per-reminder toggles, times **aligned to your schedule** |
-| **Tags** | What it is for History (independent of timeline group) |
-| **Exercise routines** | Blueprint templates + custom workouts |
-| **Backup / Archive** | JSON export, restore archived groups and habits |
+| **Habits** | Flat catalog: create, edit, archive habits; **tags** for History; **exercise routines** |
+| **Groups** | Timeline groups (Morning, Focus, Bedtime…); **attach existing habits**, order, move primary |
+| **Planner** | Sleep spine + **24h timeline**, **reminders** (aligned to schedule), **backup** export |
 
 ### Widget & notifications
 - Home-screen widget: current group, missed items, what’s next
@@ -63,8 +62,8 @@ Steady helps you run a **daily routine** (sleep-anchored morning → focus → w
 1. **First run** — short onboarding; starter high-ROI habits are preloaded.
 2. **Today** — tap to log; expand the header for weekly trends and per-group averages.
 3. **Path** — run **Start Dreamline** to define dreams; check in with **Am I on path?**
-4. **Manage → Daily Planner** — set wake/bed, apply sleep-centered day, edit the 24h timeline.
-5. **Manage → Reminders** — enable notifications; use **Align times to schedule** after changing the planner.
+4. **Manage → Planner** — set wake/bed, edit the 24h timeline, enable reminders.
+5. **Manage → Habits / Groups** — catalog habits and timeline membership.
 6. **Settings (gear)** — theme only; help/tour lives there too.
 7. **Export** — Manage → Backup → Export Backup (works even with empty history).
 

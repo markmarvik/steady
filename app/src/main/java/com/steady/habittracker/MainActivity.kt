@@ -613,7 +613,7 @@ fun SteadyApp(
                     3 -> ManageScreen(
                         appData = appData,
                         onAddGroup = { n, h, p -> viewModel.addGroup(n, h, p) },
-                        onAddHabit = { name, gid, type, isSupp, tags, preset, weekdays, interval, dates ->
+                        onAddHabit = { name, gid, type, isSupp, tags, preset, weekdays, interval, dates, moreGroups ->
                             viewModel.addHabit(
                                 name = name,
                                 groupId = gid,
@@ -623,7 +623,8 @@ fun SteadyApp(
                                 showPreset = preset,
                                 weekdays = weekdays,
                                 intervalDays = interval,
-                                specificDates = dates
+                                specificDates = dates,
+                                additionalGroupIds = moreGroups
                             )
                         },
                         onDeleteHabit = viewModel::deleteHabit,
@@ -637,7 +638,9 @@ fun SteadyApp(
                         onUpdateHabit = viewModel::updateHabit,
                         onUnarchiveGroup = { viewModel.unarchiveGroup(it) },
                         onUnarchiveHabit = { viewModel.unarchiveHabit(it) },
-                        onReorderHabit = viewModel::reorderHabit,
+                        onReorderHabit = { id, dir, gid -> viewModel.reorderHabit(id, dir, gid) },
+                        onAddHabitToGroup = viewModel::addHabitToGroup,
+                        onRemoveHabitFromGroup = viewModel::removeHabitFromGroup,
                         onMoveHabitToGroup = viewModel::moveHabitToGroup,
                         onApplySchedulePreset = viewModel::applySchedulePreset,
                         onSetActiveSchedule = viewModel::setActiveSchedule,

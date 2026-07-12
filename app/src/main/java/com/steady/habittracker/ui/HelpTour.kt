@@ -39,7 +39,7 @@ val TOUR_STEPS = listOf(
     ),
     TourStep(
         "Tabs: Today / Path / History / Manage",
-        "Four tabs:\n• Today — daily habits & workouts\n• Path — long-term vision, Dreamline goals, alignment\n• History — heatmaps & trends\n• Manage — groups, tags, routines, backup"
+        "Four tabs:\n• Today — daily habits & workouts\n• Path — long-term vision, Dreamline goals, alignment\n• History — heatmaps & trends\n• Manage — Habits, Groups, Planner"
     ),
     TourStep(
         "Today Tab — Your daily actions",
@@ -55,7 +55,7 @@ val TOUR_STEPS = listOf(
     ),
     TourStep(
         "Manage Tab — Full control",
-        "• Daily Planner = sleep times + 24h timeline in one place\n• Groups = when on the timeline (Morning, Focus, Bedtime, Sleep)\n• Reminders = notifications that follow your schedule\n• Tags = what it is for History · exercise routines · export backup"
+        "Manage has three areas:\n• Habits — create, edit, archive habits; tags & exercise routines\n• Groups — timeline groups; attach existing habits; order & move\n• Planner — sleep + 24h schedule, reminders, backup"
     ),
     TourStep(
         "Settings (gear icon)",
@@ -63,7 +63,7 @@ val TOUR_STEPS = listOf(
     ),
     TourStep(
         "Widget & Reminders",
-        "Add the Steady widget to your home screen — it shows exactly the right group for right now + what you missed + what's next.\n\nReminders are in Manage → Reminders. Times align to your Daily Planner (wake, wind-down, blocks). Grant notification + exact alarm permissions for best results."
+        "Add the Steady widget to your home screen — it shows exactly the right group for right now + what you missed + what's next.\n\nReminders are in Manage → Planner. Times align to your Daily Planner (wake, wind-down, blocks). Grant notification + exact alarm permissions for best results."
     ),
     TourStep(
         "You're ready!",
