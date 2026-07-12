@@ -33,6 +33,8 @@ import com.steady.habittracker.data.HabitDomain
 import com.steady.habittracker.data.HabitEntry
 import com.steady.habittracker.data.HabitType
 import com.steady.habittracker.data.TimelineSection
+import com.steady.habittracker.data.displayGlyph
+import com.steady.habittracker.data.displayLabel
 import java.text.SimpleDateFormat
 import java.util.*
 
@@ -355,14 +357,14 @@ private fun TimelineSectionHeader(section: TimelineSection) {
             )
             Spacer(Modifier.width(8.dp))
             Text(
-                "●  ${section.group.name}",
+                "●  ${section.group.displayLabel()}",
                 color = titleColor,
                 fontSize = 13.sp,
                 fontWeight = FontWeight.Bold
             )
         } else {
             Text(
-                section.group.name,
+                section.group.displayLabel(),
                 color = titleColor,
                 fontSize = 12.sp,
                 fontWeight = FontWeight.SemiBold
@@ -463,6 +465,11 @@ private fun HabitRow(
             }
 
             Spacer(Modifier.width(12.dp))
+
+            if (habit.icon.isNotBlank()) {
+                Text(habit.icon.trim(), fontSize = 18.sp)
+                Spacer(Modifier.width(8.dp))
+            }
 
             Column(Modifier.weight(1f)) {
                 Text(

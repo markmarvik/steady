@@ -612,8 +612,8 @@ fun SteadyApp(
                     2 -> HistoryScreen(appData = appData)
                     3 -> ManageScreen(
                         appData = appData,
-                        onAddGroup = { n, h, p -> viewModel.addGroup(n, h, p) },
-                        onAddHabit = { name, gid, type, isSupp, tags, preset, weekdays, interval, dates, moreGroups ->
+                        onAddGroup = { n, h, p, icon -> viewModel.addGroup(n, h, p, icon) },
+                        onAddHabit = { name, gid, type, isSupp, tags, preset, weekdays, interval, dates, moreGroups, icon ->
                             viewModel.addHabit(
                                 name = name,
                                 groupId = gid,
@@ -624,7 +624,8 @@ fun SteadyApp(
                                 weekdays = weekdays,
                                 intervalDays = interval,
                                 specificDates = dates,
-                                additionalGroupIds = moreGroups
+                                additionalGroupIds = moreGroups,
+                                icon = icon
                             )
                         },
                         onDeleteHabit = viewModel::deleteHabit,
@@ -636,6 +637,7 @@ fun SteadyApp(
                         onExportCsv = { exportLauncher.launch("steady_backup_${java.time.LocalDate.now()}.json") },
                         onImportCsv = { },
                         onUpdateHabit = viewModel::updateHabit,
+                        onUpdateGroup = viewModel::updateGroup,
                         onUnarchiveGroup = { viewModel.unarchiveGroup(it) },
                         onUnarchiveHabit = { viewModel.unarchiveHabit(it) },
                         onReorderHabit = { id, dir, gid -> viewModel.reorderHabit(id, dir, gid) },

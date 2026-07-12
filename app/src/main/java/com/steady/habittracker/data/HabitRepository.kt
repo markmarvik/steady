@@ -240,10 +240,10 @@ class AndroidHabitRepository(private val context: Context) : HabitRepository {
      */
     private fun getDefaultData(): AppData {
         val groups = listOf(
-            Group("g_morn", "Morning Routine", "MORNING", 0),
-            Group("g_focus", "Focus & Work", "WORK", 1),
-            Group("g_even", "Bedtime / Wind Down", "BEDTIME", 2),
-            Group("g_sleep", "Sleep", "SLEEP", 3)
+            Group("g_morn", "Morning Routine", "MORNING", 0, icon = "🌅"),
+            Group("g_focus", "Focus & Work", "WORK", 1, icon = "🎯"),
+            Group("g_even", "Bedtime / Wind Down", "BEDTIME", 2, icon = "🌙"),
+            Group("g_sleep", "Sleep", "SLEEP", 3, icon = "💤")
         )
         val tags = defaultTags()
 
@@ -251,60 +251,60 @@ class AndroidHabitRepository(private val context: Context) : HabitRepository {
             // Morning at wake — light + hygiene + AM supplements (tagged, not a separate group)
             Habit(
                 "h_light", "Morning Sunlight / Light exposure", "Aligns circadian rhythm.",
-                "g_morn", HabitType.CHECKBOX, order = 0, tags = listOf(TagIds.SLEEP)
+                "g_morn", HabitType.CHECKBOX, order = 0, tags = listOf(TagIds.SLEEP), icon = "☀️"
             ),
             Habit(
                 "h_breathe", "Box Breathing (6 min)", "Calms nervous system.",
-                "g_morn", HabitType.DURATION_MIN, target = 6.0, unit = "min", order = 1, tags = listOf(TagIds.MINDSET)
+                "g_morn", HabitType.DURATION_MIN, target = 6.0, unit = "min", order = 1, tags = listOf(TagIds.MINDSET), icon = "🧘"
             ),
             Habit(
                 "h_teeth", "Brush + Floss + Tongue scrape", "Dental foundation.",
-                "g_morn", HabitType.CHECKBOX, order = 2, canSkip = false, tags = listOf(TagIds.HYGIENE)
+                "g_morn", HabitType.CHECKBOX, order = 2, canSkip = false, tags = listOf(TagIds.HYGIENE), icon = "🪥"
             ),
             Habit(
                 "h_supp_am", "Morning Supplements (Omega-3, Multi)", "Foundational nutrition.",
                 "g_morn", HabitType.COUNTER, target = 1.0, unit = "", order = 3,
-                isSupplement = true, tags = listOf(TagIds.SUPPLEMENTS)
+                isSupplement = true, tags = listOf(TagIds.SUPPLEMENTS), icon = "💊"
             ),
 
             // Daytime focus
             Habit(
                 "h_move", "Move Your Body", "20+ min walk or exercise.",
-                "g_focus", HabitType.CHECKBOX, order = 0, tags = listOf(TagIds.MOVEMENT)
+                "g_focus", HabitType.CHECKBOX, order = 0, tags = listOf(TagIds.MOVEMENT), icon = "🚶"
             ),
             Habit(
                 "h_protein", "Protein First", "Muscle, satiety, metabolism.",
-                "g_focus", HabitType.CHECKBOX, order = 1, tags = listOf(TagIds.NUTRITION)
+                "g_focus", HabitType.CHECKBOX, order = 1, tags = listOf(TagIds.NUTRITION), icon = "🥩"
             ),
             Habit(
                 "h_focus", "Deep Focus Block", "Undistracted work or learning.",
-                "g_focus", HabitType.DURATION_MIN, target = 60.0, unit = "min", order = 2, tags = listOf(TagIds.MINDSET)
+                "g_focus", HabitType.DURATION_MIN, target = 60.0, unit = "min", order = 2, tags = listOf(TagIds.MINDSET), icon = "🧠"
             ),
             Habit(
                 "h_pull", "Pull-ups / Dips / Squats", "Strength (reps).",
-                "g_focus", HabitType.COUNTER, target = 5.0, unit = "reps", order = 3, tags = listOf(TagIds.MOVEMENT)
+                "g_focus", HabitType.COUNTER, target = 5.0, unit = "reps", order = 3, tags = listOf(TagIds.MOVEMENT), icon = "💪"
             ),
 
             // Bedtime / wind-down before sleep
             Habit(
                 "h_wind", "Wind Down Routine", "Consistent bedtime protects sleep.",
-                "g_even", HabitType.CHECKBOX, order = 0, tags = listOf(TagIds.SLEEP)
+                "g_even", HabitType.CHECKBOX, order = 0, tags = listOf(TagIds.SLEEP), icon = "🌙"
             ),
             Habit(
                 "h_hydrate", "Stay Hydrated", "Energy and recovery.",
-                "g_even", HabitType.COUNTER, target = 2.5, unit = "L", order = 1, tags = listOf(TagIds.NUTRITION)
+                "g_even", HabitType.COUNTER, target = 2.5, unit = "L", order = 1, tags = listOf(TagIds.NUTRITION), icon = "💧"
             ),
             Habit(
                 "h_mg", "Magnesium + Chamomile", "Sleep prep.",
-                "g_even", HabitType.CHECKBOX, order = 2, isSupplement = true, tags = listOf(TagIds.SUPPLEMENTS, TagIds.SLEEP)
+                "g_even", HabitType.CHECKBOX, order = 2, isSupplement = true, tags = listOf(TagIds.SUPPLEMENTS, TagIds.SLEEP), icon = "🍵"
             ),
             Habit(
                 "h_nSDR", "NSDR / 4-7-8 Breathing", "Non-sleep deep rest.",
-                "g_even", HabitType.DURATION_MIN, target = 10.0, unit = "min", order = 3, tags = listOf(TagIds.SLEEP, TagIds.MINDSET)
+                "g_even", HabitType.DURATION_MIN, target = 10.0, unit = "min", order = 3, tags = listOf(TagIds.SLEEP, TagIds.MINDSET), icon = "🧘"
             ),
             Habit(
                 "h_grat", "Gratitude / 3 things", "Evening review.",
-                "g_even", HabitType.NOTE, order = 4, tags = listOf(TagIds.MINDSET)
+                "g_even", HabitType.NOTE, order = 4, tags = listOf(TagIds.MINDSET), icon = "🙏"
             )
         )
 

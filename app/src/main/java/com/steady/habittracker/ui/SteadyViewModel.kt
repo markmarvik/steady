@@ -181,7 +181,8 @@ class SteadyViewModel(
         intervalDays: Int = 2,
         specificDates: List<String> = emptyList(),
         why: String = "",
-        additionalGroupIds: List<String> = emptyList()
+        additionalGroupIds: List<String> = emptyList(),
+        icon: String = ""
     ) {
         if (name.isBlank()) return
         viewModelScope.launch {
@@ -205,7 +206,8 @@ class SteadyViewModel(
                 intervalDays = intervalDays,
                 anchorDate = if (showPreset == com.steady.habittracker.data.ShowPreset.EVERY_N_DAYS) todayStr else null,
                 specificDates = specificDates,
-                additionalGroupIds = additionalGroupIds.filter { it != groupId && it.isNotBlank() }.distinct()
+                additionalGroupIds = additionalGroupIds.filter { it != groupId && it.isNotBlank() }.distinct(),
+                icon = icon.trim()
             )
             val updated = current.withAddedHabit(newHabit)
             repository.saveData(updated)
@@ -428,7 +430,7 @@ class SteadyViewModel(
     }
 
     // --- Group CRUD ---
-    fun addGroup(name: String, timeHint: String = "ANY", parentId: String? = null) {
+    fun addGroup(name: String, timeHint: String = "ANY", parentId: String? = null, icon: String = "") {
         if (name.isBlank()) return
         viewModelScope.launch {
             val current = appData.value
@@ -437,7 +439,8 @@ class SteadyViewModel(
                 name = name.trim(),
                 timeHint = timeHint,
                 order = current.groups.size,
-                parentId = parentId
+                parentId = parentId,
+                icon = icon.trim()
             )
             repository.saveData(current.withAddedGroup(newG))
         }

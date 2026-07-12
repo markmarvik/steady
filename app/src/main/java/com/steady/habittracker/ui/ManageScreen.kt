@@ -41,6 +41,8 @@ import com.steady.habittracker.data.SleepSettings
 import com.steady.habittracker.data.Tag
 import com.steady.habittracker.data.TagIds
 import com.steady.habittracker.data.TimeBlock
+import com.steady.habittracker.data.displayGlyph
+import com.steady.habittracker.data.displayLabel
 import java.time.LocalDate
 
 /**
@@ -52,7 +54,7 @@ import java.time.LocalDate
 @Composable
 fun ManageScreen(
     appData: AppData,
-    onAddGroup: (String, String, String?) -> Unit,
+    onAddGroup: (String, String, String?, String) -> Unit,
     onAddHabit: (
         name: String,
         groupId: String,
@@ -63,7 +65,8 @@ fun ManageScreen(
         weekdays: Set<Int>,
         intervalDays: Int,
         specificDates: List<String>,
-        additionalGroupIds: List<String>
+        additionalGroupIds: List<String>,
+        icon: String
     ) -> Unit,
     onDeleteHabit: (String) -> Unit,  // now archives
     onSetReminder: (Reminder) -> Unit,
@@ -74,6 +77,7 @@ fun ManageScreen(
     onExportCsv: () -> Unit = {},
     onImportCsv: () -> Unit = {},
     onUpdateHabit: (Habit) -> Unit = {},
+    onUpdateGroup: (Group) -> Unit = {},
     onUnarchiveGroup: (String) -> Unit = {},
     onUnarchiveHabit: (String) -> Unit = {},
     onReorderHabit: (habitId: String, direction: Int, withinGroupId: String) -> Unit = { _, _, _ -> },
@@ -103,6 +107,7 @@ fun ManageScreen(
     var showReminderDialog by remember { mutableStateOf(false) }
     var reminderDialogGroup by remember { mutableStateOf<Group?>(null) }
     var showEditHabit by remember { mutableStateOf<Habit?>(null) }
+    var showEditGroup by remember { mutableStateOf<Group?>(null) }
     var showRoutineEditor by remember { mutableStateOf<com.steady.habittracker.data.ExerciseRoutine?>(null) }
     var showNewRoutine by remember { mutableStateOf(false) }
     var habitSearch by remember { mutableStateOf("") }
@@ -235,6 +240,11 @@ fun ManageScreen(
                                 Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
+                                Text(
+                                    h.displayGlyph(),
+                                    fontSize = 20.sp,
+                                    modifier = Modifier.padding(end = 10.dp)
+                                )
                                 Column(Modifier.weight(1f)) {
                                     Text(
                                         h.name,
@@ -281,7 +291,7 @@ fun ManageScreen(
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 Text(
-                                    "• ${h.name}",
+                                    "• ${h.displayLabel()}",
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     modifier = Modifier.weight(1f),
                                     fontSize = 13.sp
@@ -425,6 +435,11 @@ fun ManageScreen(
                                 shape = RoundedCornerShape(12.dp)
                             ) {
                                 Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+                                    Text(
+                                        group.displayGlyph(),
+                                        fontSize = 22.sp,
+                                        modifier = Modifier.padding(end = 12.dp)
+                                    )
                                     Column(Modifier.weight(1f)) {
                                         Text(
                                             group.name,
@@ -439,7 +454,9 @@ fun ManageScreen(
                                             fontSize = 11.sp
                                         )
                                     }
-                                    Icon(Icons.Default.Edit, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    IconButton(onClick = { showEditGroup = group }) {
+                                        Icon(Icons.Default.Edit, contentDescription = "Edit group", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    }
                                 }
                             }
                         }
@@ -459,7 +476,7 @@ fun ManageScreen(
                                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
                                 ) {
                                     Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                                        Text("📁 ${g.name}", color = MaterialTheme.colorScheme.onSurface, modifier = Modifier.weight(1f))
+                                        Text("${g.displayGlyph()} ${g.name}", color = MaterialTheme.colorScheme.onSurface, modifier = Modifier.weight(1f))
                                         TextButton(onClick = { onUnarchiveGroup(g.id) }) {
                                             Text("Restore", color = MaterialTheme.colorScheme.primary, fontSize = 12.sp)
                                         }
@@ -495,11 +512,14 @@ fun ManageScreen(
                                 modifier = Modifier.padding(end = 8.dp)
                             )
                             Text(
-                                group.name,
+                                group.displayLabel(),
                                 color = MaterialTheme.colorScheme.onSurface,
                                 fontSize = 18.sp,
                                 fontWeight = FontWeight.Bold
                             )
+                        }
+                        IconButton(onClick = { showEditGroup = group }) {
+                            Icon(Icons.Default.Edit, contentDescription = "Edit group", tint = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                         TextButton(onClick = { confirmArchiveGroupId = group.id }) {
                             Text("Archive", color = MaterialTheme.colorScheme.error, fontSize = 11.sp)
@@ -540,6 +560,11 @@ fun ManageScreen(
                                     Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
+                                    Text(
+                                        h.displayGlyph(),
+                                        fontSize = 18.sp,
+                                        modifier = Modifier.padding(end = 8.dp)
+                                    )
                                     Column(Modifier.weight(1f)) {
                                         Text(
                                             h.name,
@@ -667,7 +692,14 @@ fun ManageScreen(
     if (showAddGroup) {
         AddGroupDialogWithParent(
             onDismiss = { showAddGroup = false },
-            onAdd = { n, h, p -> onAddGroup(n, h, p); showAddGroup = false }
+            onAdd = { n, h, p, icon -> onAddGroup(n, h, p, icon); showAddGroup = false }
+        )
+    }
+    showEditGroup?.let { g ->
+        EditGroupDialog(
+            group = g,
+            onDismiss = { showEditGroup = null },
+            onSave = { onUpdateGroup(it); showEditGroup = null }
         )
     }
     if (showCreateHabit) {
@@ -718,7 +750,8 @@ fun ManageScreen(
                                 modifier = Modifier.fillMaxWidth()
                             ) {
                                 Text(
-                                    if (inGroups.isBlank()) h.name else "${h.name}  ·  $inGroups",
+                                    if (inGroups.isBlank()) h.displayLabel()
+                                    else "${h.displayLabel()}  ·  $inGroups",
                                     color = MaterialTheme.colorScheme.primary,
                                     fontSize = 13.sp
                                 )
@@ -816,10 +849,14 @@ fun ManageScreen(
 
 // Simple add group supporting parent (for workouts sub groups)
 @Composable
-private fun AddGroupDialogWithParent(onDismiss: () -> Unit, onAdd: (name: String, hint: String, parent: String?) -> Unit) {
+private fun AddGroupDialogWithParent(
+    onDismiss: () -> Unit,
+    onAdd: (name: String, hint: String, parent: String?, icon: String) -> Unit
+) {
     var name by remember { mutableStateOf("") }
     var hint by remember { mutableStateOf("ANY") }
     var parent by remember { mutableStateOf<String?>(null) }
+    var icon by remember { mutableStateOf("") }
     AlertDialog(
         onDismissRequest = onDismiss,
         containerColor = MaterialTheme.colorScheme.surface,
@@ -827,16 +864,69 @@ private fun AddGroupDialogWithParent(onDismiss: () -> Unit, onAdd: (name: String
         textContentColor = MaterialTheme.colorScheme.onSurface,
         title = { Text("New Group / Plan") },
         text = {
-            Column {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
                 OutlinedTextField(value = name, onValueChange = { name = it }, label = { Text("Name") }, modifier = Modifier.fillMaxWidth())
+                Spacer(Modifier.height(8.dp))
+                EmojiIconPicker(selected = icon, onSelect = { icon = it })
+                Spacer(Modifier.height(8.dp))
                 OutlinedTextField(value = hint, onValueChange = { hint = it }, label = { Text("Time hint") }, modifier = Modifier.fillMaxWidth())
                 Text("Parent (leave empty or set for Workout subgroup)", fontSize = 11.sp)
-                // For simplicity a text field for parent id; real UI would dropdown
                 OutlinedTextField(value = parent ?: "", onValueChange = { parent = it.ifBlank { null } }, label = { Text("Parent ID (e.g. g_workout)") }, modifier = Modifier.fillMaxWidth())
             }
         },
-        
-        confirmButton = { TextButton(onClick = { if (name.isNotBlank()) onAdd(name, hint, parent) }) { Text("Add") } },
+        confirmButton = {
+            TextButton(onClick = { if (name.isNotBlank()) onAdd(name, hint, parent, icon) }) { Text("Add") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
+    )
+}
+
+@Composable
+private fun EditGroupDialog(
+    group: Group,
+    onDismiss: () -> Unit,
+    onSave: (Group) -> Unit
+) {
+    var name by remember { mutableStateOf(group.name) }
+    var hint by remember { mutableStateOf(group.timeHint) }
+    var icon by remember { mutableStateOf(group.icon) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = MaterialTheme.colorScheme.surface,
+        titleContentColor = MaterialTheme.colorScheme.onSurface,
+        textContentColor = MaterialTheme.colorScheme.onSurface,
+        title = { Text("Edit group") },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                OutlinedTextField(
+                    value = name,
+                    onValueChange = { name = it },
+                    label = { Text("Name") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Spacer(Modifier.height(8.dp))
+                EmojiIconPicker(selected = icon, onSelect = { icon = it })
+                Spacer(Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = hint,
+                    onValueChange = { hint = it },
+                    label = { Text("Time hint") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = {
+                    if (name.isNotBlank()) {
+                        onSave(group.copy(name = name.trim(), timeHint = hint.trim(), icon = icon.trim()))
+                    }
+                },
+                enabled = name.isNotBlank()
+            ) { Text("Save") }
+        },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
     )
 }
@@ -1077,6 +1167,7 @@ private fun EditHabitDialog(
     onArchive: () -> Unit
 ) {
     var name by remember { mutableStateOf(habit.name) }
+    var icon by remember { mutableStateOf(habit.icon) }
     var type by remember { mutableStateOf(habit.type) }
     var canSkip by remember { mutableStateOf(habit.canSkip) }
     var defaultValue by remember { mutableStateOf(habit.target?.toString() ?: "") }
@@ -1115,6 +1206,8 @@ private fun EditHabitDialog(
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
+                Spacer(Modifier.height(8.dp))
+                EmojiIconPicker(selected = icon, onSelect = { icon = it })
                 Spacer(Modifier.height(8.dp))
                 Text("Type", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
                 Spacer(Modifier.height(4.dp))
@@ -1186,7 +1279,8 @@ private fun EditHabitDialog(
                             weekdays = if (weekdays.isEmpty()) setOf(1, 2, 3, 4, 5, 6, 7) else weekdays,
                             intervalDays = intervalDays,
                             anchorDate = anchor,
-                            specificDates = specificDates
+                            specificDates = specificDates,
+                            icon = icon.trim()
                         )
                     )
                 },
@@ -1218,10 +1312,12 @@ private fun AddHabitWithTypeDialogLocal(
         weekdays: Set<Int>,
         intervalDays: Int,
         specificDates: List<String>,
-        additionalGroupIds: List<String>
+        additionalGroupIds: List<String>,
+        icon: String
     ) -> Unit
 ) {
     var name by remember { mutableStateOf("") }
+    var icon by remember { mutableStateOf("") }
     var type by remember { mutableStateOf(HabitType.CHECKBOX) }
     var selectedGroupIds by remember {
         mutableStateOf(if (initialGroupId.isNotBlank()) listOf(initialGroupId) else emptyList())
@@ -1245,9 +1341,10 @@ private fun AddHabitWithTypeDialogLocal(
             onAdd(
                 name.trim(), primary, type, TagIds.SUPPLEMENTS in list, list,
                 showPreset, weekdays, intervalDays, specificDates,
-                selectedGroupIds.drop(1)
+                selectedGroupIds.drop(1), icon.trim()
             )
             name = ""
+            icon = ""
             selectedTags = emptySet()
             addedCount++
         }
@@ -1271,6 +1368,8 @@ private fun AddHabitWithTypeDialogLocal(
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
+                Spacer(Modifier.height(8.dp))
+                EmojiIconPicker(selected = icon, onSelect = { icon = it })
                 Spacer(Modifier.height(8.dp))
                 Text("Type", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
                 Spacer(Modifier.height(4.dp))

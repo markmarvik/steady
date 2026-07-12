@@ -3,12 +3,13 @@ package com.steady.habittracker.data
 import kotlinx.serialization.Serializable
 
 /**
- * Data model v7.
+ * Data model v9.
  * - Groups = time-of-day slots on the 24h timeline (when you do it).
  * - Tags = category identity for History (what it is: Supplements, Movement…).
  * - SleepSettings anchors Morning + Bedtime routines to bed/wake times.
  * - Habit.additionalGroupIds: same habit can appear in multiple timeline groups (#24).
  * - Exercise routines + workout sessions for structured training (#20–#22).
+ * - Habit.icon / Group.icon: optional emoji for lists, Today, widget (#29).
  * - archived + canSkip, parentId, skip/loggedAt, themes, schedules (v5).
  * All @Serializable for DataStore JSON (portable).
  */
@@ -51,7 +52,9 @@ data class Group(
     val timeHint: String = "ANY", // MORNING, EVENING, WORK, REVIEW, SLEEP, BEDTIME, ANY
     val order: Int = 0,
     val parentId: String? = null,   // for subgroups e.g. under a workout plan
-    val archived: Boolean = false
+    val archived: Boolean = false,
+    /** Optional emoji / short icon for lists and Today section headers (#29). Empty = letter fallback. */
+    val icon: String = ""
 )
 
 /**
@@ -182,7 +185,9 @@ data class Habit(
      * may join any number of groups, and still has one HabitEntry per day.
      * [groupId] is the first/canonical member of that set (storage shape only).
      */
-    val additionalGroupIds: List<String> = emptyList()
+    val additionalGroupIds: List<String> = emptyList(),
+    /** Optional emoji / short icon shown next to the name (#29). Empty = first-letter fallback. */
+    val icon: String = ""
 )
 
 // --- Exercise routines & workout sessions (#20–#22) ---
@@ -306,7 +311,7 @@ data class AppData(
     // date (yyyy-MM-dd) -> habitId -> entry
     val entries: Map<String, Map<String, HabitEntry>> = emptyMap(),
     val reminders: List<Reminder> = emptyList(),
-    val schemaVersion: Int = 8,
+    val schemaVersion: Int = 9,
     val onboarded: Boolean = false,
     val colorScheme: String = "default",   // accent: "default" | "blue" | "orange" | "purple" | "slate"
     val backgroundMode: String = "dark",   // "dark" | "amoled" | "light"  (OLED pure black supported)

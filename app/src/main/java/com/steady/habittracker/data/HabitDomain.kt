@@ -264,9 +264,9 @@ object HabitDomain {
         } ?: sections.firstOrNull { !it.isNow && it.isFuture }
         val nowHasPending = sections.any { it.isNow }
         return DayProgressionCue(
-            nowGroupName = current?.name,
+            nowGroupName = current?.let { DisplayIcon.label(it.icon, it.name) },
             nowHasPending = nowHasPending,
-            nextGroupName = nextPending?.group?.name
+            nextGroupName = nextPending?.group?.let { DisplayIcon.label(it.icon, it.name) }
         )
     }
 
@@ -590,7 +590,14 @@ object HabitDomain {
                     )
             }
             if (existing != null) return existing.id
-            groups.add(Group(preferredId, name, hint, order = order))
+            val icon = when (hint) {
+                "MORNING" -> "🌅"
+                "BEDTIME", "EVENING" -> "🌙"
+                "SLEEP" -> "💤"
+                "WORK" -> "🎯"
+                else -> ""
+            }
+            groups.add(Group(preferredId, name, hint, order = order, icon = icon))
             return preferredId
         }
         val mornId = data.sleep.morningGroupId

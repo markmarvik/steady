@@ -310,7 +310,9 @@ fun HistoryScreen(appData: AppData) {
                     )
                     dayMap.forEach { (habitId, entry) ->
                         val habit = appData.habits.find { it.id == habitId }
-                        val name = habit?.name ?: habitId
+                        val name = habit?.let {
+                            com.steady.habittracker.data.DisplayIcon.label(it.icon, it.name)
+                        } ?: habitId
                         val unit = habit?.unit ?: ""
                         val tagStr = habit?.let { HabitDomain.tagNamesForHabit(appData, it).joinToString(", ") }.orEmpty()
                         val valueStr = when {

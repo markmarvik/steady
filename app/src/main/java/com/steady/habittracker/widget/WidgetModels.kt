@@ -3,6 +3,7 @@ package com.steady.habittracker.widget
 import com.steady.habittracker.data.AppData
 import com.steady.habittracker.data.HabitDomain
 import com.steady.habittracker.data.HabitType
+import com.steady.habittracker.data.displayLabel
 import kotlinx.serialization.Serializable
 import java.time.LocalDate
 import java.time.LocalTime
@@ -35,9 +36,9 @@ fun buildWidgetRows(data: AppData, now: LocalTime = LocalTime.now()): List<Widge
     for (section in sections) {
         if (rows.size >= 40) break
         val header = if (section.isNow) {
-            "● ${section.group.name}"
+            "● ${section.group.displayLabel()}"
         } else {
-            section.group.name
+            section.group.displayLabel()
         }
         rows.add(
             WidgetRow(
@@ -48,11 +49,11 @@ fun buildWidgetRows(data: AppData, now: LocalTime = LocalTime.now()): List<Widge
         )
         for (h in section.habits) {
             if (rows.size >= 40) break
-            val prefix = if (h.afterHabitId != null) "↳ " else ""
+            val stack = if (h.afterHabitId != null) "↳ " else ""
             rows.add(
                 WidgetRow(
                     kind = WidgetRowKind.HABIT,
-                    title = prefix + h.name,
+                    title = stack + h.displayLabel(),
                     habitId = h.id,
                     isCheckbox = h.type == HabitType.CHECKBOX,
                     isCurrentGroup = section.isNow
