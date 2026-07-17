@@ -6,8 +6,8 @@ import android.widget.RemoteViewsService
 import com.steady.habittracker.R
 
 /**
- * Provides scrollable widget rows (section headers + habits) from the cache
- * written by [WidgetRenderer].
+ * Legacy scrollable widget list for API &lt; 31.
+ * API 31+ uses [RemoteViews.RemoteCollectionItems] in [WidgetRenderer] instead.
  */
 class WidgetListService : RemoteViewsService() {
     override fun onGetViewFactory(intent: Intent): RemoteViewsFactory {
@@ -40,38 +40,7 @@ private class WidgetListFactory(
         if (position !in rows.indices) {
             return RemoteViews(context.packageName, R.layout.widget_habit_row)
         }
-        val row = rows[position]
-        return when (row.kind) {
-            WidgetRowKind.SECTION -> {
-                val rv = RemoteViews(context.packageName, R.layout.widget_section_header)
-                rv.setTextViewText(R.id.section_title, row.title)
-                rv.setTextColor(R.id.section_title, WidgetRenderer.readAccent(context))
-                // Headers are not clickable (empty fill-in)
-                rv.setOnClickFillInIntent(R.id.section_title, Intent())
-                rv
-            }
-            WidgetRowKind.HABIT -> {
-                val rv = RemoteViews(context.packageName, R.layout.widget_habit_row)
-                val textColor = WidgetRenderer.readTextColor(context)
-                val rowBg = WidgetRenderer.readRowBg(context)
-                // Always complete from widget (no accidental app open). Checkboxes toggle;
-                // counters/durations/etc. log a simple done value.
-                rv.setTextViewText(R.id.habit_row_check, if (row.isCheckbox) "☐" else "✓")
-                rv.setTextColor(R.id.habit_row_check, textColor)
-                rv.setTextViewText(R.id.habit_row_text, row.title)
-                rv.setTextColor(R.id.habit_row_text, textColor)
-                rv.setInt(R.id.habit_row_root, "setBackgroundColor", rowBg)
-
-                val fillIn = Intent().apply {
-                    action = ToggleReceiver.ACTION_TOGGLE
-                    putExtra(ToggleReceiver.EXTRA_HABIT_ID, row.habitId)
-                    putExtra(ToggleReceiver.EXTRA_ACTION, ToggleReceiver.ACTION_TOGGLE)
-                }
-                // Entire row is one big hit target
-                rv.setOnClickFillInIntent(R.id.habit_row_root, fillIn)
-                rv
-            }
-        }
+        return buildRowRemoteViews(context, rows[position])
     }
 
     override fun getLoadingView(): RemoteViews? = null

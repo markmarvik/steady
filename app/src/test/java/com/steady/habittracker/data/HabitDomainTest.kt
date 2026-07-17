@@ -624,4 +624,228 @@ class HabitDomainTest {
         assertTrue(out.goals.any { it.id == "d2" })
         assertFalse(out.goals.any { it.id == "d1" })
     }
+
+    // --- Steady Momentum scoring (v10) ---
+
+    @Test
+    fun `computeDayPoints awards base per completed habit`() {
+        val today = LocalDate.now().toString()
+        val data = sampleDataWithEntries(
+            mapOf(today to mapOf("h1" to HabitEntry(value = 1.0), "h2" to HabitEntry(value = 1.0)))
+        )
+        val pts = HabitDomain.computeDayPoints(data, today)
+        // 2 * 10 base + solid day bonus (2/3 not solid? 2/3 ≈ 0.66 ≥ 0.6 → solid +10)
+        // not full clear → no +25
+        assertEquals(20 + HabitDomain.SOLID_DAY_BONUS, pts)
+    }
+
+    @Test
+    fun `computeDayPoints full clear and target bonus`() {
+        val today = LocalDate.now().toString()
+        val data = sampleDataWithEntries(
+            mapOf(
+                today to mapOf(
+                    "h1" to HabitEntry(value = 1.0),
+                    "h2" to HabitEntry(value = 1.0),
+                    "h3" to HabitEntry(value = 60.0) // meets target 60
+                )
+            )
+        )
+        val b = HabitDomain.computeDayPointsBreakdown(data, today)
+        assertEquals(30, b.habitPoints)
+        assertEquals(HabitDomain.TARGET_BONUS, b.targetBonuses)
+        assertEquals(HabitDomain.FULL_CLEAR_BONUS, b.fullClearBonus)
+        assertEquals(HabitDomain.SOLID_DAY_BONUS, b.solidDayBonus)
+        assertEquals(30 + 5 + 25 + 10, b.total)
+    }
+
+    @Test
+    fun `skipped habits award zero points`() {
+        val today = LocalDate.now().toString()
+        val data = sampleDataWithEntries(
+            mapOf(today to mapOf("h1" to HabitEntry(value = 0.0, skipped = true)))
+        )
+        val b = HabitDomain.computeDayPointsBreakdown(data, today)
+        assertEquals(0, b.habitPoints)
+    }
+
+    @Test
+    fun `level curve and titles`() {
+        assertEquals(1, HabitDomain.computeLevel(0))
+        assertEquals(1, HabitDomain.computeLevel(499))
+        assertEquals(2, HabitDomain.computeLevel(500))
+        assertEquals(100, HabitDomain.pointsToNextLevel(400))
+        assertEquals("Steady", HabitDomain.levelTitle(1))
+        assertEquals("Anchored", HabitDomain.levelTitle(5))
+        assertEquals("Unshakable", HabitDomain.levelTitle(20))
+    }
+
+    @Test
+    fun `withFinalizedScoreHistory banks yesterday once`() {
+        val yesterday = LocalDate.now().minusDays(1).toString()
+        val today = LocalDate.now().toString()
+        val data = sampleDataWithEntries(
+            mapOf(
+                yesterday to mapOf(
+                    "h1" to HabitEntry(value = 1.0),
+                    "h2" to HabitEntry(value = 1.0),
+                    "h3" to HabitEntry(value = 1.0)
+                )
+            )
+        )
+        val finalized = HabitDomain.withFinalizedScoreHistory(data, today)
+        assertTrue(finalized.score.history.any { it.date == yesterday })
+        assertTrue(finalized.score.lifetimePoints > 0)
+        val again = HabitDomain.withFinalizedScoreHistory(finalized, today)
+        assertEquals(finalized.score.lifetimePoints, again.score.lifetimePoints)
+        assertEquals(finalized.score.history.size, again.score.history.size)
+    }
+
+    // --- Smart notifications ---
+
+    @Test
+    fun `quiet hours overnight window`() {
+        val prefs = NotificationPrefs(quietStart = "22:30", quietEnd = "07:00")
+        assertTrue(HabitDomain.isInQuietHours(prefs, HabitDomain.parseTimeToMinutes("23:00")))
+        assertTrue(HabitDomain.isInQuietHours(prefs, HabitDomain.parseTimeToMinutes("02:00")))
+        assertFalse(HabitDomain.isInQuietHours(prefs, HabitDomain.parseTimeToMinutes("08:00")))
+        assertFalse(HabitDomain.isInQuietHours(prefs, HabitDomain.parseTimeToMinutes("12:00")))
+    }
+
+    @Test
+    fun `pendingHabitsForReminder uses multi-group membership`() {
+        val today = LocalDate.now()
+        val h = Habit("h1", "NAC", groupId = "g1", additionalGroupIds = listOf("g2"))
+        val data = AppData(
+            groups = listOf(Group("g1", "M"), Group("g2", "E")),
+            habits = listOf(h)
+        )
+        val forG2 = HabitDomain.pendingHabitsForReminder(data, "g2", today)
+        assertEquals(1, forG2.size)
+        assertEquals("h1", forG2[0].id)
+    }
+
+    @Test
+    fun `decideReminder skips empty group and rate limits`() {
+        val today = LocalDate.now().toString()
+        val data = sampleDataWithEntries(
+            mapOf(
+                today to mapOf(
+                    "h1" to HabitEntry(value = 1.0),
+                    "h2" to HabitEntry(value = 1.0),
+                    "h3" to HabitEntry(value = 1.0)
+                )
+            )
+        )
+        val empty = HabitDomain.decideReminder(data, "g1", "Morning", today)
+        assertFalse(empty.show)
+
+        val limited = data.copy(
+            notificationPrefs = NotificationPrefs(maxPerDay = 2, firesDate = today, firesCount = 2)
+        )
+        // force pending by clearing entries
+        val withPending = limited.copy(entries = emptyMap())
+        val blocked = HabitDomain.decideReminder(withPending, "g1", "Morning", today)
+        assertFalse(blocked.show)
+    }
+
+    @Test
+    fun `decideReminder includes points remaining copy`() {
+        val today = LocalDate.now().toString()
+        val data = sampleDataWithEntries()
+        val d = HabitDomain.decideReminder(data, "g1", "Morning", today)
+        assertTrue(d.show)
+        assertTrue(d.body.contains("pts") || d.body.contains("Sunlight") || d.body.contains("Protein"))
+    }
+
+    @Test
+    fun `score and notificationPrefs survive JSON round trip`() {
+        val today = LocalDate.now().toString()
+        val original = sampleDataWithEntries(
+            mapOf(today to mapOf("h1" to HabitEntry(value = 1.0), "h2" to HabitEntry(value = 1.0)))
+        ).copy(
+            schemaVersion = 10,
+            score = ScoreState(
+                lifetimePoints = 1200,
+                history = listOf(DayScore("2024-01-01", 80, 1f)),
+                lastFinalizedDate = "2024-01-01"
+            ),
+            notificationPrefs = NotificationPrefs(
+                quietStart = "23:00",
+                quietEnd = "06:30",
+                maxPerDay = 3,
+                adaptiveTiming = false,
+                streakRiskNudge = true
+            )
+        )
+        val json = kotlinx.serialization.json.Json {
+            encodeDefaults = true
+            ignoreUnknownKeys = true
+        }
+        val encoded = json.encodeToString(AppData.serializer(), original)
+        assertTrue(encoded.contains("\"score\""))
+        assertTrue(encoded.contains("\"notificationPrefs\""))
+        assertTrue(encoded.contains("lifetimePoints"))
+        val decoded = json.decodeFromString(AppData.serializer(), encoded)
+        assertEquals(1200, decoded.score.lifetimePoints)
+        assertEquals(1, decoded.score.history.size)
+        assertEquals("23:00", decoded.notificationPrefs.quietStart)
+        assertEquals(3, decoded.notificationPrefs.maxPerDay)
+        assertFalse(decoded.notificationPrefs.adaptiveTiming)
+    }
+
+    @Test
+    fun `legacy JSON without score key defaults cleanly`() {
+        val minimal = """
+            {"groups":[],"habits":[],"entries":{},"reminders":[],"schemaVersion":8}
+        """.trimIndent()
+        val json = kotlinx.serialization.json.Json {
+            encodeDefaults = true
+            ignoreUnknownKeys = true
+        }
+        val decoded = json.decodeFromString(AppData.serializer(), minimal)
+        assertEquals(0, decoded.score.lifetimePoints)
+        assertTrue(decoded.score.history.isEmpty())
+        assertEquals(4, decoded.notificationPrefs.maxPerDay)
+    }
+
+    @Test
+    fun `rebuildScoreFromEntries banks past day from logs`() {
+        val yesterday = LocalDate.now().minusDays(1).toString()
+        val data = sampleDataWithEntries(
+            mapOf(
+                yesterday to mapOf(
+                    "h1" to HabitEntry(value = 1.0),
+                    "h2" to HabitEntry(value = 1.0),
+                    "h3" to HabitEntry(value = 1.0)
+                )
+            )
+        )
+        val rebuilt = HabitDomain.rebuildScoreFromEntries(data)
+        assertTrue(rebuilt.score.history.any { it.date == yesterday && it.points > 0 })
+        assertTrue(rebuilt.score.lifetimePoints > 0)
+    }
+
+    @Test
+    fun `resolveEffectiveReminderTime clamps adaptive shift`() {
+        val zone = java.time.ZoneId.systemDefault()
+        // Build 5 logs at 10:00 for g1 habits
+        val entries = mutableMapOf<String, Map<String, HabitEntry>>()
+        repeat(6) { i ->
+            val day = LocalDate.now().minusDays(i.toLong()).toString()
+            val at = LocalDate.now().minusDays(i.toLong())
+                .atTime(10, 0)
+                .atZone(zone)
+                .toInstant()
+                .toEpochMilli()
+            entries[day] = mapOf("h1" to HabitEntry(value = 1.0, loggedAt = at))
+        }
+        val data = sampleDataWithEntries(entries).copy(
+            notificationPrefs = NotificationPrefs(adaptiveTiming = true)
+        )
+        val r = Reminder("r1", "g1", "08:00", setOf(1, 2, 3, 4, 5, 6, 7), enabled = true)
+        val effective = HabitDomain.resolveEffectiveReminderTime(r, data)
+        // 08:00 + 45 clamp toward 10:00 → 08:45
+        assertEquals("08:45", effective)
+    }
 }

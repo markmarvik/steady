@@ -1,7 +1,9 @@
 package com.steady.habittracker.data
 
+import java.time.Instant
 import java.time.LocalDate
 import java.time.LocalTime
+import java.time.ZoneId
 
 /**
  * Domain / pure computation helpers extracted from Repository.
@@ -253,21 +255,36 @@ object HabitDomain {
         date: LocalDate = LocalDate.now(),
         now: LocalTime = LocalTime.now()
     ): DayProgressionCue {
+        // Single timeline pass — avoid calling timelineSectionsForToday twice from UI.
         val sections = timelineSectionsForToday(data, date, now)
-        val ordered = orderedGroupIdsForDay(data, now)
-        val current = resolveCurrentGroup(data, now)
-        val currentId = current?.id
-        val idx = ordered.indexOf(currentId).takeIf { it >= 0 } ?: -1
-        val nextPending = sections.firstOrNull { s ->
-            val si = ordered.indexOf(s.group.id)
-            !s.isNow && (idx < 0 || si > idx)
-        } ?: sections.firstOrNull { !it.isNow && it.isFuture }
-        val nowHasPending = sections.any { it.isNow }
+        return dayProgressionCueFromSections(sections)
+    }
+
+    /** Derive day-cue from already-built sections (cheap; use on Today list path). */
+    fun dayProgressionCueFromSections(sections: List<TimelineSection>): DayProgressionCue {
+        val nowSection = sections.firstOrNull { it.isNow }
+        val nextPending = sections.firstOrNull { !it.isNow && it.isFuture }
+            ?: sections.firstOrNull { !it.isNow }
         return DayProgressionCue(
-            nowGroupName = current?.let { DisplayIcon.label(it.icon, it.name) },
-            nowHasPending = nowHasPending,
+            nowGroupName = nowSection?.group?.let { DisplayIcon.label(it.icon, it.name) },
+            nowHasPending = nowSection != null && nowSection.habits.isNotEmpty(),
             nextGroupName = nextPending?.group?.let { DisplayIcon.label(it.icon, it.name) }
         )
+    }
+
+    /** Pre-resolve tag display names for all habits (O(tags + habits) once per frame of data). */
+    fun tagLabelByHabitId(data: AppData): Map<String, String> {
+        val byId = data.tags.associateBy { it.id }
+        val out = HashMap<String, String>(data.habits.size)
+        for (h in data.habits) {
+            if (h.archived) continue
+            val names = h.tags.mapNotNull { byId[it]?.name }.toMutableList()
+            if (h.isSupplement && names.none { it.equals("Supplements", true) }) {
+                names.add("Supplements")
+            }
+            if (names.isNotEmpty()) out[h.id] = names.joinToString(" · ")
+        }
+        return out
     }
 
     /**
@@ -646,39 +663,19 @@ object HabitDomain {
         }
     }
 
-    /** Simple theme color resolver (used by app + widget). Supports AMOLED (OLED), dark, and light modes.
-     * Foreground/accent is chosen separately via colorScheme.
+    /**
+     * Theme color resolver (app + widget). Background from [backgroundModes];
+     * accent from [accentSchemes] / [AppData.colorScheme].
      */
     fun resolveThemeColors(data: AppData): ThemeColors {
-        val accent = when (data.colorScheme) {
-            "blue" -> 0xFF3B82F6.toInt()
-            "orange" -> 0xFFF97316.toInt()
-            "purple" -> 0xFF8B5CF6.toInt()
-            "slate" -> 0xFF64748B.toInt()
-            "teal" -> 0xFF14B8A6.toInt()
-            "red" -> 0xFFEF4444.toInt()
-            else -> 0xFF22C55E.toInt() // green
-        }
-        val mode = data.backgroundMode
-        val isAmoled = mode == "amoled"
-        val isLight = mode == "light"
-
-        val bg = when {
-            isAmoled -> 0xFF000000.toInt()
-            isLight -> 0xFFF8FAFC.toInt()
-            else -> 0xFF0F172A.toInt()
-        }
-        val surface = when {
-            isAmoled -> 0xFF0F0F0F.toInt()
-            isLight -> 0xFFFFFFFF.toInt()
-            else -> 0xFF1E2937.toInt()
-        }
-        val widgetRowBg = when {
-            isAmoled -> 0xFF1A1A1A.toInt()
-            isLight -> 0xFFE2E8F0.toInt()
-            else -> 0xFF1E3A5F.toInt()
-        }
-        return ThemeColors(bg, surface, accent, widgetRowBg)
+        val accent = accentColorArgb(data.colorScheme)
+        val bg = backgroundModeOption(data.backgroundMode)
+        return ThemeColors(
+            background = bg.backgroundArgb,
+            surface = bg.surfaceArgb,
+            accent = accent,
+            widgetRowBg = bg.widgetRowBgArgb
+        )
     }
 
     // --- Active + hierarchy helpers ---
@@ -1043,6 +1040,516 @@ object HabitDomain {
             }
         }
     }
+
+    // --- Steady Momentum scoring (v10) ---
+
+    const val BASE_POINTS = 10
+    const val TARGET_BONUS = 5
+    const val QUALITY_BONUS = 3
+    const val FULL_CLEAR_BONUS = 25
+    const val SOLID_DAY_BONUS = 10
+    const val PATH_CHECK_BONUS = 15
+    const val DAILY_POINTS_CAP = 500
+    const val POINTS_PER_LEVEL = 500
+    const val SCORE_HISTORY_MAX = 60
+    /** Adaptive reminder may shift ± this many minutes from scheduled time. */
+    const val ADAPTIVE_CLAMP_MINUTES = 45
+    /** Minimum historical group logs before adaptive timing engages. */
+    const val ADAPTIVE_MIN_SAMPLES = 5
+
+    data class DayPointsBreakdown(
+        val habitPoints: Int,
+        val targetBonuses: Int,
+        val qualityBonuses: Int,
+        val fullClearBonus: Int,
+        val solidDayBonus: Int,
+        val pathCheckBonus: Int,
+        val rawTotal: Int,
+        val total: Int
+    ) {
+        val remainingTowardCap: Int get() = (DAILY_POINTS_CAP - total).coerceAtLeast(0)
+    }
+
+    fun isEntryCompleted(entry: HabitEntry?): Boolean =
+        entry != null && !entry.skipped && entry.value >= 0.5
+
+    /** Same thresholds as [computeStreak] for a single day. */
+    fun isSolidDay(data: AppData, date: LocalDate): Boolean {
+        val due = habitsDueOn(data, date)
+        if (due.isEmpty()) return true
+        val key = date.toString()
+        val dayEntries = data.entries[key] ?: emptyMap()
+        val completedCount = due.count { h -> isEntryCompleted(dayEntries[h.id]) }
+        return when {
+            completedCount == due.size -> true
+            completedCount >= 3 -> true
+            completedCount.toFloat() / due.size >= 0.6f -> true
+            else -> false
+        }
+    }
+
+    /** All due habits completed (not skipped). Empty due day counts as clear. */
+    fun isFullClear(data: AppData, date: LocalDate): Boolean {
+        val due = habitsDueOn(data, date)
+        if (due.isEmpty()) return true
+        val dayEntries = data.entries[date.toString()] ?: emptyMap()
+        return due.all { h -> isEntryCompleted(dayEntries[h.id]) }
+    }
+
+    fun hasPathCheckOn(data: AppData, dateStr: String): Boolean =
+        data.pathChecks.any { it.date == dateStr }
+
+    fun computeDayPointsBreakdown(data: AppData, dateStr: String): DayPointsBreakdown {
+        val date = try {
+            LocalDate.parse(dateStr)
+        } catch (_: Exception) {
+            return DayPointsBreakdown(0, 0, 0, 0, 0, 0, 0, 0)
+        }
+        val due = habitsDueOn(data, date)
+        val dayMap = data.entries[dateStr] ?: emptyMap()
+        var habitPoints = 0
+        var targetBonuses = 0
+        var qualityBonuses = 0
+        for (h in due) {
+            val e = dayMap[h.id]
+            if (!isEntryCompleted(e)) continue
+            habitPoints += BASE_POINTS
+            val value = e!!.value
+            when (h.type) {
+                HabitType.COUNTER, HabitType.DURATION_MIN -> {
+                    val target = h.target
+                    if (target != null && target > 0 && value >= target) {
+                        targetBonuses += TARGET_BONUS
+                    }
+                }
+                HabitType.SCALE_1_5 -> {
+                    if (value >= 4.0) qualityBonuses += QUALITY_BONUS
+                }
+                else -> Unit
+            }
+        }
+        val fullClear = if (due.isNotEmpty() && isFullClear(data, date)) FULL_CLEAR_BONUS else 0
+        val solid = if (due.isNotEmpty() && isSolidDay(data, date)) SOLID_DAY_BONUS else 0
+        val path = if (hasPathCheckOn(data, dateStr)) PATH_CHECK_BONUS else 0
+        val raw = habitPoints + targetBonuses + qualityBonuses + fullClear + solid + path
+        val total = raw.coerceAtMost(DAILY_POINTS_CAP)
+        return DayPointsBreakdown(
+            habitPoints = habitPoints,
+            targetBonuses = targetBonuses,
+            qualityBonuses = qualityBonuses,
+            fullClearBonus = fullClear,
+            solidDayBonus = solid,
+            pathCheckBonus = path,
+            rawTotal = raw,
+            total = total
+        )
+    }
+
+    fun computeDayPoints(data: AppData, dateStr: String): Int =
+        computeDayPointsBreakdown(data, dateStr).total
+
+    /**
+     * Max points still available today if remaining due habits are completed
+     * (includes day bonuses not yet earned). Rough upper bound for nudge copy.
+     */
+    fun pointsRemainingToday(data: AppData, dateStr: String = getToday()): Int {
+        val date = try {
+            LocalDate.parse(dateStr)
+        } catch (_: Exception) {
+            return 0
+        }
+        val current = computeDayPoints(data, dateStr)
+        val due = habitsDueOn(data, date)
+        val dayMap = data.entries[dateStr] ?: emptyMap()
+        var ifDone = 0
+        for (h in due) {
+            val e = dayMap[h.id]
+            if (isEntryCompleted(e)) {
+                ifDone += BASE_POINTS
+                val value = e!!.value
+                when (h.type) {
+                    HabitType.COUNTER, HabitType.DURATION_MIN -> {
+                        val target = h.target
+                        if (target != null && target > 0 && value >= target) ifDone += TARGET_BONUS
+                    }
+                    HabitType.SCALE_1_5 -> if (value >= 4.0) ifDone += QUALITY_BONUS
+                    else -> Unit
+                }
+            } else if (e?.skipped != true) {
+                ifDone += BASE_POINTS
+                when (h.type) {
+                    HabitType.COUNTER, HabitType.DURATION_MIN -> {
+                        if (h.target != null && h.target > 0) ifDone += TARGET_BONUS
+                    }
+                    HabitType.SCALE_1_5 -> ifDone += QUALITY_BONUS
+                    else -> Unit
+                }
+            }
+        }
+        if (due.isNotEmpty()) {
+            ifDone += FULL_CLEAR_BONUS + SOLID_DAY_BONUS
+        }
+        // Path check may still be logged today
+        ifDone += PATH_CHECK_BONUS
+        val potential = ifDone.coerceAtMost(DAILY_POINTS_CAP)
+        return (potential - current).coerceAtLeast(0)
+    }
+
+    fun computeLevel(lifetimePoints: Int): Int =
+        1 + (lifetimePoints.coerceAtLeast(0) / POINTS_PER_LEVEL)
+
+    fun pointsIntoCurrentLevel(lifetimePoints: Int): Int =
+        lifetimePoints.coerceAtLeast(0) % POINTS_PER_LEVEL
+
+    fun pointsToNextLevel(lifetimePoints: Int): Int =
+        POINTS_PER_LEVEL - pointsIntoCurrentLevel(lifetimePoints)
+
+    /** Soft titles every 5 levels (calm, not gamey). */
+    fun levelTitle(level: Int): String = when {
+        level >= 20 -> "Unshakable"
+        level >= 15 -> "Committed"
+        level >= 10 -> "Consistent"
+        level >= 5 -> "Anchored"
+        else -> "Steady"
+    }
+
+    /**
+     * Effective lifetime for display = finalized lifetime + today's live points
+     * when today is not yet in history.
+     */
+    fun effectiveLifetimePoints(data: AppData, today: String = getToday()): Int {
+        val todayPts = computeDayPoints(data, today)
+        val inHistory = data.score.history.any { it.date == today }
+        return if (inHistory) data.score.lifetimePoints else data.score.lifetimePoints + todayPts
+    }
+
+    fun bestDayScore(data: AppData): DayScore? {
+        val fromHistory = data.score.history.maxByOrNull { it.points }
+        val today = getToday()
+        val todayPts = computeDayPoints(data, today)
+        val todayScore = DayScore(today, todayPts, computeDayCompletion(data, today))
+        return listOfNotNull(fromHistory, todayScore).maxByOrNull { it.points }
+            ?.takeIf { it.points > 0 }
+    }
+
+    /**
+     * Rebuild rolling score history from entries (last [SCORE_HISTORY_MAX] days before today).
+     * Used after CSV entry import when the ledger may be stale.
+     * Lifetime = max(previous lifetime, sum of rebuilt window) so we never erase older prestige
+     * if the window alone is smaller.
+     */
+    fun rebuildScoreFromEntries(data: AppData, today: String = getToday()): AppData {
+        val todayDate = try {
+            LocalDate.parse(today)
+        } catch (_: Exception) {
+            return data
+        }
+        val history = mutableListOf<DayScore>()
+        var windowSum = 0
+        var d = todayDate.minusDays(1)
+        repeat(SCORE_HISTORY_MAX) {
+            val key = d.toString()
+            val due = habitsDueOn(data, d)
+            val pts = computeDayPoints(data, key)
+            val completion = computeDayCompletion(data, key)
+            if (due.isNotEmpty() || pts > 0 || data.entries.containsKey(key)) {
+                history.add(0, DayScore(key, pts, completion))
+                windowSum += pts
+            }
+            d = d.minusDays(1)
+        }
+        val finalizedDate = todayDate.minusDays(1).toString()
+        val lifetime = maxOf(data.score.lifetimePoints, windowSum)
+        return data.copy(
+            score = ScoreState(
+                lifetimePoints = lifetime,
+                history = history,
+                lastFinalizedDate = if (history.isEmpty()) data.score.lastFinalizedDate else finalizedDate
+            )
+        )
+    }
+
+    /**
+     * Finalize past days into [ScoreState.history] up to (but not including) [today].
+     * Idempotent for dates already present. Caps history at [SCORE_HISTORY_MAX].
+     */
+    fun withFinalizedScoreHistory(data: AppData, today: String = getToday()): AppData {
+        val todayDate = try {
+            LocalDate.parse(today)
+        } catch (_: Exception) {
+            return data
+        }
+        val lastFinal = data.score.lastFinalizedDate
+        val startDate = if (lastFinal.isBlank()) {
+            // Backfill up to 60 days of existing entry activity without huge first-run cost
+            val earliest = data.entries.keys.mapNotNull {
+                try { LocalDate.parse(it) } catch (_: Exception) { null }
+            }.minOrNull()
+            val floor = todayDate.minusDays((SCORE_HISTORY_MAX - 1).toLong())
+            when {
+                earliest == null -> todayDate // nothing to finalize
+                earliest.isBefore(floor) -> floor
+                else -> earliest
+            }
+        } else {
+            try {
+                LocalDate.parse(lastFinal).plusDays(1)
+            } catch (_: Exception) {
+                todayDate
+            }
+        }
+
+        if (!startDate.isBefore(todayDate)) {
+            // Still ensure schema fields present; maybe just refresh today out of history if stuck
+            return data
+        }
+
+        var lifetime = data.score.lifetimePoints
+        val history = data.score.history.toMutableList()
+        val existingDates = history.map { it.date }.toMutableSet()
+        var d = startDate
+        var lastDone = data.score.lastFinalizedDate
+        while (d.isBefore(todayDate)) {
+            val key = d.toString()
+            if (key !in existingDates) {
+                val pts = computeDayPoints(data, key)
+                val completion = computeDayCompletion(data, key)
+                // Only bank days that had something due or activity
+                val due = habitsDueOn(data, d)
+                if (due.isNotEmpty() || pts > 0) {
+                    history.add(DayScore(key, pts, completion))
+                    existingDates.add(key)
+                    lifetime += pts
+                }
+            }
+            lastDone = key
+            d = d.plusDays(1)
+        }
+        // Cap rolling window
+        val trimmed = if (history.size > SCORE_HISTORY_MAX) {
+            history.sortedBy { it.date }.takeLast(SCORE_HISTORY_MAX)
+        } else {
+            history.sortedBy { it.date }
+        }
+        return data.copy(
+            score = ScoreState(
+                lifetimePoints = lifetime,
+                history = trimmed,
+                lastFinalizedDate = lastDone
+            )
+        )
+    }
+
+    fun lastNDayPoints(data: AppData, n: Int = 30): List<Pair<String, Int>> {
+        val result = mutableListOf<Pair<String, Int>>()
+        var d = LocalDate.now()
+        repeat(n) {
+            val key = d.toString()
+            val fromHist = data.score.history.find { it.date == key }?.points
+            val pts = fromHist ?: computeDayPoints(data, key)
+            result.add(key to pts)
+            d = d.minusDays(1)
+        }
+        return result.reversed()
+    }
+
+    // --- Smart gentle notifications (v10) ---
+
+    fun isInQuietHours(prefs: NotificationPrefs, minutesNow: Int): Boolean {
+        val start = parseTimeToMinutes(prefs.quietStart)
+        val end = parseTimeToMinutes(prefs.quietEnd)
+        return if (start == end) {
+            false
+        } else if (start < end) {
+            minutesNow in start until end
+        } else {
+            // overnight window e.g. 22:30–07:00
+            minutesNow >= start || minutesNow < end
+        }
+    }
+
+    /**
+     * If [triggerMillis] falls in quiet hours, push to quiet end on that local day
+     * (or next calendar day if quiet end is after midnight relative to start).
+     */
+    fun pushPastQuietHours(
+        triggerMillis: Long,
+        prefs: NotificationPrefs,
+        zone: ZoneId = ZoneId.systemDefault()
+    ): Long {
+        val zdt = Instant.ofEpochMilli(triggerMillis).atZone(zone)
+        val minutesNow = zdt.hour * 60 + zdt.minute
+        if (!isInQuietHours(prefs, minutesNow)) return triggerMillis
+        val endMin = parseTimeToMinutes(prefs.quietEnd)
+        val startMin = parseTimeToMinutes(prefs.quietStart)
+        var target = zdt.withHour(endMin / 60).withMinute(endMin % 60).withSecond(0).withNano(0)
+        // Overnight quiet: if we're after start (evening), quiet ends next morning
+        if (startMin > endMin && minutesNow >= startMin) {
+            target = target.plusDays(1)
+        }
+        // If still not after trigger (same-minute edge), add a minute
+        if (!target.toInstant().isAfter(Instant.ofEpochMilli(triggerMillis))) {
+            target = target.plusMinutes(1)
+        }
+        return target.toInstant().toEpochMilli()
+    }
+
+    /**
+     * Median log minute-of-day for habits belonging to [groupId], from [HabitEntry.loggedAt].
+     * Returns null if fewer than [ADAPTIVE_MIN_SAMPLES] samples.
+     */
+    fun medianLogMinuteForGroup(data: AppData, groupId: String): Int? {
+        val minutes = mutableListOf<Int>()
+        for ((_, dayMap) in data.entries) {
+            for ((habitId, entry) in dayMap) {
+                if (entry.loggedAt <= 0L || entry.skipped) continue
+                val habit = data.habits.find { it.id == habitId } ?: continue
+                if (!belongsToGroup(habit, groupId)) continue
+                val zdt = Instant.ofEpochMilli(entry.loggedAt).atZone(ZoneId.systemDefault())
+                minutes.add(zdt.hour * 60 + zdt.minute)
+            }
+        }
+        if (minutes.size < ADAPTIVE_MIN_SAMPLES) return null
+        val sorted = minutes.sorted()
+        return sorted[sorted.size / 2]
+    }
+
+    /**
+     * Effective HH:mm for scheduling: base reminder time, optionally nudged toward
+     * median log time within [ADAPTIVE_CLAMP_MINUTES].
+     */
+    fun resolveEffectiveReminderTime(r: Reminder, data: AppData): String {
+        if (!data.notificationPrefs.adaptiveTiming || r.groupId == null) return r.time
+        val scheduled = parseTimeToMinutes(r.time)
+        val median = medianLogMinuteForGroup(data, r.groupId) ?: return r.time
+        val delta = (median - scheduled).coerceIn(-ADAPTIVE_CLAMP_MINUTES, ADAPTIVE_CLAMP_MINUTES)
+        return minutesToHhMm(scheduled + delta)
+    }
+
+    /** Pending due habits for a reminder (null groupId = all groups). Uses full membership. */
+    fun pendingHabitsForReminder(
+        data: AppData,
+        groupId: String?,
+        date: LocalDate = LocalDate.now()
+    ): List<Habit> {
+        val key = date.toString()
+        val entries = data.entries[key] ?: emptyMap()
+        return habitsDueOn(data, date)
+            .filter { h -> groupId == null || belongsToGroup(h, groupId) }
+            .filter { h ->
+                val e = entries[h.id]
+                !isEntryCompleted(e) && e?.skipped != true
+            }
+    }
+
+    fun firesToday(prefs: NotificationPrefs, today: String = getToday()): Int =
+        if (prefs.firesDate == today) prefs.firesCount else 0
+
+    fun withRecordedNotificationFire(data: AppData, today: String = getToday()): AppData {
+        val prefs = data.notificationPrefs
+        val count = if (prefs.firesDate == today) prefs.firesCount + 1 else 1
+        return data.copy(
+            notificationPrefs = prefs.copy(firesDate = today, firesCount = count)
+        )
+    }
+
+    data class ReminderDecision(
+        val show: Boolean,
+        val title: String,
+        val body: String,
+        val celebrate: Boolean = false
+    )
+
+    /**
+     * Decide whether to show a notification and what copy to use.
+     * Rate limit, empty-pending skip, streak-risk (daily review only), full-clear celebrate.
+     */
+    fun decideReminder(
+        data: AppData,
+        groupId: String?,
+        groupName: String,
+        today: String = getToday()
+    ): ReminderDecision {
+        val prefs = data.notificationPrefs
+        val fires = firesToday(prefs, today)
+        if (fires >= prefs.maxPerDay.coerceAtLeast(1)) {
+            return ReminderDecision(false, "", "")
+        }
+        val date = try {
+            LocalDate.parse(today)
+        } catch (_: Exception) {
+            LocalDate.now()
+        }
+        val pending = pendingHabitsForReminder(data, groupId, date)
+        val streak = computeStreak(data)
+        val solid = isSolidDay(data, date)
+        val remainingPts = pointsRemainingToday(data, today)
+
+        // Daily review (null group): streak-risk or pending summary
+        if (groupId == null) {
+            if (pending.isEmpty()) {
+                if (prefs.celebrateFullClear && isFullClear(data, date) && solid) {
+                    val pts = computeDayPoints(data, today)
+                    return ReminderDecision(
+                        show = true,
+                        title = "Solid day",
+                        body = "You're clear. +$pts Steady points today.",
+                        celebrate = true
+                    )
+                }
+                return ReminderDecision(false, "", "")
+            }
+            if (prefs.streakRiskNudge && streak >= 3 && !solid) {
+                val need = pending.size
+                return ReminderDecision(
+                    show = true,
+                    title = "Protect your $streak-day streak",
+                    body = buildPendingBody(pending, remainingPts, streakRisk = true, need = need)
+                )
+            }
+            return ReminderDecision(
+                show = true,
+                title = "Daily review",
+                body = buildPendingBody(pending, remainingPts)
+            )
+        }
+
+        // Group reminder
+        if (pending.isEmpty()) {
+            return ReminderDecision(false, "", "")
+        }
+        val title = if (groupName.isNotBlank() && groupName != "Daily") "$groupName time" else "Steady reminder"
+        return ReminderDecision(
+            show = true,
+            title = title,
+            body = buildPendingBody(pending, remainingPts)
+        )
+    }
+
+    private fun buildPendingBody(
+        pending: List<Habit>,
+        remainingPts: Int,
+        streakRisk: Boolean = false,
+        need: Int = pending.size
+    ): String {
+        val names = when {
+            pending.isEmpty() -> ""
+            pending.size <= 3 -> pending.joinToString(" · ") { it.name }
+            else -> pending.take(3).joinToString(" · ") { it.name } + " +${pending.size - 3} more"
+        }
+        return buildString {
+            if (streakRisk) {
+                append("$need habit${if (need == 1) "" else "s"} would keep it")
+                if (names.isNotEmpty()) append(" · $names")
+            } else {
+                append(names)
+            }
+            if (remainingPts > 0) {
+                if (isNotEmpty()) append(" · ")
+                append("~$remainingPts pts still open")
+            }
+        }
+    }
 }
 
 // Backwards-compatible top level functions delegating to object (so existing call sites continue to work with minimal changes)
@@ -1107,3 +1614,171 @@ fun defaultTags(): List<Tag> = listOf(
     Tag(TagIds.HYGIENE, "Hygiene", color = 0xFF22C55E.toInt(), order = 4),
     Tag(TagIds.SLEEP, "Sleep", color = 0xFF64748B.toInt(), order = 5)
 )
+
+/** Accent palette option for settings + first-run theme picker. */
+data class AccentSchemeOption(
+    val id: String,
+    val label: String,
+    /** ARGB int (e.g. 0xFF22C55E.toInt()). */
+    val colorArgb: Int,
+    /** Grouping for UI sections: classic | feminine | bold. */
+    val family: String = "classic"
+)
+
+/**
+ * Background palette option for settings + first-run theme picker.
+ * [isLight] drives text contrast and Material light vs dark color schemes.
+ */
+data class BackgroundModeOption(
+    val id: String,
+    val label: String,
+    /** dark | tinted | light */
+    val family: String,
+    val backgroundArgb: Int,
+    val surfaceArgb: Int,
+    val surfaceVariantArgb: Int,
+    val widgetRowBgArgb: Int,
+    val isLight: Boolean
+)
+
+/**
+ * Full background catalog. Keep [backgroundModeOption] / [resolveThemeColors] in sync.
+ * Legacy ids dark / amoled / light are preserved.
+ */
+fun backgroundModes(): List<BackgroundModeOption> = listOf(
+    // —— Dark neutrals ——
+    BackgroundModeOption(
+        "dark", "Slate", "dark",
+        0xFF0F172A.toInt(), 0xFF1E2937.toInt(), 0xFF334155.toInt(), 0xFF1E3A5F.toInt(), false
+    ),
+    BackgroundModeOption(
+        "amoled", "OLED black", "dark",
+        0xFF000000.toInt(), 0xFF0F0F0F.toInt(), 0xFF1A1A1A.toInt(), 0xFF1A1A1A.toInt(), false
+    ),
+    BackgroundModeOption(
+        "charcoal", "Charcoal", "dark",
+        0xFF121212.toInt(), 0xFF1E1E1E.toInt(), 0xFF2C2C2C.toInt(), 0xFF252525.toInt(), false
+    ),
+    BackgroundModeOption(
+        "graphite", "Graphite", "dark",
+        0xFF1A1C1E.toInt(), 0xFF25282C.toInt(), 0xFF353A40.toInt(), 0xFF2A2E33.toInt(), false
+    ),
+    BackgroundModeOption(
+        "midnight", "Midnight", "dark",
+        0xFF0B1026.toInt(), 0xFF151B36.toInt(), 0xFF232A4A.toInt(), 0xFF1A2340.toInt(), false
+    ),
+    BackgroundModeOption(
+        "navy", "Navy", "dark",
+        0xFF0A1628.toInt(), 0xFF132337.toInt(), 0xFF1E334D.toInt(), 0xFF152C44.toInt(), false
+    ),
+    // —— Tinted darks ——
+    BackgroundModeOption(
+        "forest", "Forest", "tinted",
+        0xFF0C1A14.toInt(), 0xFF15261E.toInt(), 0xFF243B30.toInt(), 0xFF1A3226.toInt(), false
+    ),
+    BackgroundModeOption(
+        "ocean", "Ocean", "tinted",
+        0xFF0A1920.toInt(), 0xFF122830.toInt(), 0xFF1C3A45.toInt(), 0xFF152F38.toInt(), false
+    ),
+    BackgroundModeOption(
+        "plum", "Plum", "tinted",
+        0xFF140F1F.toInt(), 0xFF1F1830.toInt(), 0xFF302645.toInt(), 0xFF261E3A.toInt(), false
+    ),
+    BackgroundModeOption(
+        "wine", "Wine", "tinted",
+        0xFF1A0F14.toInt(), 0xFF271820.toInt(), 0xFF3A2430.toInt(), 0xFF2E1C26.toInt(), false
+    ),
+    BackgroundModeOption(
+        "ember", "Ember", "tinted",
+        0xFF1A120C.toInt(), 0xFF271C14.toInt(), 0xFF3A2A1C.toInt(), 0xFF2E2218.toInt(), false
+    ),
+    BackgroundModeOption(
+        "mocha", "Mocha", "tinted",
+        0xFF1C1410.toInt(), 0xFF2A1E18.toInt(), 0xFF3D2E24.toInt(), 0xFF32261E.toInt(), false
+    ),
+    BackgroundModeOption(
+        "aurora", "Aurora", "tinted",
+        0xFF0A1A1C.toInt(), 0xFF12282B.toInt(), 0xFF1C3C40.toInt(), 0xFF153236.toInt(), false
+    ),
+    BackgroundModeOption(
+        "dusk", "Dusk", "tinted",
+        0xFF16131F.toInt(), 0xFF221C30.toInt(), 0xFF342A48.toInt(), 0xFF2A243C.toInt(), false
+    ),
+    // —— Light ——
+    BackgroundModeOption(
+        "light", "Soft white", "light",
+        0xFFF8FAFC.toInt(), 0xFFFFFFFF.toInt(), 0xFFE2E8F0.toInt(), 0xFFE2E8F0.toInt(), true
+    ),
+    BackgroundModeOption(
+        "paper", "Paper", "light",
+        0xFFF5F0E8.toInt(), 0xFFFFFBF5.toInt(), 0xFFE8E0D4.toInt(), 0xFFEDE6DA.toInt(), true
+    ),
+    BackgroundModeOption(
+        "cream", "Cream", "light",
+        0xFFFFF8F0.toInt(), 0xFFFFFFFB.toInt(), 0xFFF0E6D8.toInt(), 0xFFF5EDE3.toInt(), true
+    ),
+    BackgroundModeOption(
+        "mist", "Mist", "light",
+        0xFFF0F4F8.toInt(), 0xFFFFFFFF.toInt(), 0xFFDCE4EC.toInt(), 0xFFE4EBF2.toInt(), true
+    ),
+    BackgroundModeOption(
+        "sage_bg", "Sage", "light",
+        0xFFF0F5F1.toInt(), 0xFFFAFDFB.toInt(), 0xFFDCE8DE.toInt(), 0xFFE6F0E8.toInt(), true
+    ),
+    BackgroundModeOption(
+        "blush_bg", "Blush", "light",
+        0xFFFDF2F4.toInt(), 0xFFFFF8F9.toInt(), 0xFFF5E0E6.toInt(), 0xFFF8E8ED.toInt(), true
+    ),
+    BackgroundModeOption(
+        "lavender_bg", "Lavender", "light",
+        0xFFF5F3FA.toInt(), 0xFFFCFBFE.toInt(), 0xFFE6E0F0.toInt(), 0xFFEDE8F5.toInt(), true
+    ),
+    BackgroundModeOption(
+        "sky_bg", "Sky", "light",
+        0xFFEFF6FB.toInt(), 0xFFF8FCFF.toInt(), 0xFFD6E8F5.toInt(), 0xFFE2F0F8.toInt(), true
+    )
+)
+
+/** Resolve stored [AppData.backgroundMode] id → palette. Unknown ids fall back to slate dark. */
+fun backgroundModeOption(modeId: String): BackgroundModeOption =
+    backgroundModes().firstOrNull { it.id == modeId }
+        ?: backgroundModes().first { it.id == "dark" }
+
+/**
+ * Full accent catalog. Keep [accentColorArgb] in sync via this list.
+ * Feminine options: soft pinks, rose, lavender, berry, peach, etc.
+ */
+fun accentSchemes(): List<AccentSchemeOption> = listOf(
+    // Classic
+    AccentSchemeOption("default", "Green", 0xFF22C55E.toInt(), "classic"),
+    AccentSchemeOption("blue", "Blue", 0xFF3B82F6.toInt(), "classic"),
+    AccentSchemeOption("teal", "Teal", 0xFF14B8A6.toInt(), "classic"),
+    AccentSchemeOption("slate", "Slate", 0xFF64748B.toInt(), "classic"),
+    AccentSchemeOption("purple", "Purple", 0xFF8B5CF6.toInt(), "classic"),
+    AccentSchemeOption("orange", "Orange", 0xFFF97316.toInt(), "classic"),
+    AccentSchemeOption("red", "Red", 0xFFEF4444.toInt(), "classic"),
+    AccentSchemeOption("indigo", "Indigo", 0xFF6366F1.toInt(), "classic"),
+    AccentSchemeOption("cyan", "Cyan", 0xFF06B6D4.toInt(), "classic"),
+    // Feminine / soft
+    AccentSchemeOption("rose", "Rose", 0xFFF43F5E.toInt(), "feminine"),
+    AccentSchemeOption("blush", "Blush", 0xFFF9A8D4.toInt(), "feminine"),
+    AccentSchemeOption("pink", "Pink", 0xFFEC4899.toInt(), "feminine"),
+    AccentSchemeOption("coral", "Coral", 0xFFFB7185.toInt(), "feminine"),
+    AccentSchemeOption("peach", "Peach", 0xFFFDBA74.toInt(), "feminine"),
+    AccentSchemeOption("lavender", "Lavender", 0xFFC4B5FD.toInt(), "feminine"),
+    AccentSchemeOption("lilac", "Lilac", 0xFFA78BFA.toInt(), "feminine"),
+    AccentSchemeOption("berry", "Berry", 0xFFBE185D.toInt(), "feminine"),
+    AccentSchemeOption("fuchsia", "Fuchsia", 0xFFD946EF.toInt(), "feminine"),
+    AccentSchemeOption("mauve", "Mauve", 0xFFC084A3.toInt(), "feminine"),
+    AccentSchemeOption("champagne", "Champagne", 0xFFE8C4A0.toInt(), "feminine"),
+    // Bold / extra
+    AccentSchemeOption("amber", "Amber", 0xFFF59E0B.toInt(), "bold"),
+    AccentSchemeOption("lime", "Lime", 0xFF84CC16.toInt(), "bold"),
+    AccentSchemeOption("emerald", "Emerald", 0xFF10B981.toInt(), "bold"),
+    AccentSchemeOption("sky", "Sky", 0xFF38BDF8.toInt(), "bold"),
+    AccentSchemeOption("violet", "Violet", 0xFF7C3AED.toInt(), "bold")
+)
+
+/** Resolve stored [AppData.colorScheme] id → ARGB accent. Unknown ids fall back to green. */
+fun accentColorArgb(schemeId: String): Int =
+    accentSchemes().firstOrNull { it.id == schemeId }?.colorArgb ?: 0xFF22C55E.toInt()

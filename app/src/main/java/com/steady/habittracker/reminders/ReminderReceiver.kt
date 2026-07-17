@@ -21,40 +21,28 @@ class ReminderReceiver : BroadcastReceiver() {
         CoroutineScope(Dispatchers.IO).launch {
             try {
                 val repo = AndroidHabitRepository(appContext)
-                val data = repo.appDataFlow.first()
+                var data = repo.appDataFlow.first()
                 val today = HabitDomain.getToday()
-                val entries = data.entries[today] ?: emptyMap()
 
-                val todayDate = try {
-                    java.time.LocalDate.parse(today)
-                } catch (_: Exception) {
-                    java.time.LocalDate.now()
-                }
-                val due = HabitDomain.habitsDueOn(data, todayDate)
-                val pendingNames = due
-                    .filter { groupId == null || it.groupId == groupId }
-                    .filter { h ->
-                        val e = entries[h.id]
-                        (e?.value ?: 0.0) < 0.5 && e?.skipped != true
-                    }
-                    .map { it.name }
-
-                val body = when {
-                    pendingNames.isEmpty() -> "You're caught up — open Steady to review."
-                    pendingNames.size <= 3 -> pendingNames.joinToString(" · ")
-                    else -> pendingNames.take(3).joinToString(" · ") + " +${pendingNames.size - 3} more"
-                }
-
-                val title = if (name.isNotBlank() && name != "Daily") "$name time" else "Steady reminder"
-                val notifId = (reminderId ?: groupId ?: "steady").hashCode()
-
-                NotificationHelper.showReminder(
-                    appContext,
-                    title,
-                    body,
-                    groupId,
-                    notifId
+                val decision = HabitDomain.decideReminder(
+                    data = data,
+                    groupId = groupId,
+                    groupName = name,
+                    today = today
                 )
+
+                if (decision.show) {
+                    val notifId = (reminderId ?: groupId ?: "steady").hashCode()
+                    NotificationHelper.showReminder(
+                        appContext,
+                        decision.title,
+                        decision.body,
+                        groupId,
+                        notifId
+                    )
+                    data = HabitDomain.withRecordedNotificationFire(data, today)
+                    repo.saveData(data)
+                }
 
                 // Reschedule next occurrence (alarms are one-shot)
                 if (data.remindersMasterEnabled) {

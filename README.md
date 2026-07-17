@@ -33,6 +33,7 @@ Steady helps you run a **daily routine** (sleep-anchored morning → focus → w
 
 ### History
 - Streaks, weekly bars, Anki-style heatmap
+- **Momentum** — Steady points, level, lifetime, 30-day points chart
 - Tag-based trends (Supplements, Movement, Sleep, …)
 - Workout session history
 
@@ -45,9 +46,16 @@ Three focused sub-tabs:
 | **Groups** | Timeline groups (Morning, Focus, Bedtime…); **attach existing habits**, order, move primary |
 | **Planner** | Sleep spine + **24h timeline**, **reminders** (aligned to schedule), **backup** export |
 
+### Momentum (scoring)
+- **Steady points** for due habits completed today (base + target/quality bonuses)
+- Day bonuses for solid days, full clears, and Path check-ins
+- **Levels** from lifetime points (calm titles: Steady → Anchored → …)
+- Shown on the Today header and History Momentum section
+
 ### Widget & notifications
 - Home-screen widget: current group, missed items, what’s next
 - Exact alarms for group / daily-review reminders (reschedule on boot)
+- **Smart & gentle**: adaptive timing from your log history, quiet hours, daily cap, streak-risk copy, skip empty groups
 - Deep links from notifications and widget into the app
 
 ### Appearance
@@ -65,7 +73,7 @@ Three focused sub-tabs:
 4. **Manage → Planner** — set wake/bed, edit the 24h timeline, enable reminders.
 5. **Manage → Habits / Groups** — catalog habits and timeline membership.
 6. **Settings (gear)** — theme only; help/tour lives there too.
-7. **Export** — Manage → Backup → Export Backup (works even with empty history).
+7. **Backup** — Manage → Backup → Export / Import Backup (full JSON: habits, logs, Momentum, reminders, Path).
 
 Tips:
 - Grant **notifications** and **exact alarms** (Android 12+) for reliable reminders.
@@ -110,7 +118,7 @@ app/src/main/java/com/steady/habittracker/
   widget/        # App widget models + rendering
 ```
 
-- **Schema** versioned JSON in DataStore (current schema v8: routines, goals, path checks).
+- **Schema** versioned JSON in DataStore (current schema v10: Momentum score, smart notification prefs).
 - **Domain** logic is unit-tested under `app/src/test/`.
 
 ---

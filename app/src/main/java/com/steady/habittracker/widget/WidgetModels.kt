@@ -20,6 +20,8 @@ data class WidgetRow(
     val title: String = "",
     val habitId: String? = null,
     val isCheckbox: Boolean = true,
+    /** HabitType name for pending icon (CHECKBOX, COUNTER, …). Empty for sections. */
+    val habitType: String = "",
     val isCurrentGroup: Boolean = false
 )
 
@@ -56,12 +58,25 @@ fun buildWidgetRows(data: AppData, now: LocalTime = LocalTime.now()): List<Widge
                     title = stack + h.displayLabel(),
                     habitId = h.id,
                     isCheckbox = h.type == HabitType.CHECKBOX,
+                    habitType = h.type.name,
                     isCurrentGroup = section.isNow
                 )
             )
         }
     }
     return rows
+}
+
+/** Pending-only icons — never show ✓ here (completed rows are filtered out). */
+fun pendingRowIcon(habitType: String, isCheckbox: Boolean): String {
+    if (isCheckbox || habitType == HabitType.CHECKBOX.name) return "☐"
+    return when (habitType) {
+        HabitType.COUNTER.name -> "#"
+        HabitType.DURATION_MIN.name -> "m"
+        HabitType.SCALE_1_5.name -> "±"
+        HabitType.NOTE.name -> "✎"
+        else -> "○"
+    }
 }
 
 fun pendingCountToday(data: AppData): Int {

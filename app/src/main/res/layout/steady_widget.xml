@@ -35,7 +35,8 @@
         android:layout_weight="1"
         android:divider="@android:color/transparent"
         android:dividerHeight="4dp"
-        android:scrollbars="vertical" />
+        android:scrollbars="vertical"
+        android:listSelector="@android:color/transparent" />
 
     <TextView
         android:id="@+id/widget_empty"
@@ -48,14 +49,63 @@
         android:gravity="center"
         android:visibility="gone" />
 
-    <Button
-        android:id="@+id/open_btn"
-        android:layout_width="wrap_content"
+    <!-- Footer: Capture / Log (like Today) + Open Steady — colors set at render from app theme -->
+    <LinearLayout
+        android:id="@+id/widget_footer"
+        android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginTop="4dp"
-        android:text="Open Steady"
-        android:textSize="11sp"
-        android:padding="4dp"
-        android:backgroundTint="#22C55E"
-        android:textColor="#000000" />
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:layout_marginTop="6dp">
+
+        <TextView
+            android:id="@+id/capture_btn"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:layout_marginEnd="4dp"
+            android:gravity="center"
+            android:paddingTop="8dp"
+            android:paddingBottom="8dp"
+            android:text="+ Capture"
+            android:textSize="11sp"
+            android:textStyle="bold"
+            android:textColor="#000000"
+            android:background="#22C55E"
+            android:clickable="true"
+            android:focusable="true" />
+
+        <TextView
+            android:id="@+id/log_btn"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:layout_marginEnd="4dp"
+            android:gravity="center"
+            android:paddingTop="8dp"
+            android:paddingBottom="8dp"
+            android:text="+ Log"
+            android:textSize="11sp"
+            android:textStyle="bold"
+            android:textColor="#000000"
+            android:background="#22C55E"
+            android:clickable="true"
+            android:focusable="true" />
+
+        <TextView
+            android:id="@+id/open_btn"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:gravity="center"
+            android:paddingTop="8dp"
+            android:paddingBottom="8dp"
+            android:text="Open Steady"
+            android:textSize="11sp"
+            android:textStyle="bold"
+            android:textColor="#000000"
+            android:background="#22C55E"
+            android:clickable="true"
+            android:focusable="true" />
+    </LinearLayout>
 </LinearLayout>

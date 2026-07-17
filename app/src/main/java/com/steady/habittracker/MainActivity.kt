@@ -81,6 +81,10 @@ class MainActivity : ComponentActivity() {
     /** Deep-link extras from widget / notifications (survives onNewIntent). */
     val deepLinkLogHabit = mutableStateOf<String?>(null)
     val deepLinkOpenGroup = mutableStateOf<String?>(null)
+    /** Widget "+ Capture" — open Today capture dialog. */
+    val deepLinkOpenCapture = mutableStateOf(false)
+    /** Widget "+ Log" — open Today metric log dialog. */
+    val deepLinkOpenMetricLog = mutableStateOf(false)
 
     private fun captureDeepLinks(intent: Intent?) {
         if (intent == null) return
@@ -91,6 +95,14 @@ class MainActivity : ComponentActivity() {
         intent.getStringExtra("open_group")?.let {
             deepLinkOpenGroup.value = it
             intent.removeExtra("open_group")
+        }
+        if (intent.getStringExtra("open_capture") == "1" || intent.getBooleanExtra("open_capture", false)) {
+            deepLinkOpenCapture.value = true
+            intent.removeExtra("open_capture")
+        }
+        if (intent.getStringExtra("open_log") == "1" || intent.getBooleanExtra("open_log", false)) {
+            deepLinkOpenMetricLog.value = true
+            intent.removeExtra("open_log")
         }
     }
 
@@ -149,6 +161,9 @@ fun SteadyApp(
 
     val completionRate by viewModel.completionRate.collectAsState()
     val streak by viewModel.streak.collectAsState()
+    val todayPoints by viewModel.todayPoints.collectAsState()
+    val momentumLevel by viewModel.momentumLevel.collectAsState()
+    val pointsToNextLevel by viewModel.pointsToNextLevel.collectAsState()
     val todayEntries by viewModel.todayEntries.collectAsState()
     val weeklyRates by viewModel.weeklyRates.collectAsState()
     val groupWeeklyRates by viewModel.groupWeeklyRates.collectAsState()
@@ -177,10 +192,14 @@ fun SteadyApp(
 
     val deepLogState = activity?.deepLinkLogHabit ?: remember { mutableStateOf<String?>(null) }
     val deepGroupState = activity?.deepLinkOpenGroup ?: remember { mutableStateOf<String?>(null) }
+    val deepCaptureState = activity?.deepLinkOpenCapture ?: remember { mutableStateOf(false) }
+    val deepMetricLogState = activity?.deepLinkOpenMetricLog ?: remember { mutableStateOf(false) }
     val deepLog by deepLogState
     val deepGroup by deepGroupState
+    val deepCapture by deepCaptureState
+    val deepMetricLog by deepMetricLogState
 
-    // Deep-links from widget (log_habit) and notifications (open_group)
+    // Deep-links from widget (log_habit / capture / log) and notifications (open_group)
     LaunchedEffect(deepLog, appData.habits) {
         val logId = deepLog ?: return@LaunchedEffect
         val h = appData.habits.find { it.id == logId && !it.archived }
@@ -196,6 +215,12 @@ fun SteadyApp(
             activity?.deepLinkOpenGroup?.value = null
         }
     }
+    LaunchedEffect(deepCapture) {
+        if (deepCapture) selectedTab = 0
+    }
+    LaunchedEffect(deepMetricLog) {
+        if (deepMetricLog) selectedTab = 0
+    }
 
     // Notification permission (Android 13+)
     val notifPermissionLauncher = rememberLauncherForActivityResult(
@@ -203,6 +228,7 @@ fun SteadyApp(
     ) { /* result ignored; Settings shows status */ }
 
     LaunchedEffect(Unit) {
+        viewModel.ensureScoreFinalized()
         NotificationHelper.ensureChannel(context)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             val granted = ContextCompat.checkSelfPermission(
@@ -235,8 +261,7 @@ fun SteadyApp(
     ) { uri ->
         uri?.let { u ->
             try {
-                val json = Json { prettyPrint = true }
-                val payload = json.encodeToString(appData)
+                val payload = repository.encodeBackupJson(appData, pretty = true)
                 context.contentResolver.openOutputStream(u)?.use { os ->
                     os.write(payload.toByteArray(Charsets.UTF_8))
                 }
@@ -247,27 +272,66 @@ fun SteadyApp(
         }
     }
 
-    // Full dynamic theming: background (dark/amoled/light) + accent (foreground highlight)
-    val isLight = appData.backgroundMode == "light"
-    val isAmoled = appData.backgroundMode == "amoled"
+    // Full JSON restore (includes Momentum score, notification prefs, entries, goals, …)
+    var pendingImportJson by remember { mutableStateOf<String?>(null) }
+    val importLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        uri?.let { u ->
+            try {
+                val text = context.contentResolver.openInputStream(u)?.use { ins ->
+                    ins.bufferedReader(Charsets.UTF_8).readText()
+                }
+                if (text.isNullOrBlank()) {
+                    Toast.makeText(context, "Backup file is empty", Toast.LENGTH_LONG).show()
+                } else {
+                    pendingImportJson = text
+                }
+            } catch (e: Exception) {
+                Toast.makeText(context, "Could not read backup: ${e.message}", Toast.LENGTH_LONG).show()
+            }
+        }
+    }
 
-    val bgColor = when {
-        isAmoled -> Color.Black
-        isLight -> Color(0xFFF8FAFC)
-        else -> Color(0xFF0F172A)
+    if (pendingImportJson != null) {
+        AlertDialog(
+            onDismissRequest = { pendingImportJson = null },
+            title = { Text("Restore backup?") },
+            text = {
+                Text(
+                    "This replaces all current Steady data (habits, logs, Momentum score, reminder settings, Path goals) with the backup file."
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    val jsonText = pendingImportJson
+                    pendingImportJson = null
+                    if (jsonText != null) {
+                        viewModel.importBackupJson(jsonText) { err ->
+                            if (err == null) {
+                                Toast.makeText(context, "Backup restored", Toast.LENGTH_SHORT).show()
+                            } else {
+                                Toast.makeText(context, "Import failed: $err", Toast.LENGTH_LONG).show()
+                            }
+                        }
+                    }
+                }) { Text("Replace data") }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingImportJson = null }) { Text("Cancel") }
+            }
+        )
     }
-    val surfaceColor = when {
-        isAmoled -> Color(0xFF0F0F0F)
-        isLight -> Color.White
-        else -> Color(0xFF1E2937)
-    }
+
+    // Full dynamic theming: background catalog + accent (foreground highlight)
+    val bgOpt = com.steady.habittracker.data.backgroundModeOption(appData.backgroundMode)
+    val isLight = bgOpt.isLight
+
+    val bgColor = Color(bgOpt.backgroundArgb)
+    val surfaceColor = Color(bgOpt.surfaceArgb)
     val onSurfaceColor = if (isLight) Color(0xFF0F172A) else Color(0xFFE2E8F0)
     val onSurfaceVariant = if (isLight) Color(0xFF475569) else Color(0xFF94A3B8)
-    val surfaceVariantColor = when {
-        isAmoled -> Color(0xFF1A1A1A)
-        isLight -> Color(0xFFE2E8F0)
-        else -> Color(0xFF334155)
-    }
+    val surfaceVariantColor = Color(bgOpt.surfaceVariantArgb)
 
     // Map secondary/primary containers to accent so FilterChips, checkboxes, etc. follow scheme (#23)
     val onAccent = if (isLight) Color.White else Color.Black
@@ -337,7 +401,19 @@ fun SteadyApp(
                     .safeDrawingPadding(),
                 color = bgColor
             ) {
-                OnboardingScreen(onComplete = { viewModel.completeOnboarding() })
+                OnboardingScreen(
+                    groups = appData.groups,
+                    tags = appData.tags,
+                    initialSleep = appData.sleep,
+                    onComplete = { drafts, colorScheme, schedule, backgroundMode ->
+                        viewModel.completeOnboardingWithHabits(
+                            drafts,
+                            colorScheme,
+                            schedule,
+                            backgroundMode
+                        )
+                    }
+                )
             }
         }
     } else {
@@ -420,6 +496,11 @@ fun SteadyApp(
                         if (streak > 0) {
                             Text("🔥 $streak day streak", color = accent, fontSize = 12.sp)
                         }
+                        Text(
+                            "⚡ $todayPoints pts · Lv $momentumLevel",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            fontSize = 11.sp
+                        )
                     }
                     Spacer(Modifier.width(8.dp))
                     IconButton(onClick = { showSettings = true }) {
@@ -483,6 +564,10 @@ fun SteadyApp(
                             Spacer(Modifier.width(8.dp))
                             Text("🔥$streak", color = accent, fontSize = 11.sp)
                         }
+                        Spacer(Modifier.width(8.dp))
+                        Text("⚡$todayPoints", color = accent, fontSize = 11.sp)
+                        Spacer(Modifier.width(6.dp))
+                        Text("Lv$momentumLevel", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp)
                     }
                     Spacer(Modifier.height(4.dp))
                     LinearProgressIndicator(
@@ -537,6 +622,18 @@ fun SteadyApp(
                                     Text("today", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 10.sp)
                                 }
                             }
+                            Spacer(Modifier.height(8.dp))
+                            Text(
+                                "⚡ $todayPoints Steady points · Level $momentumLevel",
+                                color = MaterialTheme.colorScheme.onSurface,
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                            Text(
+                                "$pointsToNextLevel pts to next level · ${com.steady.habittracker.data.HabitDomain.levelTitle(momentumLevel)}",
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                fontSize = 11.sp
+                            )
                             if (groupWeeklyRates.isNotEmpty()) {
                                 Spacer(Modifier.height(8.dp))
                                 Text("This week by group", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 10.sp)
@@ -600,7 +697,17 @@ fun SteadyApp(
                         onDeleteCapture = viewModel::deleteCapture,
                         onCreateMetric = { name -> viewModel.addMetricHabit(name) },
                         onLogMetric = viewModel::logEntry,
-                        onStartRoutine = { rt -> activeWorkoutRoutine = rt }
+                        onStartRoutine = { rt -> activeWorkoutRoutine = rt },
+                        openCaptureRequest = deepCapture,
+                        onOpenCaptureConsumed = {
+                            activity?.deepLinkOpenCapture?.value = false
+                            deepCaptureState.value = false
+                        },
+                        openLogRequest = deepMetricLog,
+                        onOpenLogConsumed = {
+                            activity?.deepLinkOpenMetricLog?.value = false
+                            deepMetricLogState.value = false
+                        }
                     )
                     1 -> PathScreen(
                         appData = appData,
@@ -632,10 +739,11 @@ fun SteadyApp(
                         onSetReminder = viewModel::setReminder,
                         onToggleReminder = viewModel::toggleReminder,
                         onSetRemindersMasterEnabled = viewModel::setRemindersMasterEnabled,
+                        onUpdateNotificationPrefs = viewModel::updateNotificationPrefs,
                         onAlignRemindersToSchedule = viewModel::alignRemindersToSchedule,
                         onArchiveGroup = { viewModel.deleteGroup(it) },
                         onExportCsv = { exportLauncher.launch("steady_backup_${java.time.LocalDate.now()}.json") },
-                        onImportCsv = { },
+                        onImportCsv = { importLauncher.launch(arrayOf("application/json", "application/*", "*/*")) },
                         onUpdateHabit = viewModel::updateHabit,
                         onUpdateGroup = viewModel::updateGroup,
                         onUnarchiveGroup = { viewModel.unarchiveGroup(it) },
@@ -710,27 +818,12 @@ fun SteadyApp(
 
     // Settings now inside the MaterialTheme so all dialogs use correct bg/surface/foreground
     if (showSettings) {
-        // Compute current accent for preview (matches resolveThemeColors)
-        val currentAccent = when (appData.colorScheme) {
-            "blue" -> Color(0xFF3B82F6)
-            "orange" -> Color(0xFFF97316)
-            "purple" -> Color(0xFF8B5CF6)
-            "slate" -> Color(0xFF64748B)
-            "teal" -> Color(0xFF14B8A6)
-            "red" -> Color(0xFFEF4444)
-            else -> Color(0xFF22C55E)
-        }
-        val previewBg = when (appData.backgroundMode) {
-            "amoled" -> Color.Black
-            "light" -> Color(0xFFF8FAFC)
-            else -> Color(0xFF0F172A)
-        }
-        val previewSurface = when (appData.backgroundMode) {
-            "amoled" -> Color(0xFF0F0F0F)
-            "light" -> Color.White
-            else -> Color(0xFF1E2937)
-        }
-        val previewOn = if (appData.backgroundMode == "light") Color(0xFF0F172A) else Color(0xFFE2E8F0)
+        // Preview colors from shared catalogs
+        val currentAccent = Color(com.steady.habittracker.data.accentColorArgb(appData.colorScheme))
+        val previewBgOpt = com.steady.habittracker.data.backgroundModeOption(appData.backgroundMode)
+        val previewBg = Color(previewBgOpt.backgroundArgb)
+        val previewSurface = Color(previewBgOpt.surfaceArgb)
+        val previewOn = if (previewBgOpt.isLight) Color(0xFF0F172A) else Color(0xFFE2E8F0)
 
         AlertDialog(
             onDismissRequest = { showSettings = false },
@@ -746,38 +839,81 @@ fun SteadyApp(
                         fontSize = 11.sp
                     )
                     Spacer(Modifier.height(16.dp))
-                    Text("Background Mode (OLED / Light / Dark)", fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurface, fontSize = 13.sp)
+                    Text(
+                        "Background",
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        fontSize = 13.sp
+                    )
                     Spacer(Modifier.height(6.dp))
-                    val backgrounds = listOf(
-                        "dark" to "Dark",
-                        "amoled" to "AMOLED / OLED",
+                    val bgModes = com.steady.habittracker.data.backgroundModes()
+                    val bgFamilyLabels = mapOf(
+                        "dark" to "Dark neutrals",
+                        "tinted" to "Tinted dark",
                         "light" to "Light"
                     )
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        backgrounds.forEach { (key, label) ->
-                            val isSel = appData.backgroundMode == key
-                            val swatchBg = when (key) {
-                                "amoled" -> Color.Black
-                                "light" -> Color(0xFFF8FAFC)
-                                else -> Color(0xFF0F172A)
-                            }
-                            Box(
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .height(48.dp)
-                                    .clip(RoundedCornerShape(8.dp))
-                                    .background(swatchBg)
-                                    .border(
-                                        if (isSel) BorderStroke(2.dp, MaterialTheme.colorScheme.primary) else BorderStroke(1.dp, Color.Gray.copy(alpha = 0.4f)),
-                                        RoundedCornerShape(8.dp)
-                                    )
-                                    .clickable {
-                                        viewModel.setBackgroundMode(key)
-                                    },
-                                contentAlignment = Alignment.Center
+                    listOf("dark", "tinted", "light").forEach { family ->
+                        val familyModes = bgModes.filter { it.family == family }
+                        if (familyModes.isEmpty()) return@forEach
+                        Text(
+                            bgFamilyLabels[family] ?: family,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(bottom = 6.dp, top = 4.dp)
+                        )
+                        familyModes.chunked(4).forEach { row ->
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
-                                Text(label, color = if (key == "light") Color(0xFF0F172A) else Color.White, fontSize = 10.sp, fontWeight = if (isSel) FontWeight.Bold else FontWeight.Normal)
+                                row.forEach { opt ->
+                                    val isSel = appData.backgroundMode == opt.id
+                                    val swatchBg = Color(opt.backgroundArgb)
+                                    val labelColor = if (opt.isLight) Color(0xFF0F172A) else Color.White
+                                    Column(
+                                        horizontalAlignment = Alignment.CenterHorizontally,
+                                        modifier = Modifier.weight(1f)
+                                    ) {
+                                        Box(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .height(44.dp)
+                                                .clip(RoundedCornerShape(8.dp))
+                                                .background(swatchBg)
+                                                .border(
+                                                    if (isSel) BorderStroke(2.dp, MaterialTheme.colorScheme.primary)
+                                                    else BorderStroke(1.dp, Color.Gray.copy(alpha = 0.4f)),
+                                                    RoundedCornerShape(8.dp)
+                                                )
+                                                .clickable { viewModel.setBackgroundMode(opt.id) },
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            if (isSel) {
+                                                Icon(
+                                                    Icons.Default.Check,
+                                                    contentDescription = "${opt.label} selected",
+                                                    tint = labelColor,
+                                                    modifier = Modifier.size(16.dp)
+                                                )
+                                            }
+                                        }
+                                        Text(
+                                            opt.label,
+                                            color = if (isSel) MaterialTheme.colorScheme.primary
+                                            else MaterialTheme.colorScheme.onSurfaceVariant,
+                                            fontSize = 9.sp,
+                                            fontWeight = if (isSel) FontWeight.Bold else FontWeight.Normal,
+                                            modifier = Modifier.padding(top = 2.dp),
+                                            maxLines = 1
+                                        )
+                                    }
+                                }
+                                repeat(4 - row.size) {
+                                    Spacer(Modifier.weight(1f))
+                                }
                             }
+                            Spacer(Modifier.height(6.dp))
                         }
                     }
 
@@ -785,53 +921,74 @@ fun SteadyApp(
                     Text("Accent Color (foreground / highlights)", fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurface, fontSize = 13.sp)
                     Spacer(Modifier.height(6.dp))
 
-                    val schemes = listOf(
-                        Triple("default", "Green", Color(0xFF22C55E)),
-                        Triple("blue", "Blue", Color(0xFF3B82F6)),
-                        Triple("orange", "Orange", Color(0xFFF97316)),
-                        Triple("purple", "Purple", Color(0xFF8B5CF6)),
-                        Triple("slate", "Slate", Color(0xFF64748B)),
-                        Triple("teal", "Teal", Color(0xFF14B8A6)),
-                        Triple("red", "Red", Color(0xFFEF4444))
+                    val schemes = com.steady.habittracker.data.accentSchemes()
+                    val familyLabels = mapOf(
+                        "classic" to "Classic",
+                        "feminine" to "Soft & feminine",
+                        "bold" to "Bold extras"
                     )
-                    // Visual swatches grid/row
                     Column {
-                        schemes.chunked(4).forEach { row ->
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(10.dp)
-                            ) {
-                                row.forEach { (key, label, col) ->
-                                    val isSel = appData.colorScheme == key
-                                    Column(
-                                        horizontalAlignment = Alignment.CenterHorizontally,
-                                        modifier = Modifier.weight(1f)
-                                    ) {
-                                        Box(
-                                            modifier = Modifier
-                                                .size(42.dp)
-                                                .clip(CircleShape)
-                                                .background(col)
-                                                .border(
-                                                    if (isSel) BorderStroke(3.dp, MaterialTheme.colorScheme.primary) else BorderStroke(1.dp, Color(0x33FFFFFF)),
-                                                    CircleShape
-                                                )
-                                                .clickable { viewModel.setColorScheme(key) },
-                                            contentAlignment = Alignment.Center
+                        listOf("classic", "feminine", "bold").forEach { family ->
+                            val familySchemes = schemes.filter { it.family == family }
+                            if (familySchemes.isEmpty()) return@forEach
+                            Text(
+                                familyLabels[family] ?: family,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Medium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(bottom = 6.dp, top = 4.dp)
+                            )
+                            familySchemes.chunked(4).forEach { row ->
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                                ) {
+                                    row.forEach { opt ->
+                                        val key = opt.id
+                                        val label = opt.label
+                                        val col = Color(opt.colorArgb)
+                                        val isSel = appData.colorScheme == key
+                                        Column(
+                                            horizontalAlignment = Alignment.CenterHorizontally,
+                                            modifier = Modifier.weight(1f)
                                         ) {
-                                            if (isSel) {
-                                                Icon(Icons.Default.Check, null, tint = Color.White, modifier = Modifier.size(18.dp))
+                                            Box(
+                                                modifier = Modifier
+                                                    .size(42.dp)
+                                                    .clip(CircleShape)
+                                                    .background(col)
+                                                    .border(
+                                                        if (isSel) BorderStroke(3.dp, MaterialTheme.colorScheme.primary)
+                                                        else BorderStroke(1.dp, Color(0x33FFFFFF)),
+                                                        CircleShape
+                                                    )
+                                                    .clickable { viewModel.setColorScheme(key) },
+                                                contentAlignment = Alignment.Center
+                                            ) {
+                                                if (isSel) {
+                                                    Icon(
+                                                        Icons.Default.Check,
+                                                        null,
+                                                        tint = Color.White,
+                                                        modifier = Modifier.size(18.dp)
+                                                    )
+                                                }
                                             }
+                                            Text(
+                                                label,
+                                                fontSize = 9.sp,
+                                                color = if (isSel) MaterialTheme.colorScheme.primary
+                                                else MaterialTheme.colorScheme.onSurfaceVariant,
+                                                modifier = Modifier.padding(top = 2.dp)
+                                            )
                                         }
-                                        Text(label, fontSize = 9.sp, color = if (isSel) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 2.dp))
+                                    }
+                                    repeat(4 - row.size) {
+                                        Spacer(Modifier.weight(1f))
                                     }
                                 }
-                                // pad if short row
-                                repeat(4 - row.size) {
-                                    Spacer(Modifier.weight(1f))
-                                }
+                                Spacer(Modifier.height(8.dp))
                             }
-                            Spacer(Modifier.height(8.dp))
                         }
                     }
 
@@ -882,7 +1039,11 @@ fun SteadyApp(
                     }
 
                     Spacer(Modifier.height(8.dp))
-                    Text("Instant updates. AMOLED for pure black (battery friendly on OLED). All cards, texts, progress & widget use theme.", fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(
+                        "Instant updates. OLED black saves battery on AMOLED. Cards, text, progress & widget follow background + accent.",
+                        fontSize = 10.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
 
                     Spacer(Modifier.height(16.dp))
                     Text("Help", fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurface, fontSize = 13.sp)
@@ -991,16 +1152,9 @@ fun SteadyApp(
     } // end else (onboarded)
 }
 
-// Accent resolver (used for dynamic theme + progress). Matches resolveThemeColors.
-private fun getAccentColor(scheme: String): Color = when (scheme) {
-    "blue" -> Color(0xFF3B82F6)
-    "orange" -> Color(0xFFF97316)
-    "purple" -> Color(0xFF8B5CF6)
-    "slate" -> Color(0xFF64748B)
-    "teal" -> Color(0xFF14B8A6)
-    "red" -> Color(0xFFEF4444)
-    else -> Color(0xFF22C55E) // default green
-}
+// Accent resolver (used for dynamic theme + progress). Matches resolveThemeColors / accentSchemes().
+private fun getAccentColor(scheme: String): Color =
+    Color(com.steady.habittracker.data.accentColorArgb(scheme))
 
 // UI composables have been extracted to ui/ package
 // (keeps MainActivity small and focused)

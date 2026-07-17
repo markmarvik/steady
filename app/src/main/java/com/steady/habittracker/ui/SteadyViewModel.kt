@@ -55,6 +55,8 @@ import com.steady.habittracker.data.PathAlignmentCheck
 import com.steady.habittracker.data.withUpdatedGoal
 import com.steady.habittracker.data.withArchivedGoal
 import com.steady.habittracker.data.withGoalsReplacedFromWizard
+import com.steady.habittracker.data.NotificationPrefs
+import com.steady.habittracker.data.withNotificationPrefs
 
 import com.steady.habittracker.reminders.AlarmScheduler
 import com.steady.habittracker.widget.WidgetRenderer
@@ -94,6 +96,25 @@ class SteadyViewModel(
     val streak: StateFlow<Int> = appData
         .map { repository.computeStreak(it) }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 0)
+
+    /** Live Steady points for today (derived from entries). */
+    val todayPoints: StateFlow<Int> = appData
+        .map { HabitDomain.computeDayPoints(it, today) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 0)
+
+    val momentumLevel: StateFlow<Int> = appData
+        .map { HabitDomain.computeLevel(HabitDomain.effectiveLifetimePoints(it, today)) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 1)
+
+    val lifetimePoints: StateFlow<Int> = appData
+        .map { HabitDomain.effectiveLifetimePoints(it, today) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 0)
+
+    val pointsToNextLevel: StateFlow<Int> = appData
+        .map {
+            HabitDomain.pointsToNextLevel(HabitDomain.effectiveLifetimePoints(it, today))
+        }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), HabitDomain.POINTS_PER_LEVEL)
 
     val currentPeriod: StateFlow<String> = appData
         .map { repository.getCurrentPeriodHint() }
@@ -499,6 +520,45 @@ class SteadyViewModel(
         }
     }
 
+    fun updateNotificationPrefs(prefs: NotificationPrefs) {
+        viewModelScope.launch {
+            val current = appData.value
+            val updated = current.withNotificationPrefs(prefs)
+            repository.saveData(updated)
+            rescheduleReminders(updated)
+        }
+    }
+
+    /** Bank past days into Momentum history when the calendar day rolls. */
+    fun ensureScoreFinalized() {
+        viewModelScope.launch {
+            val current = appData.value
+            val finalized = HabitDomain.withFinalizedScoreHistory(current, today)
+            if (finalized.score != current.score) {
+                repository.saveData(finalized)
+            }
+        }
+    }
+
+    /**
+     * Replace all app data with a full JSON backup (Export Backup format).
+     * Restores Momentum score, notification prefs, habits, entries, etc.
+     * @return null on success, error message on failure
+     */
+    fun importBackupJson(jsonString: String, onResult: (String?) -> Unit) {
+        viewModelScope.launch {
+            try {
+                val restored = repository.decodeBackupJson(jsonString)
+                repository.saveData(restored)
+                rescheduleReminders(restored)
+                refreshWidget(restored)
+                onResult(null)
+            } catch (e: Exception) {
+                onResult(e.message ?: "Invalid backup file")
+            }
+        }
+    }
+
     /** For skip prompt logic */
     fun shouldShowSkipPrompt(habitId: String): Boolean = getRecentSkipCount(habitId) >= 3
 
@@ -531,6 +591,161 @@ class SteadyViewModel(
             if (!current.onboarded) {
                 repository.saveData(current.withOnboarded())
             }
+        }
+    }
+
+    /**
+     * Finish first-run onboarding: apply daily schedule, commit drafted habits, accent, mark onboarded.
+     * Clean slate is allowed — empty [drafts] still completes onboarding.
+     */
+    fun completeOnboardingWithHabits(
+        drafts: List<HabitDraft>,
+        colorScheme: String = "default",
+        schedule: ScheduleDraft = ScheduleDraft(),
+        backgroundMode: String = "dark"
+    ) {
+        viewModelScope.launch {
+            var current = appData.value
+
+            // —— Schedule: sleep spine + work (+ optional exercise) middle blocks ——
+            val wake = normalizeOnboardingTime(schedule.wakeTime)
+            val bed = normalizeOnboardingTime(schedule.bedTime)
+            val workStart = normalizeOnboardingTime(schedule.workStart)
+            val workEnd = normalizeOnboardingTime(schedule.workEnd)
+            val exStart = normalizeOnboardingTime(schedule.exerciseStart)
+            val exEnd = normalizeOnboardingTime(schedule.exerciseEndTime())
+
+            current = HabitDomain.ensureSleepLinkedGroups(
+                current.withSleep(
+                    current.sleep.copy(
+                        wakeTime = wake,
+                        bedTime = bed,
+                        morningMinutes = schedule.morningMinutes.coerceIn(30, 180),
+                        windDownMinutes = schedule.windDownMinutes.coerceIn(15, 180)
+                    )
+                )
+            )
+
+            // Ensure Focus / Work group
+            var workGroupId = current.groups.firstOrNull {
+                !it.archived && (
+                    it.timeHint == "WORK" ||
+                        it.name.contains("focus", true) ||
+                        it.name.contains("work", true)
+                    ) &&
+                    !it.name.contains("exercise", true)
+            }?.id
+            if (workGroupId == null) {
+                val g = Group("g_focus", "Focus & Work", "WORK", order = 1, icon = "🎯")
+                current = current.withAddedGroup(g)
+                workGroupId = g.id
+            }
+
+            // Optional Exercise group
+            var exerciseGroupId: String? = null
+            if (schedule.includeExercise) {
+                exerciseGroupId = current.groups.firstOrNull {
+                    !it.archived && (
+                        it.id == "g_exercise" ||
+                            it.name.contains("exercise", true) ||
+                            it.name.contains("movement", true) ||
+                            it.name.contains("workout", true)
+                        )
+                }?.id
+                if (exerciseGroupId == null) {
+                    val g = Group("g_exercise", "Exercise", "WORK", order = 2, icon = "💪")
+                    current = current.withAddedGroup(g)
+                    exerciseGroupId = g.id
+                }
+            }
+
+            val s = current.sleep
+            val morn = s.morningGroupId ?: return@launch
+            val bedG = s.bedtimeGroupId ?: return@launch
+            val sleepG = s.sleepGroupId ?: return@launch
+
+            val middle = buildList {
+                add(
+                    TimeBlock(
+                        start = workStart,
+                        end = workEnd,
+                        groupId = workGroupId!!,
+                        color = 0xFF3B82F6.toInt()
+                    )
+                )
+                if (schedule.includeExercise && exerciseGroupId != null) {
+                    add(
+                        TimeBlock(
+                            start = exStart,
+                            end = exEnd,
+                            groupId = exerciseGroupId,
+                            color = 0xFF22C55E.toInt()
+                        )
+                    )
+                }
+            }
+            val blocks = HabitDomain.buildSleepAnchoredBlocks(s, morn, bedG, sleepG, middle)
+            val scheduleId = current.activeScheduleId ?: "s_sleep"
+            val sched = current.schedules.find { it.id == scheduleId }?.copy(
+                name = "My day",
+                timeBlocks = blocks,
+                enabled = true
+            ) ?: Schedule(id = scheduleId, name = "My day", timeBlocks = blocks)
+            current = if (current.schedules.any { it.id == sched.id }) {
+                current.withUpdatedSchedule(sched)
+            } else {
+                current.withAddedSchedule(sched)
+            }
+            current = current.withActiveSchedule(sched.id)
+            current = HabitDomain.withRemindersAlignedToSchedule(current)
+
+            // —— Habits ——
+            drafts.forEach { d ->
+                if (d.name.isBlank()) return@forEach
+                var groupId = d.groupId
+                // Resolve placeholder exercise id if group was just created
+                if (groupId == "g_exercise" || groupId.isBlank()) {
+                    groupId = when {
+                        groupId == "g_exercise" && exerciseGroupId != null -> exerciseGroupId
+                        groupId.isBlank() -> current.groups.firstOrNull { !it.archived }?.id
+                        else -> groupId
+                    } ?: return@forEach
+                }
+                // If exercise was disabled but habit still points at missing group, fall back to work
+                if (current.groups.none { it.id == groupId && !it.archived }) {
+                    groupId = workGroupId ?: current.groups.firstOrNull { !it.archived }?.id
+                        ?: return@forEach
+                }
+                val order = current.habits.count { it.groupId == groupId && !it.archived }
+                val tagList = d.tags.toMutableList()
+                if (d.isSupplement && TagIds.SUPPLEMENTS !in tagList) tagList.add(TagIds.SUPPLEMENTS)
+                val habit = Habit(
+                    id = "h_${UUID.randomUUID().toString().take(8)}",
+                    name = d.name.trim(),
+                    why = d.why.trim(),
+                    groupId = groupId,
+                    type = d.type,
+                    order = order,
+                    canSkip = d.canSkip,
+                    isSupplement = d.isSupplement || TagIds.SUPPLEMENTS in tagList,
+                    tags = tagList.distinct(),
+                    target = d.target,
+                    unit = d.unit,
+                    icon = d.icon.trim()
+                )
+                current = current.withAddedHabit(habit)
+            }
+
+            if (colorScheme.isNotBlank()) {
+                current = current.withColorScheme(colorScheme)
+            }
+            if (backgroundMode.isNotBlank()) {
+                current = current.withBackgroundMode(backgroundMode)
+            }
+            if (!current.onboarded) current = current.withOnboarded()
+            repository.saveData(current)
+            refreshWidget(current)
+            rescheduleReminders(current)
         }
     }
 

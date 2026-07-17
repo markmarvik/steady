@@ -46,7 +46,7 @@ class AndroidHabitRepository(private val context: Context) : HabitRepository {
     override val appDataFlow: Flow<AppData> = context.dataStore.data
         .map { preferences ->
             val jsonString = preferences[DATA_KEY] ?: ""
-            val data = if (jsonString.isBlank()) {
+            if (jsonString.isBlank()) {
                 getDefaultData()
             } else if (jsonString == lastJson && cachedParsed != null) {
                 cachedParsed!!
@@ -61,8 +61,6 @@ class AndroidHabitRepository(private val context: Context) : HabitRepository {
                     getDefaultData()
                 }
             }
-            // Ensure at least defaults if empty
-            if (data.habits.isEmpty()) getDefaultData() else data
         }
 
     override suspend fun saveData(data: AppData) {
@@ -76,20 +74,45 @@ class AndroidHabitRepository(private val context: Context) : HabitRepository {
     }
 
     /**
-     * Migrate older schemas to v8 (goals/path; v7 routines; v6 tags + sleep).
+     * Decode a full JSON backup (same shape as DataStore / Export Backup).
+     * Applies schema migration + score finalization. Throws on invalid JSON.
+     */
+    fun decodeBackupJson(jsonString: String): AppData {
+        val parsed = json.decodeFromString<AppData>(jsonString)
+        return migrateIfNeeded(parsed)
+    }
+
+    /** Encode full AppData for export (pretty optional for human editing). */
+    fun encodeBackupJson(data: AppData, pretty: Boolean = true): String {
+        val encoder = if (pretty) {
+            Json { prettyPrint = true; encodeDefaults = true; ignoreUnknownKeys = true }
+        } else {
+            json
+        }
+        return encoder.encodeToString(data)
+    }
+
+    /**
+     * Migrate older schemas to v10 (Momentum score + notification prefs).
+     * v8–v9: goals/path; v7 routines; v6 tags + sleep.
      * v5: schedules. Pre-v5: archive/skip fields.
      * Missing new fields default safely via kotlinx.serialization.
      */
-    private fun migrateIfNeeded(data: AppData): AppData {
-        if (data.schemaVersion >= 8 && data.groups.isNotEmpty() && data.habits.isNotEmpty() && data.tags.isNotEmpty()) {
-            return data
+    fun migrateIfNeeded(data: AppData): AppData {
+        // Empty habits are valid (clean slate / first-run builder). Only require groups + tags structure.
+        if (data.schemaVersion >= 10 && data.groups.isNotEmpty() && data.tags.isNotEmpty()) {
+            return HabitDomain.withFinalizedScoreHistory(data)
         }
-        if (data.schemaVersion >= 6 && data.groups.isNotEmpty() && data.habits.isNotEmpty() && data.tags.isNotEmpty()) {
+        if (data.schemaVersion >= 8 && data.groups.isNotEmpty() && data.tags.isNotEmpty()) {
+            // Soft bump: score + notificationPrefs already defaulted on decode
+            return HabitDomain.withFinalizedScoreHistory(data.copy(schemaVersion = 10))
+        }
+        if (data.schemaVersion >= 6 && data.groups.isNotEmpty() && data.tags.isNotEmpty()) {
             // Soft bump: ensure routines/goals lists exist (already defaulted on decode)
-            return data.copy(schemaVersion = 8)
+            return HabitDomain.withFinalizedScoreHistory(data.copy(schemaVersion = 10))
         }
-        // Start from current or fresh
-        var d = if (data.groups.isNotEmpty() && data.habits.isNotEmpty()) data else getDefaultData()
+        // Start from current or fresh skeleton (do not re-seed habits when user has none)
+        var d = if (data.groups.isNotEmpty()) data else getDefaultData()
 
         // Upgrade fields (v3–v5)
         val upgradedGroups = d.groups.map { g ->
@@ -174,15 +197,19 @@ class AndroidHabitRepository(private val context: Context) : HabitRepository {
             )
         }
 
-        return withSleep.copy(
-            schemaVersion = 8,
-            onboarded = d.onboarded || d.schemaVersion >= 1,
-            colorScheme = if (d.colorScheme.isNotBlank()) d.colorScheme else "default",
-            backgroundMode = if (d.backgroundMode.isNotBlank()) d.backgroundMode else "dark",
-            routines = d.routines,
-            workoutSessions = d.workoutSessions,
-            goals = d.goals,
-            pathChecks = d.pathChecks
+        return HabitDomain.withFinalizedScoreHistory(
+            withSleep.copy(
+                schemaVersion = 10,
+                onboarded = d.onboarded || d.schemaVersion >= 1,
+                colorScheme = if (d.colorScheme.isNotBlank()) d.colorScheme else "default",
+                backgroundMode = if (d.backgroundMode.isNotBlank()) d.backgroundMode else "dark",
+                routines = d.routines,
+                workoutSessions = d.workoutSessions,
+                goals = d.goals,
+                pathChecks = d.pathChecks,
+                score = d.score,
+                notificationPrefs = d.notificationPrefs
+            )
         )
     }
 
@@ -235,8 +262,8 @@ class AndroidHabitRepository(private val context: Context) : HabitRepository {
     }
 
     /**
-     * Seeded day: timeline groups (when) + tags (what). Sleep is the spine.
-     * Supplements sit in Morning/Bedtime groups but keep Supplements tag for History.
+     * First-run skeleton: timeline groups (when) + tags (what) + sleep spine.
+     * Habits start empty — the interactive onboarding builder fills them in.
      */
     private fun getDefaultData(): AppData {
         val groups = listOf(
@@ -246,67 +273,6 @@ class AndroidHabitRepository(private val context: Context) : HabitRepository {
             Group("g_sleep", "Sleep", "SLEEP", 3, icon = "💤")
         )
         val tags = defaultTags()
-
-        val habits = listOf(
-            // Morning at wake — light + hygiene + AM supplements (tagged, not a separate group)
-            Habit(
-                "h_light", "Morning Sunlight / Light exposure", "Aligns circadian rhythm.",
-                "g_morn", HabitType.CHECKBOX, order = 0, tags = listOf(TagIds.SLEEP), icon = "☀️"
-            ),
-            Habit(
-                "h_breathe", "Box Breathing (6 min)", "Calms nervous system.",
-                "g_morn", HabitType.DURATION_MIN, target = 6.0, unit = "min", order = 1, tags = listOf(TagIds.MINDSET), icon = "🧘"
-            ),
-            Habit(
-                "h_teeth", "Brush + Floss + Tongue scrape", "Dental foundation.",
-                "g_morn", HabitType.CHECKBOX, order = 2, canSkip = false, tags = listOf(TagIds.HYGIENE), icon = "🪥"
-            ),
-            Habit(
-                "h_supp_am", "Morning Supplements (Omega-3, Multi)", "Foundational nutrition.",
-                "g_morn", HabitType.COUNTER, target = 1.0, unit = "", order = 3,
-                isSupplement = true, tags = listOf(TagIds.SUPPLEMENTS), icon = "💊"
-            ),
-
-            // Daytime focus
-            Habit(
-                "h_move", "Move Your Body", "20+ min walk or exercise.",
-                "g_focus", HabitType.CHECKBOX, order = 0, tags = listOf(TagIds.MOVEMENT), icon = "🚶"
-            ),
-            Habit(
-                "h_protein", "Protein First", "Muscle, satiety, metabolism.",
-                "g_focus", HabitType.CHECKBOX, order = 1, tags = listOf(TagIds.NUTRITION), icon = "🥩"
-            ),
-            Habit(
-                "h_focus", "Deep Focus Block", "Undistracted work or learning.",
-                "g_focus", HabitType.DURATION_MIN, target = 60.0, unit = "min", order = 2, tags = listOf(TagIds.MINDSET), icon = "🧠"
-            ),
-            Habit(
-                "h_pull", "Pull-ups / Dips / Squats", "Strength (reps).",
-                "g_focus", HabitType.COUNTER, target = 5.0, unit = "reps", order = 3, tags = listOf(TagIds.MOVEMENT), icon = "💪"
-            ),
-
-            // Bedtime / wind-down before sleep
-            Habit(
-                "h_wind", "Wind Down Routine", "Consistent bedtime protects sleep.",
-                "g_even", HabitType.CHECKBOX, order = 0, tags = listOf(TagIds.SLEEP), icon = "🌙"
-            ),
-            Habit(
-                "h_hydrate", "Stay Hydrated", "Energy and recovery.",
-                "g_even", HabitType.COUNTER, target = 2.5, unit = "L", order = 1, tags = listOf(TagIds.NUTRITION), icon = "💧"
-            ),
-            Habit(
-                "h_mg", "Magnesium + Chamomile", "Sleep prep.",
-                "g_even", HabitType.CHECKBOX, order = 2, isSupplement = true, tags = listOf(TagIds.SUPPLEMENTS, TagIds.SLEEP), icon = "🍵"
-            ),
-            Habit(
-                "h_nSDR", "NSDR / 4-7-8 Breathing", "Non-sleep deep rest.",
-                "g_even", HabitType.DURATION_MIN, target = 10.0, unit = "min", order = 3, tags = listOf(TagIds.SLEEP, TagIds.MINDSET), icon = "🧘"
-            ),
-            Habit(
-                "h_grat", "Gratitude / 3 things", "Evening review.",
-                "g_even", HabitType.NOTE, order = 4, tags = listOf(TagIds.MINDSET), icon = "🙏"
-            )
-        )
 
         val sleep = SleepSettings(
             bedTime = "23:00",
@@ -331,10 +297,10 @@ class AndroidHabitRepository(private val context: Context) : HabitRepository {
 
         return AppData(
             groups = groups,
-            habits = habits,
+            habits = emptyList(),
             entries = emptyMap(),
             reminders = reminders,
-            schemaVersion = 8,
+            schemaVersion = 10,
             onboarded = false,
             colorScheme = "default",
             backgroundMode = "dark",
@@ -511,7 +477,8 @@ class AndroidHabitRepository(private val context: Context) : HabitRepository {
             }
         }
 
-        return result
+        // Re-bank Momentum history from entries after CSV merge (rolling window)
+        return HabitDomain.rebuildScoreFromEntries(result)
     }
 
     // --- Schedule helpers (v5) for 24h circle, multiple schedules, weekday/date rules, presets (delegated) ---

@@ -5,6 +5,8 @@ import android.appwidget.AppWidgetManager
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.graphics.Color
+import android.os.Build
 import android.view.View
 import android.widget.RemoteViews
 import com.steady.habittracker.MainActivity
@@ -50,9 +52,14 @@ object WidgetRenderer {
     ) {
         val rows = buildWidgetRows(appData)
         val theme = HabitDomain.resolveThemeColors(appData)
-        val textColor = if (appData.backgroundMode == "light") 0xFF0F172A.toInt() else 0xFFE2E8F0.toInt()
+        val textColor = if (com.steady.habittracker.data.backgroundModeOption(appData.backgroundMode).isLight) {
+            0xFF0F172A.toInt()
+        } else {
+            0xFFE2E8F0.toInt()
+        }
+        val onAccent = buttonLabelColor(theme.accent)
 
-        // commit() (not apply): RemoteViewsFactory may re-read immediately after notify
+        // commit() (not apply): legacy RemoteViewsFactory may re-read immediately after notify
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
             .putString(KEY_ROWS, json.encodeToString(rows))
             .putInt(KEY_ROW_BG, theme.widgetRowBg)
@@ -62,6 +69,7 @@ object WidgetRenderer {
 
         val title = widgetTitle(appData)
         val empty = rows.isEmpty()
+        val useCollectionItems = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
 
         appWidgetIds.forEach { id ->
             val views = RemoteViews(context.packageName, R.layout.steady_widget)
@@ -74,17 +82,30 @@ object WidgetRenderer {
             views.setTextColor(R.id.widget_empty, theme.accent)
 
             if (!empty) {
-                val serviceIntent = Intent(context, WidgetListService::class.java).apply {
-                    putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, id)
-                    // Unique data URI so Android binds per-widget
-                    this.data = android.net.Uri.parse("steady://widget/$id")
+                if (useCollectionItems) {
+                    // API 31+: embed list items in the RemoteViews update (no RemoteViewsService /
+                    // notifyAppWidgetViewDataChanged — those Intent APIs are deprecated).
+                    val builder = RemoteViews.RemoteCollectionItems.Builder()
+                        .setHasStableIds(false)
+                        .setViewTypeCount(2)
+                    rows.forEachIndexed { index, row ->
+                        builder.addItem(index.toLong(), buildRowRemoteViews(context, row))
+                    }
+                    views.setRemoteAdapter(R.id.widget_list, builder.build())
+                } else {
+                    val serviceIntent = Intent(context, WidgetListService::class.java).apply {
+                        putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, id)
+                        this.data = android.net.Uri.parse("steady://widget/$id")
+                    }
+                    @Suppress("DEPRECATION")
+                    views.setRemoteAdapter(R.id.widget_list, serviceIntent)
                 }
-                views.setRemoteAdapter(R.id.widget_list, serviceIntent)
                 views.setEmptyView(R.id.widget_list, R.id.widget_empty)
 
-                // Template for habit row clicks → ToggleReceiver
+                // Template for habit row clicks → ToggleReceiver (must be MUTABLE for fill-in)
                 val template = Intent(context, ToggleReceiver::class.java).apply {
                     this.action = ToggleReceiver.ACTION_TOGGLE
+                    this.data = android.net.Uri.parse("steady://widget/template/$id")
                 }
                 val templatePi = PendingIntent.getBroadcast(
                     context,
@@ -95,19 +116,74 @@ object WidgetRenderer {
                 views.setPendingIntentTemplate(R.id.widget_list, templatePi)
             }
 
-            // Only the explicit "Open Steady" button opens the app (not title / list taps)
-            val open = Intent(context, MainActivity::class.java).apply {
-                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
-            }
-            val openPi = PendingIntent.getActivity(
-                context, 999, open, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+            // Footer buttons: accent from app theme (same colorScheme as in-app primary)
+            styleFooterButton(views, R.id.capture_btn, theme.accent, onAccent)
+            styleFooterButton(views, R.id.log_btn, theme.accent, onAccent)
+            styleFooterButton(views, R.id.open_btn, theme.accent, onAccent)
+
+            views.setOnClickPendingIntent(
+                R.id.capture_btn,
+                activityPi(context, 901 + id * 10, "open_capture" to "1")
             )
-            views.setOnClickPendingIntent(R.id.open_btn, openPi)
+            views.setOnClickPendingIntent(
+                R.id.log_btn,
+                activityPi(context, 902 + id * 10, "open_log" to "1")
+            )
+            views.setOnClickPendingIntent(
+                R.id.open_btn,
+                activityPi(context, 903 + id * 10)
+            )
 
             appWidgetManager.updateAppWidget(id, views)
-            // Force list reload after snapshot write (must follow commit)
-            appWidgetManager.notifyAppWidgetViewDataChanged(id, R.id.widget_list)
+
+            // Legacy path only: force RemoteViewsFactory to re-read SharedPreferences snapshot
+            if (!empty && !useCollectionItems) {
+                @Suppress("DEPRECATION")
+                appWidgetManager.notifyAppWidgetViewDataChanged(id, R.id.widget_list)
+            }
         }
+    }
+
+    private fun styleFooterButton(views: RemoteViews, viewId: Int, accent: Int, onAccent: Int) {
+        views.setInt(viewId, "setBackgroundColor", accent)
+        views.setTextColor(viewId, onAccent)
+    }
+
+    /** Black text on bright accents, white on darker ones — matches in-app onPrimary. */
+    private fun buttonLabelColor(accent: Int): Int {
+        val r = Color.red(accent) / 255.0
+        val g = Color.green(accent) / 255.0
+        val b = Color.blue(accent) / 255.0
+        // Relative luminance (sRGB approx)
+        val lum = 0.2126 * r + 0.7152 * g + 0.0722 * b
+        return if (lum > 0.55) 0xFF000000.toInt() else 0xFFFFFFFF.toInt()
+    }
+
+    private fun activityPi(
+        context: Context,
+        requestCode: Int,
+        vararg extras: Pair<String, String>
+    ): PendingIntent {
+        val open = Intent(context, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or
+                Intent.FLAG_ACTIVITY_CLEAR_TOP or
+                Intent.FLAG_ACTIVITY_SINGLE_TOP
+            extras.forEach { (k, v) -> putExtra(k, v) }
+            // Unique data so PendingIntents with different extras are not collapsed
+            if (extras.isNotEmpty()) {
+                data = android.net.Uri.parse(
+                    "steady://app/" + extras.joinToString("&") { "${it.first}=${it.second}" }
+                )
+            } else {
+                data = android.net.Uri.parse("steady://app/open")
+            }
+        }
+        return PendingIntent.getActivity(
+            context,
+            requestCode,
+            open,
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
     }
 
     fun readCachedRows(context: Context): List<WidgetRow> {

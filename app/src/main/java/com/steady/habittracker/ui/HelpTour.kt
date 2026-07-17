@@ -35,7 +35,7 @@ val TOUR_STEPS = listOf(
     ),
     TourStep(
         "Header & Progress",
-        "Top shows today's date and your current streak (🔥).\n\nThe big progress card shows today's completion percentage and a compact 7-day trend (dots).\n\nTap the progress card to open a detailed view with a large ring and weekly % per group."
+        "Top shows today's date, streak (🔥), Steady points (⚡), and Momentum level.\n\nThe progress card shows completion % and a 7-day trend. Tap it for the ring, points to next level, and weekly % by group."
     ),
     TourStep(
         "Tabs: Today / Path / History / Manage",

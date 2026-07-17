@@ -57,6 +57,10 @@
             android:exported="false">
             <intent-filter>
                 <action android:name="com.steady.habittracker.widget.ACTION_TOGGLE" />
+                <action android:name="com.steady.habittracker.widget.ACTION_OPEN_LOG" />
+                <action android:name="com.steady.habittracker.widget.ACTION_OPEN_CAPTURE" />
+                <action android:name="com.steady.habittracker.widget.ACTION_OPEN_METRIC_LOG" />
+                <action android:name="com.steady.habittracker.widget.ACTION_OPEN_APP" />
             </intent-filter>
         </receiver>
 

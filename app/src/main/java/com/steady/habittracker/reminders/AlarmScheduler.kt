@@ -6,6 +6,7 @@ import android.content.Context
 import android.content.Intent
 import android.os.Build
 import com.steady.habittracker.data.AppData
+import com.steady.habittracker.data.HabitDomain
 import com.steady.habittracker.data.Reminder
 import java.util.Calendar
 
@@ -50,7 +51,7 @@ object AlarmScheduler {
     private fun scheduleOne(context: Context, am: AlarmManager, r: Reminder, data: AppData?) {
         val groupName = resolveGroupName(r, data)
         val pi = makePending(context, r.id, r.groupId, groupName)
-        val triggerAt = computeNextTriggerMillis(r)
+        val triggerAt = computeNextTriggerMillis(r, data = data)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && !am.canScheduleExactAlarms()) {
             am.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerAt, pi)
         } else {
@@ -82,18 +83,25 @@ object AlarmScheduler {
     }
 
     /**
-     * Next fire time for [r], honoring HH:mm and weekdays (1=Mon … 7=Sun).
-     * Pure enough for unit tests via [computeNextTriggerMillis].
+     * Next fire time for [r], honoring HH:mm (optionally adaptive) and weekdays (1=Mon … 7=Sun).
+     * When [data] is provided, applies smart timing + quiet hours.
      */
-    fun computeNextTriggerMillis(r: Reminder, nowMillis: Long = System.currentTimeMillis()): Long {
-        val parts = r.time.split(":")
+    fun computeNextTriggerMillis(
+        r: Reminder,
+        nowMillis: Long = System.currentTimeMillis(),
+        data: AppData? = null
+    ): Long {
+        val effectiveTime = if (data != null) {
+            HabitDomain.resolveEffectiveReminderTime(r, data)
+        } else {
+            r.time
+        }
+        val parts = effectiveTime.split(":")
         val hour = parts.getOrNull(0)?.toIntOrNull() ?: 8
         val minute = parts.getOrNull(1)?.toIntOrNull() ?: 30
         val days = if (r.days.isEmpty()) (1..7).toSet() else r.days
 
-        val cal = Calendar.getInstance()
-        cal.timeInMillis = nowMillis
-
+        var triggerAt = 0L
         // Search up to 8 days ahead for next matching weekday + time strictly after now
         for (offset in 0..8) {
             val candidate = Calendar.getInstance()
@@ -116,16 +124,26 @@ object AlarmScheduler {
             }
             if (isoDow !in days) continue
             if (candidate.timeInMillis > nowMillis) {
-                return candidate.timeInMillis
+                triggerAt = candidate.timeInMillis
+                break
             }
         }
 
-        // Fallback: tomorrow at time
-        cal.add(Calendar.DAY_OF_YEAR, 1)
-        cal.set(Calendar.HOUR_OF_DAY, hour)
-        cal.set(Calendar.MINUTE, minute)
-        cal.set(Calendar.SECOND, 0)
-        cal.set(Calendar.MILLISECOND, 0)
-        return cal.timeInMillis
+        if (triggerAt == 0L) {
+            // Fallback: tomorrow at time
+            val cal = Calendar.getInstance()
+            cal.timeInMillis = nowMillis
+            cal.add(Calendar.DAY_OF_YEAR, 1)
+            cal.set(Calendar.HOUR_OF_DAY, hour)
+            cal.set(Calendar.MINUTE, minute)
+            cal.set(Calendar.SECOND, 0)
+            cal.set(Calendar.MILLISECOND, 0)
+            triggerAt = cal.timeInMillis
+        }
+
+        if (data != null) {
+            triggerAt = HabitDomain.pushPastQuietHours(triggerAt, data.notificationPrefs)
+        }
+        return triggerAt
     }
 }

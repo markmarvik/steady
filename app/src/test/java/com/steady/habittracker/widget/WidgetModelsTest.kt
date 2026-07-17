@@ -89,6 +89,16 @@ class WidgetModelsTest {
     }
 
     @Test
+    fun `pendingRowIcon never shows check for pending items`() {
+        assertEquals("☐", pendingRowIcon(HabitType.CHECKBOX.name, true))
+        assertEquals("#", pendingRowIcon(HabitType.COUNTER.name, false))
+        assertEquals("m", pendingRowIcon(HabitType.DURATION_MIN.name, false))
+        assertEquals("±", pendingRowIcon(HabitType.SCALE_1_5.name, false))
+        assertEquals("✎", pendingRowIcon(HabitType.NOTE.name, false))
+        assertTrue(pendingRowIcon(HabitType.COUNTER.name, false) != "✓")
+    }
+
+    @Test
     fun `pendingCountToday and title`() {
         val d = data()
         assertEquals(5, pendingCountToday(d))

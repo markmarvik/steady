@@ -9,10 +9,12 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicText
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -24,7 +26,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.steady.habittracker.data.AppData
@@ -36,7 +40,8 @@ import com.steady.habittracker.data.TimelineSection
 import com.steady.habittracker.data.displayGlyph
 import com.steady.habittracker.data.displayLabel
 import java.text.SimpleDateFormat
-import java.util.*
+import java.util.Date
+import java.util.Locale
 
 @Composable
 fun TodayScreen(
@@ -53,16 +58,39 @@ fun TodayScreen(
     // manual metric logging support (#19)
     onCreateMetric: (name: String) -> Unit = {},
     onLogMetric: (habitId: String, value: Double, note: String, date: String) -> Unit = { _, _, _, _ -> },
-    onStartRoutine: (com.steady.habittracker.data.ExerciseRoutine) -> Unit = {}
+    onStartRoutine: (com.steady.habittracker.data.ExerciseRoutine) -> Unit = {},
+    /** Widget / deep-link: open + Capture dialog once. */
+    openCaptureRequest: Boolean = false,
+    onOpenCaptureConsumed: () -> Unit = {},
+    /** Widget / deep-link: open + Log dialog once. */
+    openLogRequest: Boolean = false,
+    onOpenLogConsumed: () -> Unit = {}
 ) {
-    if (appData.habits.isEmpty() || appData.groups.isEmpty()) {
-        Text("No habits yet. Add via Manage tab!", color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(16.dp))
+    if (appData.habits.none { !it.archived } || appData.groups.isEmpty()) {
+        Text(
+            "No habits yet. Open Manage to build your list.",
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(16.dp)
+        )
         return
     }
 
     // Dialog states (must declare before use)
     var showCaptureDialog by remember { mutableStateOf(false) }
     var showMetricDialog by remember { mutableStateOf(false) }
+
+    LaunchedEffect(openCaptureRequest) {
+        if (openCaptureRequest) {
+            showCaptureDialog = true
+            onOpenCaptureConsumed()
+        }
+    }
+    LaunchedEffect(openLogRequest) {
+        if (openLogRequest) {
+            showMetricDialog = true
+            onOpenLogConsumed()
+        }
+    }
 
     if (showMetricDialog) {
         MetricLogPickerDialog(
@@ -86,104 +114,187 @@ fun TodayScreen(
         )
     }
 
-    // Pure visual day progression: Morning → … → Sleep, soft Now marker (no clock numbers)
-    val sections = remember(appData, todayEntries) {
+    // Stable keys for domain work — avoid full AppData identity thrash when possible
+    val dateKey = remember { LocalDate.now().toString() }
+    val sections = remember(
+        appData.habits,
+        appData.groups,
+        appData.schedules,
+        appData.activeScheduleId,
+        appData.sleep,
+        appData.entries[dateKey],
+        todayEntries
+    ) {
         HabitDomain.timelineSectionsForToday(appData, LocalDate.now(), LocalTime.now())
     }
-    val cue = remember(appData, todayEntries) {
-        HabitDomain.dayProgressionCue(appData, LocalDate.now(), LocalTime.now())
-    }
+    val cue = remember(sections) { HabitDomain.dayProgressionCueFromSections(sections) }
     val nameById = remember(appData.habits) { appData.habits.associate { it.id to it.name } }
-    val pendingCaptures = appData.captures.filter { !it.processed }
-    val todayRoutines = remember(appData) {
+    val tagLabels = remember(appData.habits, appData.tags) { HabitDomain.tagLabelByHabitId(appData) }
+    val pendingCaptures = remember(appData.captures) { appData.captures.filter { !it.processed } }
+    val todayRoutines = remember(appData.routines, appData.workoutSessions, dateKey) {
         HabitDomain.routinesDueOn(appData, LocalDate.now())
     }
-    val workoutDays = remember(appData) { HabitDomain.workoutDaysInWindow(appData, 7) }
+    val workoutDays = remember(appData.workoutSessions) { HabitDomain.workoutDaysInWindow(appData, 7) }
+    val routineDoneIds = remember(appData.workoutSessions, dateKey) {
+        todayRoutines.mapNotNull { rt ->
+            if (HabitDomain.isRoutineCompletedOn(appData, rt.id, dateKey)) rt.id else null
+        }.toSet()
+    }
+    // Per-section row models so items don't re-run domain / string work while scrolling
+    val sectionRows = remember(sections, todayEntries, nameById, tagLabels) {
+        sections.map { section ->
+            val rows = section.habits.map { habit ->
+                val entry = todayEntries[habit.id]
+                val isSimpleTapAdd = habit.type == HabitType.COUNTER &&
+                    (
+                        (habit.target ?: 0.0) <= 2.0 ||
+                            habit.isSupplement ||
+                            habit.name.contains("supp", ignoreCase = true) ||
+                            habit.name.contains("magnesium", ignoreCase = true)
+                        )
+                val isDone = (entry?.value ?: 0.0) >= 0.5
+                val isSkipped = entry?.skipped == true
+                val title = if (!habit.canSkip) "${habit.name} (essential)" else habit.name
+                val meta = buildList {
+                    tagLabels[habit.id]?.takeIf { it.isNotBlank() }?.let { add(it) }
+                    habit.afterHabitId?.let { nameById[it] }?.let { add("after $it") }
+                    if (entry != null && habit.type != HabitType.CHECKBOX && entry.value > 0) {
+                        add("${entry.value} ${habit.unit}".trim())
+                    }
+                    entry?.loggedAt?.takeIf { it > 0 }?.let { add(formatLoggedTime(it)) }
+                }.joinToString(" · ")
+                TodayHabitRowModel(
+                    listKey = "${section.group.id}_${habit.id}",
+                    habit = habit,
+                    entry = entry,
+                    isDone = isDone,
+                    isSkipped = isSkipped,
+                    isSimpleTapAdd = isSimpleTapAdd,
+                    glyph = habit.icon.trim().ifEmpty { habit.displayGlyph() },
+                    title = title,
+                    metaLine = meta,
+                    noteLine = entry?.note?.takeIf { it.isNotBlank() }
+                )
+            }
+            TodaySectionBundle(section = section, rows = rows)
+        }
+    }
     val listState = rememberLazyListState()
-
-    // Scroll so the current section sits near the top of the day spine
-    LaunchedEffect(sections.map { it.group.id to it.isNow }) {
-        val nowIndex = sections.indexOfFirst { it.isNow }
+    // Auto-scroll to "now" once — never re-animate while logging (kills scroll FPS)
+    var didAutoScroll by remember { mutableStateOf(false) }
+    val nowSectionKey = sectionRows.firstOrNull { it.section.isNow }?.section?.group?.id
+    LaunchedEffect(nowSectionKey) {
+        if (didAutoScroll || nowSectionKey == null) return@LaunchedEffect
+        val nowIndex = sectionRows.indexOfFirst { it.section.isNow }
         if (nowIndex < 0) return@LaunchedEffect
-        // Count list items before that section (inbox + cue + prior sections)
         var itemIndex = 0
         if (pendingCaptures.isNotEmpty()) {
-            itemIndex += 1 + pendingCaptures.take(5).size + 1 // header + rows + spacer
+            itemIndex += 1 + pendingCaptures.take(5).size
         }
-        itemIndex += 1 // progression cue or spacer
+        itemIndex += 1 // day cue
+        if (todayRoutines.isNotEmpty()) itemIndex += 1
         for (i in 0 until nowIndex) {
-            itemIndex += 1 + sections[i].habits.size // header + habits
+            itemIndex += 1 + sectionRows[i].rows.size
         }
-        // header of now section
-        listState.animateScrollToItem(itemIndex.coerceAtLeast(0))
+        listState.scrollToItem(itemIndex.coerceAtLeast(0))
+        didAutoScroll = true
+    }
+
+    // Hoist scheme colors once for list rows (avoids repeated theme lookups per item)
+    val scheme = MaterialTheme.colorScheme
+    val colors = remember(scheme) {
+        TodayListColors(
+            primary = scheme.primary,
+            onPrimary = scheme.onPrimary,
+            onSurface = scheme.onSurface,
+            onSurfaceVariant = scheme.onSurfaceVariant,
+            surface = scheme.surface,
+            surfaceVariant = scheme.surfaceVariant,
+            error = scheme.error
+        )
     }
 
     Column(modifier = Modifier.fillMaxSize()) {
         Row(modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp), horizontalArrangement = Arrangement.End) {
             TextButton(onClick = { showCaptureDialog = true }) {
-                Text("+ Capture", color = MaterialTheme.colorScheme.primary, fontSize = 12.sp)
+                Text("+ Capture", color = colors.primary, fontSize = 12.sp)
             }
-            val pending = appData.captures.count { !it.processed }
-            if (pending > 0) {
-                Text(" ($pending inbox)", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 10.sp, modifier = Modifier.align(Alignment.CenterVertically))
+            if (pendingCaptures.isNotEmpty()) {
+                Text(
+                    " (${pendingCaptures.size} inbox)",
+                    color = colors.onSurfaceVariant,
+                    fontSize = 10.sp,
+                    modifier = Modifier.align(Alignment.CenterVertically)
+                )
             }
             Spacer(Modifier.width(4.dp))
             TextButton(onClick = { showMetricDialog = true }) {
-                Text("+ Log", color = MaterialTheme.colorScheme.primary, fontSize = 12.sp)
+                Text("+ Log", color = colors.primary, fontSize = 12.sp)
             }
         }
 
         LazyColumn(
             state = listState,
             modifier = Modifier.weight(1f),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
+            verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            // Inbox above the day spine
             if (pendingCaptures.isNotEmpty()) {
-                item(key = "inbox_header") {
+                item(key = "inbox_header", contentType = "hdr") {
                     Text(
                         "Quick Captures / Inbox",
-                        color = MaterialTheme.colorScheme.primary,
+                        color = colors.primary,
                         fontSize = 11.sp,
                         fontWeight = FontWeight.SemiBold,
                         modifier = Modifier.padding(start = 4.dp)
                     )
                 }
-                items(pendingCaptures.take(5), key = { "cap_${it.id}" }) { cap ->
-                    Card(
+                items(
+                    pendingCaptures.take(5),
+                    key = { "cap_${it.id}" },
+                    contentType = { "cap" }
+                ) { cap ->
+                    Surface(
                         modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp),
-                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                        color = colors.surfaceVariant,
                         shape = RoundedCornerShape(10.dp)
                     ) {
                         Column(Modifier.padding(8.dp)) {
-                            Text(cap.title, color = MaterialTheme.colorScheme.onSurface, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                            Text(cap.title, color = colors.onSurface, fontSize = 13.sp, fontWeight = FontWeight.Medium)
                             if (cap.note.isNotBlank()) {
-                                Text(cap.note, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp)
+                                Text(cap.note, color = colors.onSurfaceVariant, fontSize = 11.sp)
                             }
                             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 4.dp)) {
-                                TextButton(onClick = { onProcessCapture(cap.id) }) {
-                                    Text("Mark Done", color = MaterialTheme.colorScheme.primary, fontSize = 11.sp)
-                                }
-                                TextButton(onClick = { onDeleteCapture(cap.id) }) {
-                                    Text("Delete", color = MaterialTheme.colorScheme.error, fontSize = 11.sp)
-                                }
+                                Text(
+                                    "Mark Done",
+                                    color = colors.primary,
+                                    fontSize = 11.sp,
+                                    modifier = Modifier
+                                        .clickable { onProcessCapture(cap.id) }
+                                        .padding(vertical = 6.dp, horizontal = 4.dp)
+                                )
+                                Text(
+                                    "Delete",
+                                    color = colors.error,
+                                    fontSize = 11.sp,
+                                    modifier = Modifier
+                                        .clickable { onDeleteCapture(cap.id) }
+                                        .padding(vertical = 6.dp, horizontal = 4.dp)
+                                )
                             }
                         }
                     }
                 }
             }
 
-            // Day spine cue (names only — pure visual progression)
-            item(key = "day_cue") {
-                DayProgressionBanner(cue = cue)
+            item(key = "day_cue", contentType = "cue") {
+                DayProgressionBanner(cue = cue, colors = colors)
             }
 
-            // Workouts scheduled for today (#22)
             if (todayRoutines.isNotEmpty()) {
-                item(key = "workouts_header") {
-                    Card(
+                item(key = "workouts_header", contentType = "workouts") {
+                    Surface(
                         modifier = Modifier.fillMaxWidth(),
-                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                        color = colors.surface,
                         shape = RoundedCornerShape(12.dp)
                     ) {
                         Column(Modifier.padding(12.dp)) {
@@ -194,20 +305,18 @@ fun TodayScreen(
                             ) {
                                 Text(
                                     "Workouts today",
-                                    color = MaterialTheme.colorScheme.primary,
+                                    color = colors.primary,
                                     fontSize = 13.sp,
                                     fontWeight = FontWeight.SemiBold
                                 )
                                 Text(
                                     "Exercise days: $workoutDays/7",
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    color = colors.onSurfaceVariant,
                                     fontSize = 11.sp
                                 )
                             }
                             todayRoutines.forEach { rt ->
-                                val done = HabitDomain.isRoutineCompletedOn(
-                                    appData, rt.id, LocalDate.now().toString()
-                                )
+                                val done = rt.id in routineDoneIds
                                 Row(
                                     Modifier
                                         .fillMaxWidth()
@@ -217,24 +326,26 @@ fun TodayScreen(
                                     Column(Modifier.weight(1f)) {
                                         Text(
                                             (if (done) "✓ " else "") + rt.name,
-                                            color = MaterialTheme.colorScheme.onSurface,
+                                            color = colors.onSurface,
                                             fontSize = 14.sp,
                                             fontWeight = FontWeight.Medium
                                         )
                                         Text(
                                             "${rt.exercises.size} exercises · ~${rt.estimatedDurationMin} min" +
                                                 (if (rt.tags.isNotEmpty()) " · ${rt.tags.take(2).joinToString()}" else ""),
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            color = colors.onSurfaceVariant,
                                             fontSize = 11.sp
                                         )
                                     }
-                                    TextButton(onClick = { onStartRoutine(rt) }) {
-                                        Text(
-                                            if (done) "Again" else "Start",
-                                            color = MaterialTheme.colorScheme.primary,
-                                            fontSize = 12.sp
-                                        )
-                                    }
+                                    Text(
+                                        if (done) "Again" else "Start",
+                                        color = colors.primary,
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        modifier = Modifier
+                                            .clickable { onStartRoutine(rt) }
+                                            .padding(8.dp)
+                                    )
                                 }
                             }
                         }
@@ -243,48 +354,33 @@ fun TodayScreen(
             }
 
             if (sections.isEmpty()) {
-                item(key = "empty") {
+                item(key = "empty", contentType = "empty") {
                     Text(
                         "Nothing left for today — enjoy the space.\nAdd or configure items in Manage.",
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        color = colors.onSurfaceVariant,
                         fontSize = 13.sp,
                         modifier = Modifier.padding(16.dp)
                     )
                 }
             }
 
-            sections.forEach { section ->
-                item(key = "sec_${section.group.id}") {
-                    TimelineSectionHeader(section = section)
+            sectionRows.forEach { bundle ->
+                item(key = "sec_${bundle.section.group.id}", contentType = "sec") {
+                    TimelineSectionHeader(section = bundle.section, colors = colors)
                 }
-                // Key includes group so multi-group habits (#24) don't collide in LazyColumn
-                items(section.habits, key = { "${section.group.id}_${it.id}" }) { habit ->
-                    val entry = todayEntries[habit.id]
-                    val isDone = (entry?.value ?: 0.0) >= 0.5
-                    val isSkipped = entry?.skipped == true
-                    val isSimpleTapAdd = habit.type == HabitType.COUNTER &&
-                        ((habit.target ?: 0.0) <= 2.0 || habit.isSupplement || habit.name.contains("supp", ignoreCase = true) || habit.name.contains("magnesium", ignoreCase = true))
-                    val afterName = habit.afterHabitId?.let { nameById[it] }
-                    val tagLabel = HabitDomain.tagNamesForHabit(appData, habit).joinToString(" · ")
-
+                items(
+                    bundle.rows,
+                    key = { it.listKey },
+                    contentType = { "habit" }
+                ) { row ->
                     HabitRow(
-                        habit = habit,
-                        entry = entry,
-                        isDone = isDone,
-                        isSkipped = isSkipped,
-                        stackAfterLabel = afterName,
-                        tagLabel = tagLabel,
-                        onToggle = { onToggle(habit.id) },
-                        onLog = {
-                            if (isSimpleTapAdd) {
-                                val v = habit.target ?: 1.0
-                                onLogEntry(habit.id, v, "", LocalDate.now().toString())
-                            } else {
-                                onRequestLog(habit)
-                            }
-                        },
-                        onSkip = { onSkip(habit.id) },
-                        showSkipPrompt = { onShowSkipPrompt(habit.id) }
+                        model = row,
+                        colors = colors,
+                        onToggle = onToggle,
+                        onLogEntry = onLogEntry,
+                        onRequestLog = onRequestLog,
+                        onSkip = onSkip,
+                        onShowSkipPrompt = onShowSkipPrompt
                     )
                 }
             }
@@ -292,8 +388,51 @@ fun TodayScreen(
     }
 }
 
+@Immutable
+private data class TodayListColors(
+    val primary: Color,
+    val onPrimary: Color,
+    val onSurface: Color,
+    val onSurfaceVariant: Color,
+    val surface: Color,
+    val surfaceVariant: Color,
+    val error: Color
+)
+
+@Immutable
+private data class TodayHabitRowModel(
+    val listKey: String,
+    val habit: Habit,
+    val entry: HabitEntry?,
+    val isDone: Boolean,
+    val isSkipped: Boolean,
+    val isSimpleTapAdd: Boolean,
+    /** Icon/letter — drawn via [GlyphIcon] (emoji cached as bitmap). */
+    val glyph: String,
+    val title: String,
+    /** Single secondary line (tags · stack · value · time) — one text node, no emoji. */
+    val metaLine: String,
+    val noteLine: String?
+)
+
+@Immutable
+private data class TodaySectionBundle(
+    val section: TimelineSection,
+    val rows: List<TodayHabitRowModel>
+)
+
+private val loggedTimeFmt = ThreadLocal.withInitial {
+    SimpleDateFormat("HH:mm", Locale.getDefault())
+}
+
+private fun formatLoggedTime(epochMs: Long): String =
+    loggedTimeFmt.get()!!.format(Date(epochMs))
+
 @Composable
-private fun DayProgressionBanner(cue: com.steady.habittracker.data.DayProgressionCue) {
+private fun DayProgressionBanner(
+    cue: com.steady.habittracker.data.DayProgressionCue,
+    colors: TodayListColors
+) {
     val nowName = cue.nowGroupName
     if (nowName == null && cue.nextGroupName == null) return
     val line = when {
@@ -306,19 +445,19 @@ private fun DayProgressionBanner(cue: com.steady.habittracker.data.DayProgressio
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.12f), RoundedCornerShape(10.dp))
+            .background(colors.primary.copy(alpha = 0.12f), RoundedCornerShape(10.dp))
             .padding(horizontal = 12.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Box(
             Modifier
                 .size(8.dp)
-                .background(MaterialTheme.colorScheme.primary, RoundedCornerShape(50))
+                .background(colors.primary, RoundedCornerShape(50))
         )
         Spacer(Modifier.width(8.dp))
         Text(
             line,
-            color = MaterialTheme.colorScheme.primary,
+            color = colors.primary,
             fontSize = 12.sp,
             fontWeight = FontWeight.SemiBold
         )
@@ -326,13 +465,14 @@ private fun DayProgressionBanner(cue: com.steady.habittracker.data.DayProgressio
 }
 
 @Composable
-private fun TimelineSectionHeader(section: TimelineSection) {
-    val accent = MaterialTheme.colorScheme.primary
-    val muted = MaterialTheme.colorScheme.onSurfaceVariant
+private fun TimelineSectionHeader(section: TimelineSection, colors: TodayListColors) {
     val titleColor = when {
-        section.isNow -> accent
-        section.isPast -> muted.copy(alpha = 0.85f)
-        else -> MaterialTheme.colorScheme.onSurface
+        section.isNow -> colors.primary
+        section.isPast -> colors.onSurfaceVariant.copy(alpha = 0.85f)
+        else -> colors.onSurface
+    }
+    val glyph = remember(section.group.icon, section.group.name) {
+        section.group.displayGlyph()
     }
     Row(
         modifier = Modifier
@@ -340,7 +480,7 @@ private fun TimelineSectionHeader(section: TimelineSection) {
             .then(
                 if (section.isNow) {
                     Modifier
-                        .background(accent.copy(alpha = 0.1f), RoundedCornerShape(8.dp))
+                        .background(colors.primary.copy(alpha = 0.1f), RoundedCornerShape(8.dp))
                         .padding(horizontal = 8.dp, vertical = 6.dp)
                 } else {
                     Modifier.padding(horizontal = 4.dp, vertical = 4.dp)
@@ -353,26 +493,33 @@ private fun TimelineSectionHeader(section: TimelineSection) {
                 Modifier
                     .width(3.dp)
                     .height(16.dp)
-                    .background(accent, RoundedCornerShape(2.dp))
+                    .background(colors.primary, RoundedCornerShape(2.dp))
             )
             Spacer(Modifier.width(8.dp))
-            Text(
-                "●  ${section.group.displayLabel()}",
+        }
+        GlyphIcon(
+            glyph = glyph,
+            size = 16.dp,
+            tintForSimple = titleColor,
+            modifier = Modifier.padding(end = 6.dp)
+        )
+        BasicText(
+            text = section.group.name,
+            style = TextStyle(
                 color = titleColor,
-                fontSize = 13.sp,
-                fontWeight = FontWeight.Bold
+                fontSize = if (section.isNow) 13.sp else 12.sp,
+                fontWeight = if (section.isNow) FontWeight.Bold else FontWeight.SemiBold
+            ),
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f, fill = false)
+        )
+        if (section.isPast) {
+            Spacer(Modifier.width(6.dp))
+            BasicText(
+                text = "earlier",
+                style = TextStyle(color = colors.onSurfaceVariant, fontSize = 10.sp)
             )
-        } else {
-            Text(
-                section.group.displayLabel(),
-                color = titleColor,
-                fontSize = 12.sp,
-                fontWeight = FontWeight.SemiBold
-            )
-            if (section.isPast) {
-                Spacer(Modifier.width(6.dp))
-                Text("earlier", color = muted, fontSize = 10.sp)
-            }
         }
     }
 }
@@ -380,140 +527,152 @@ private fun TimelineSectionHeader(section: TimelineSection) {
 @Composable
 @OptIn(ExperimentalFoundationApi::class)
 private fun HabitRow(
-    habit: Habit,
-    entry: HabitEntry?,
-    isDone: Boolean,
-    isSkipped: Boolean,
-    stackAfterLabel: String? = null,
-    tagLabel: String = "",
-    onToggle: () -> Unit,
-    onLog: () -> Unit,
-    onSkip: () -> Unit,
-    showSkipPrompt: () -> Unit
+    model: TodayHabitRowModel,
+    colors: TodayListColors,
+    onToggle: (String) -> Unit,
+    onLogEntry: (habitId: String, value: Double, note: String, date: String) -> Unit,
+    onRequestLog: (Habit) -> Unit,
+    onSkip: (String) -> Unit,
+    onShowSkipPrompt: (habitId: String) -> Unit
 ) {
+    val habit = model.habit
+    val isDone = model.isDone
+    val isSkipped = model.isSkipped
+
     val container = when {
-        isSkipped -> MaterialTheme.colorScheme.surfaceVariant
-        isDone && habit.type == HabitType.CHECKBOX -> MaterialTheme.colorScheme.primary.copy(alpha = 0.25f)
-        else -> MaterialTheme.colorScheme.surface
+        isSkipped -> colors.surfaceVariant
+        isDone && habit.type == HabitType.CHECKBOX -> colors.primary.copy(alpha = 0.22f)
+        else -> colors.surface
     }
 
-    Card(
+    val showCheck = habit.type == HabitType.CHECKBOX && isDone && !isSkipped
+    val iconBg = when {
+        isSkipped -> colors.error.copy(alpha = 0.18f)
+        showCheck -> colors.primary
+        isDone -> colors.primary.copy(alpha = 0.32f)
+        else -> colors.primary.copy(alpha = 0.16f)
+    }
+    val iconFg = when {
+        isSkipped -> Color(0xFFF87171)
+        showCheck -> colors.onPrimary
+        else -> colors.primary
+    }
+    val titleColor = if (isSkipped) Color(0xFFF87171) else colors.onSurface
+    val indent = if (model.metaLine.contains("after ")) 8.dp else 0.dp
+
+    // Box + background (not Material Surface/Card) — cheaper during fling
+    Row(
         modifier = Modifier
             .fillMaxWidth()
-            .combinedClickable(
-                onClick = {
-                    if (habit.type == HabitType.CHECKBOX) onToggle() else onLog()
-                },
-                onLongClick = {
-                    if (habit.canSkip) {
-                        onSkip()
-                        showSkipPrompt()
-                    } else {
-                        onSkip()
-                    }
-                }
-            ),
-        colors = CardDefaults.cardColors(containerColor = container),
-        shape = RoundedCornerShape(18.dp)
+            .background(container, RoundedCornerShape(12.dp))
+            .padding(start = 12.dp + indent, end = 4.dp, top = 8.dp, bottom = 8.dp),
+        verticalAlignment = Alignment.CenterVertically
     ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(14.dp)
-                .padding(start = if (stackAfterLabel != null) 12.dp else 0.dp),
-            verticalAlignment = Alignment.CenterVertically
+        GlyphIcon(
+            glyph = model.glyph,
+            size = 22.dp,
+            tintForSimple = colors.primary,
+            modifier = Modifier.padding(end = 10.dp)
+        )
+
+        Column(
+            Modifier
+                .weight(1f)
+                .padding(end = 6.dp)
         ) {
-            // Status indicator — high contrast (no white-on-light-gray)
-            val showCheck = habit.type == HabitType.CHECKBOX && isDone && !isSkipped
-            val iconBg = when {
-                isSkipped -> MaterialTheme.colorScheme.error.copy(alpha = 0.2f)
-                showCheck -> MaterialTheme.colorScheme.primary
-                isDone -> MaterialTheme.colorScheme.primary.copy(alpha = 0.35f)
-                else -> MaterialTheme.colorScheme.primary.copy(alpha = 0.18f)
-            }
-            val iconFg = when {
-                isSkipped -> Color(0xFFF87171)
-                showCheck -> MaterialTheme.colorScheme.onPrimary
-                else -> MaterialTheme.colorScheme.primary
-            }
-            Box(
-                modifier = Modifier
-                    .size(28.dp)
-                    .background(iconBg, RoundedCornerShape(8.dp)),
-                contentAlignment = Alignment.Center
-            ) {
-                if (showCheck) {
-                    Icon(Icons.Default.Check, null, tint = iconFg, modifier = Modifier.size(16.dp))
-                } else if (isSkipped) {
-                    Text("⏭", color = iconFg, fontSize = 12.sp)
-                } else if (habit.type != HabitType.CHECKBOX) {
-                    Text(
-                        when (habit.type) {
-                            HabitType.COUNTER -> "#"
-                            HabitType.DURATION_MIN -> "m"
-                            HabitType.SCALE_1_5 -> "±"
-                            HabitType.NOTE -> "✎"
-                            else -> "•"
-                        },
-                        color = iconFg,
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                } else {
-                    Text("○", color = iconFg, fontSize = 14.sp)
-                }
-            }
-
-            Spacer(Modifier.width(12.dp))
-
-            if (habit.icon.isNotBlank()) {
-                Text(habit.icon.trim(), fontSize = 18.sp)
-                Spacer(Modifier.width(8.dp))
-            }
-
-            Column(Modifier.weight(1f)) {
-                Text(
-                    habit.name +
-                        (if (!habit.canSkip) " (essential)" else ""),
-                    color = if (isSkipped) Color(0xFFF87171) else MaterialTheme.colorScheme.onSurface,
+            // BasicText avoids Material Text overhead; titles are plain (no emoji)
+            BasicText(
+                text = model.title,
+                style = TextStyle(
+                    color = titleColor,
                     fontSize = 15.sp,
                     fontWeight = FontWeight.SemiBold
+                ),
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+            )
+            if (model.metaLine.isNotBlank()) {
+                BasicText(
+                    text = model.metaLine,
+                    style = TextStyle(color = colors.onSurfaceVariant, fontSize = 11.sp),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
-                if (tagLabel.isNotBlank()) {
-                    Text(
-                        tagLabel,
-                        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.9f),
-                        fontSize = 11.sp
-                    )
-                }
-                if (stackAfterLabel != null) {
-                    Text(
-                        "↳ after $stackAfterLabel",
-                        color = MaterialTheme.colorScheme.primary,
-                        fontSize = 11.sp
-                    )
-                }
-                if (entry != null && entry.note.isNotBlank()) {
-                    Text("“${entry.note}”", color = MaterialTheme.colorScheme.primary, fontSize = 11.sp)
-                }
-                if (entry != null && habit.type != HabitType.CHECKBOX && entry.value > 0) {
-                    Text("${entry.value} ${habit.unit}", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp)
-                }
-                // Exact time
-                if (entry != null && entry.loggedAt > 0) {
-                    val timeStr = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(entry.loggedAt))
-                    Text("at $timeStr", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 10.sp)
-                }
             }
-
-            if (habit.type != HabitType.CHECKBOX) {
-                TextButton(onClick = onLog) {
-                    Text("Log", color = MaterialTheme.colorScheme.primary, fontSize = 12.sp)
-                }
+            if (model.noteLine != null) {
+                BasicText(
+                    text = model.noteLine,
+                    style = TextStyle(color = colors.primary, fontSize = 11.sp),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
             }
+        }
 
-            // Skip is now long-press only (hold  ~1s+ on the row) per #1. No always-visible button.
-            // Long-press handled on the Card via combinedClickable.
+        Box(
+            modifier = Modifier
+                .combinedClickable(
+                    onClick = {
+                        if (habit.type == HabitType.CHECKBOX) {
+                            onToggle(habit.id)
+                        } else if (model.isSimpleTapAdd) {
+                            onLogEntry(habit.id, habit.target ?: 1.0, "", LocalDate.now().toString())
+                        } else {
+                            onRequestLog(habit)
+                        }
+                    },
+                    onLongClick = {
+                        onSkip(habit.id)
+                        if (habit.canSkip) onShowSkipPrompt(habit.id)
+                    }
+                )
+                .padding(horizontal = 8.dp, vertical = 6.dp)
+                .defaultMinSize(minWidth = 48.dp, minHeight = 44.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            if (habit.type == HabitType.CHECKBOX) {
+                Box(
+                    modifier = Modifier
+                        .size(34.dp)
+                        .background(iconBg, RoundedCornerShape(10.dp)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    when {
+                        showCheck -> Icon(
+                            Icons.Default.Check,
+                            contentDescription = "Done",
+                            tint = iconFg,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        // ASCII only — no emoji font in the hot path
+                        isSkipped -> BasicText(
+                            text = ">",
+                            style = TextStyle(color = iconFg, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                        )
+                        else -> BasicText(
+                            text = "o",
+                            style = TextStyle(color = iconFg, fontSize = 15.sp, fontWeight = FontWeight.Medium)
+                        )
+                    }
+                }
+            } else {
+                val action = when {
+                    isSkipped -> "Skip"
+                    isDone -> "Edit"
+                    else -> "Log"
+                }
+                BasicText(
+                    text = action,
+                    style = TextStyle(
+                        color = iconFg,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.SemiBold
+                    ),
+                    modifier = Modifier
+                        .background(iconBg, RoundedCornerShape(10.dp))
+                        .padding(horizontal = 12.dp, vertical = 10.dp)
+                )
+            }
         }
     }
 }

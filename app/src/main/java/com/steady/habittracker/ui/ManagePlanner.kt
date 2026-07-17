@@ -63,6 +63,7 @@ import androidx.core.content.ContextCompat
 import com.steady.habittracker.data.AppData
 import com.steady.habittracker.data.Group
 import com.steady.habittracker.data.HabitDomain
+import com.steady.habittracker.data.NotificationPrefs
 import com.steady.habittracker.data.Reminder
 import com.steady.habittracker.data.Schedule
 import com.steady.habittracker.data.SleepSettings
@@ -487,7 +488,8 @@ fun RemindersCard(
     onToggleMaster: (Boolean) -> Unit,
     onToggleReminder: (String) -> Unit,
     onEditReminder: (Reminder) -> Unit,
-    onAlignToSchedule: () -> Unit
+    onAlignToSchedule: () -> Unit,
+    onUpdateNotificationPrefs: (NotificationPrefs) -> Unit = {}
 ) {
     val context = LocalContext.current
     var permissionTick by remember { mutableIntStateOf(0) }
@@ -574,6 +576,89 @@ fun RemindersCard(
                 Text("Align times to schedule", color = MaterialTheme.colorScheme.primary, fontSize = 12.sp)
             }
 
+            HorizontalDivider(modifier = Modifier.padding(vertical = 6.dp))
+            Text("Smart & gentle", color = MaterialTheme.colorScheme.primary, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+            Text(
+                "Adaptive timing, quiet hours, and a daily cap keep nudges useful — not noisy.",
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                fontSize = 10.sp
+            )
+
+            val prefs = appData.notificationPrefs
+            SmartPrefSwitch(
+                title = "Adaptive timing",
+                subtitle = "Nudge toward when you usually log (±45 min)",
+                checked = prefs.adaptiveTiming,
+                onCheckedChange = { onUpdateNotificationPrefs(prefs.copy(adaptiveTiming = it)) }
+            )
+            SmartPrefSwitch(
+                title = "Streak-risk nudge",
+                subtitle = "Evening review if a multi-day streak is at risk",
+                checked = prefs.streakRiskNudge,
+                onCheckedChange = { onUpdateNotificationPrefs(prefs.copy(streakRiskNudge = it)) }
+            )
+            SmartPrefSwitch(
+                title = "Celebrate full clear",
+                subtitle = "One calm note when the day is complete",
+                checked = prefs.celebrateFullClear,
+                onCheckedChange = { onUpdateNotificationPrefs(prefs.copy(celebrateFullClear = it)) }
+            )
+
+            Row(
+                Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text("Quiet hours", color = MaterialTheme.colorScheme.onSurface, fontSize = 13.sp)
+                    Text(
+                        "${prefs.quietStart} – ${prefs.quietEnd}",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        fontSize = 10.sp
+                    )
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    listOf("22:30" to "07:00", "23:00" to "06:30", "21:00" to "08:00").forEach { (s, e) ->
+                        val selected = prefs.quietStart == s && prefs.quietEnd == e
+                        TextButton(
+                            onClick = { onUpdateNotificationPrefs(prefs.copy(quietStart = s, quietEnd = e)) },
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)
+                        ) {
+                            Text(
+                                "$s",
+                                fontSize = 10.sp,
+                                color = if (selected) MaterialTheme.colorScheme.primary
+                                else MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+            }
+
+            Row(
+                Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text("Max notifications / day", color = MaterialTheme.colorScheme.onSurface, fontSize = 13.sp)
+                    Text("Currently ${prefs.maxPerDay}", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 10.sp)
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    listOf(2, 3, 4, 5).forEach { n ->
+                        val selected = prefs.maxPerDay == n
+                        TextButton(onClick = { onUpdateNotificationPrefs(prefs.copy(maxPerDay = n)) }) {
+                            Text(
+                                "$n",
+                                fontSize = 12.sp,
+                                color = if (selected) MaterialTheme.colorScheme.primary
+                                else MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+            }
+
             if (!notifOk) {
                 TextButton(onClick = {
                     notifLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
@@ -597,8 +682,27 @@ fun RemindersCard(
             if (notifOk && exactOk) {
                 Text("Notifications & exact alarms: OK", color = MaterialTheme.colorScheme.primary, fontSize = 10.sp)
             }
-            Text("Tap a row to edit time & days", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 10.sp)
         }
+    }
+}
+
+@Composable
+private fun SmartPrefSwitch(
+    title: String,
+    subtitle: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit
+) {
+    Row(
+        Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(title, color = MaterialTheme.colorScheme.onSurface, fontSize = 13.sp)
+            Text(subtitle, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 10.sp)
+        }
+        Switch(checked = checked, onCheckedChange = onCheckedChange)
     }
 }
 

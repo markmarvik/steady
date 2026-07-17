@@ -112,6 +112,59 @@ fun HistoryScreen(appData: AppData) {
             }
         }
 
+        // —— Steady Momentum ——
+        item {
+            val todayPts = remember(appData) {
+                HabitDomain.computeDayPoints(appData, HabitDomain.getToday())
+            }
+            val lifetime = remember(appData) { HabitDomain.effectiveLifetimePoints(appData) }
+            val level = remember(lifetime) { HabitDomain.computeLevel(lifetime) }
+            val title = HabitDomain.levelTitle(level)
+            val best = remember(appData) { HabitDomain.bestDayScore(appData) }
+            val pointSeries = remember(appData) { HabitDomain.lastNDayPoints(appData, 30) }
+            SectionTitle("Momentum")
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        StatCard("Level", "$level", title, Modifier.weight(1f), accent)
+                        StatCard("Today", "$todayPts", "pts", Modifier.weight(1f), accent)
+                        StatCard("Lifetime", "$lifetime", "pts", Modifier.weight(1f), accent)
+                        StatCard(
+                            "Best day",
+                            "${best?.points ?: 0}",
+                            best?.date?.takeLast(5) ?: "—",
+                            Modifier.weight(1f),
+                            accent
+                        )
+                    }
+                    Text(
+                        "Last 30 days · Steady points",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        fontSize = 11.sp
+                    )
+                    PointsChart(
+                        data = pointSeries,
+                        accent = accent,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(100.dp)
+                    )
+                    Text(
+                        "${HabitDomain.pointsToNextLevel(lifetime)} pts to level ${level + 1}",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        fontSize = 10.sp
+                    )
+                }
+            }
+        }
+
         // —— Calendar heatmap ——
         item {
             SectionTitle("Activity calendar")
@@ -593,5 +646,49 @@ private fun CompletionChart(
             drawCircle(lineColor, 2.5.dp.toPx(), Offset(xCenter, y))
         }
         drawPath(path, lineColor, style = Stroke(width = 2.dp.toPx(), cap = StrokeCap.Round))
+    }
+}
+
+@Composable
+private fun PointsChart(
+    data: List<Pair<String, Int>>,
+    accent: Color,
+    modifier: Modifier = Modifier
+) {
+    if (data.isEmpty()) {
+        Box(modifier = modifier, contentAlignment = Alignment.Center) {
+            Text("No points yet", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
+        }
+        return
+    }
+    val maxPts = (data.maxOfOrNull { it.second } ?: 1).coerceAtLeast(1).toFloat()
+    val barColor = accent
+    val gridColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.15f)
+
+    Canvas(modifier = modifier) {
+        val w = size.width
+        val h = size.height
+        val n = data.size
+        if (n == 0) return@Canvas
+
+        val barWidth = w / (n * 1.6f)
+        val spacing = (w - barWidth * n) / (n + 1)
+
+        for (pct in listOf(0f, 0.5f, 1f)) {
+            val y = h - (pct * h)
+            drawLine(gridColor, Offset(0f, y), Offset(w, y), 1f)
+        }
+
+        data.forEachIndexed { i, (_, pts) ->
+            val rate = (pts / maxPts).coerceIn(0f, 1f)
+            val barH = rate * h
+            val x = spacing + i * (barWidth + spacing)
+            drawRoundRect(
+                color = barColor.copy(alpha = if (pts > 0) 0.9f else 0.25f),
+                topLeft = Offset(x, h - barH),
+                size = Size(barWidth, barH.coerceAtLeast(1f)),
+                cornerRadius = CornerRadius(2.dp.toPx())
+            )
+        }
     }
 }

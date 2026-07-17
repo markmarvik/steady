@@ -3,13 +3,14 @@ package com.steady.habittracker.data
 import kotlinx.serialization.Serializable
 
 /**
- * Data model v9.
+ * Data model v10.
  * - Groups = time-of-day slots on the 24h timeline (when you do it).
  * - Tags = category identity for History (what it is: Supplements, Movement…).
  * - SleepSettings anchors Morning + Bedtime routines to bed/wake times.
  * - Habit.additionalGroupIds: same habit can appear in multiple timeline groups (#24).
  * - Exercise routines + workout sessions for structured training (#20–#22).
  * - Habit.icon / Group.icon: optional emoji for lists, Today, widget (#29).
+ * - ScoreState / NotificationPrefs: Steady Momentum + smart gentle reminders (v10).
  * - archived + canSkip, parentId, skip/loggedAt, themes, schedules (v5).
  * All @Serializable for DataStore JSON (portable).
  */
@@ -304,6 +305,47 @@ data class PathAlignmentCheck(
     val loggedAt: Long = 0L
 )
 
+/**
+ * Compact per-day Momentum score (last ~60 days kept for History charts).
+ * Points for a day are always re-derivable from [AppData.entries] via [HabitDomain.computeDayPoints].
+ */
+@Serializable
+data class DayScore(
+    val date: String,
+    val points: Int,
+    val completion: Float = 0f
+)
+
+/**
+ * Steady Momentum lifetime ledger. Today's live points are computed from entries;
+ * [history] holds finalized past days; [lifetimePoints] is the sum of all finalized days
+ * (including those aged out of the rolling window).
+ */
+@Serializable
+data class ScoreState(
+    val lifetimePoints: Int = 0,
+    val history: List<DayScore> = emptyList(),
+    /** Last date whose score was finalized into history (yyyy-MM-dd). Empty = never. */
+    val lastFinalizedDate: String = ""
+)
+
+/**
+ * Smart-but-gentle notification preferences (local only).
+ * [firesDate]/[firesCount] enforce the daily rate limit.
+ */
+@Serializable
+data class NotificationPrefs(
+    val quietStart: String = "22:30",
+    val quietEnd: String = "07:00",
+    val maxPerDay: Int = 4,
+    val adaptiveTiming: Boolean = true,
+    val streakRiskNudge: Boolean = true,
+    val celebrateFullClear: Boolean = true,
+    /** Date (yyyy-MM-dd) the fire counter applies to. */
+    val firesDate: String = "",
+    val firesCount: Int = 0
+)
+
 @Serializable
 data class AppData(
     val groups: List<Group> = emptyList(),
@@ -311,10 +353,10 @@ data class AppData(
     // date (yyyy-MM-dd) -> habitId -> entry
     val entries: Map<String, Map<String, HabitEntry>> = emptyMap(),
     val reminders: List<Reminder> = emptyList(),
-    val schemaVersion: Int = 9,
+    val schemaVersion: Int = 10,
     val onboarded: Boolean = false,
-    val colorScheme: String = "default",   // accent: "default" | "blue" | "orange" | "purple" | "slate"
-    val backgroundMode: String = "dark",   // "dark" | "amoled" | "light"  (OLED pure black supported)
+    val colorScheme: String = "default",   // accent id from accentSchemes() (green, rose, blush, …)
+    val backgroundMode: String = "dark",   // id from backgroundModes() (dark, amoled, light, forest, …)
     val schedules: List<Schedule> = emptyList(),
     val activeScheduleId: String? = null,
     val captures: List<CaptureItem> = emptyList(),  // #8 quick capture inbox support
@@ -331,12 +373,16 @@ data class AppData(
     /** Dreamline-derived continuous goals for Path tab (#25, #26). */
     val goals: List<GoalStory> = emptyList(),
     /** Alignment check-ins for Path tab. */
-    val pathChecks: List<PathAlignmentCheck> = emptyList()
+    val pathChecks: List<PathAlignmentCheck> = emptyList(),
+    /** Steady Momentum scoring ledger (v10). */
+    val score: ScoreState = ScoreState(),
+    /** Smart reminder prefs + daily fire counter (v10). */
+    val notificationPrefs: NotificationPrefs = NotificationPrefs()
 )
 
 /**
  * Runtime theme colors resolved from settings (not persisted).
- * Supports background (dark / amoled / light) + accent (foreground highlight) selection.
+ * Background from [backgroundModes]; accent from [accentSchemes].
  */
 data class ThemeColors(
     val background: Int,   // ARGB
@@ -498,6 +544,9 @@ fun AppData.withGoalsReplacedFromWizard(newGoals: List<GoalStory>, replaceDreaml
 }
 fun AppData.withAddedPathCheck(check: PathAlignmentCheck): AppData = copy(pathChecks = pathChecks + check)
 fun AppData.withPathChecks(checks: List<PathAlignmentCheck>): AppData = copy(pathChecks = checks)
+
+fun AppData.withScore(score: ScoreState): AppData = copy(score = score)
+fun AppData.withNotificationPrefs(prefs: NotificationPrefs): AppData = copy(notificationPrefs = prefs)
 
 /** Stable tag constants for Dreamline / Path filtering. */
 object GoalTags {

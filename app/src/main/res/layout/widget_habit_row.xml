@@ -15,7 +15,7 @@
     android:clickable="true"
     android:focusable="true">
 
-    <!-- Big checkbox hit target (~48dp) -->
+    <!-- Big checkbox hit target (~48dp); fill-in set in code for OEM click reliability -->
     <TextView
         android:id="@+id/habit_row_check"
         android:layout_width="48dp"
@@ -24,8 +24,7 @@
         android:text="☐"
         android:textSize="22sp"
         android:textColor="#E2E8F0"
-        android:clickable="false"
-        android:focusable="false" />
+        android:duplicateParentState="true" />
 
     <TextView
         android:id="@+id/habit_row_text"
@@ -38,6 +37,5 @@
         android:textSize="15sp"
         android:maxLines="2"
         android:ellipsize="end"
-        android:clickable="false"
-        android:focusable="false" />
+        android:duplicateParentState="true" />
 </LinearLayout>
