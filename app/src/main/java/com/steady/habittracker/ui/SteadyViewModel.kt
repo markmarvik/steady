@@ -57,8 +57,16 @@ import com.steady.habittracker.data.withArchivedGoal
 import com.steady.habittracker.data.withGoalsReplacedFromWizard
 import com.steady.habittracker.data.NotificationPrefs
 import com.steady.habittracker.data.withNotificationPrefs
-
+import com.steady.habittracker.data.withAutoLogMasterEnabled
+import com.steady.habittracker.data.AutoSuggestion
 import com.steady.habittracker.reminders.AlarmScheduler
+import com.steady.habittracker.data.SleepAudioPrefs
+import com.steady.habittracker.data.withSleepAudioPrefs
+import com.steady.habittracker.sensors.AutoLogEngine
+import com.steady.habittracker.sensors.AutoLogWorker
+import com.steady.habittracker.sleepaudio.SleepAudioScheduler
+import com.steady.habittracker.sleepaudio.SleepAudioService
+import com.steady.habittracker.sleepaudio.SleepAudioStorage
 import com.steady.habittracker.widget.WidgetRenderer
 import android.app.Application
 import kotlinx.coroutines.flow.SharingStarted
@@ -557,6 +565,88 @@ class SteadyViewModel(
                 onResult(e.message ?: "Invalid backup file")
             }
         }
+    }
+
+    fun setAutoLogMasterEnabled(enabled: Boolean) {
+        viewModelScope.launch {
+            val current = appData.value
+            val updated = current.withAutoLogMasterEnabled(enabled)
+            repository.saveData(updated)
+            val ctx = appContext
+            if (ctx != null) {
+                if (enabled) AutoLogWorker.enqueue(ctx) else AutoLogWorker.cancel(ctx)
+            }
+        }
+    }
+
+    /** Run sensor / external auto-log once (Today refresh or Planner “Sync now”). */
+    fun runAutoLogNow(onDone: ((applied: Int, suggested: Int) -> Unit)? = null) {
+        viewModelScope.launch {
+            val ctx = appContext ?: return@launch
+            val current = appData.value
+            val result = AutoLogEngine.run(ctx, current, today)
+            if (result.data != current) {
+                repository.saveData(result.data)
+                refreshWidget(result.data)
+            }
+            onDone?.invoke(result.appliedCount, result.suggestedCount)
+        }
+    }
+
+    fun acceptAutoSuggestion(suggestion: AutoSuggestion) {
+        viewModelScope.launch {
+            val updated = AutoLogEngine.acceptSuggestion(appData.value, suggestion)
+            repository.saveData(updated)
+            refreshWidget(updated)
+        }
+    }
+
+    fun dismissAutoSuggestion(suggestion: AutoSuggestion) {
+        viewModelScope.launch {
+            val updated = AutoLogEngine.dismissSuggestion(appData.value, suggestion)
+            repository.saveData(updated)
+        }
+    }
+
+    fun ensureAutoLogScheduled() {
+        val ctx = appContext ?: return
+        if (appData.value.autoLogMasterEnabled) {
+            AutoLogWorker.enqueue(ctx)
+        }
+        SleepAudioScheduler.reschedule(ctx, appData.value)
+    }
+
+    fun updateSleepAudioPrefs(prefs: SleepAudioPrefs) {
+        viewModelScope.launch {
+            val current = appData.value
+            var updated = current.withSleepAudioPrefs(prefs)
+            val ctx = appContext
+            if (ctx != null) {
+                updated = updated.copy(
+                    sleepNights = SleepAudioStorage.prune(ctx, updated.sleepNights, prefs)
+                )
+            }
+            repository.saveData(updated)
+            if (ctx != null) SleepAudioScheduler.reschedule(ctx, updated)
+        }
+    }
+
+    /**
+     * @return null if started (or start requested), else a short reason (e.g. not charging).
+     */
+    fun startSleepAudioRecording(): String? {
+        val ctx = appContext ?: return "No context"
+        val prefs = appData.value.sleepAudioPrefs
+        if (prefs.requireCharging && !com.steady.habittracker.sleepaudio.ChargingStatus.isCharging(ctx)) {
+            return "Plug in the phone — charging is required for sleep audio"
+        }
+        SleepAudioService.start(ctx)
+        return null
+    }
+
+    fun stopSleepAudioRecording() {
+        val ctx = appContext ?: return
+        SleepAudioService.stop(ctx)
     }
 
     /** For skip prompt logic */

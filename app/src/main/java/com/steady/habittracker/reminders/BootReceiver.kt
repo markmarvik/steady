@@ -4,6 +4,8 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import com.steady.habittracker.data.AndroidHabitRepository
+import com.steady.habittracker.sensors.AutoLogWorker
+import com.steady.habittracker.sleepaudio.SleepAudioScheduler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
@@ -19,6 +21,10 @@ class BootReceiver : BroadcastReceiver() {
                     val repo = AndroidHabitRepository(appContext)
                     val data = repo.appDataFlow.first()
                     AlarmScheduler.scheduleAll(appContext, data)
+                    if (data.autoLogMasterEnabled) {
+                        AutoLogWorker.enqueue(appContext)
+                    }
+                    SleepAudioScheduler.reschedule(appContext, data)
                 } finally {
                     pendingResult.finish()
                 }

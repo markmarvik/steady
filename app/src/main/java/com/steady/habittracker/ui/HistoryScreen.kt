@@ -2,6 +2,7 @@ package com.steady.habittracker.ui
 
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -31,6 +32,7 @@ import androidx.compose.material3.TextButton
 import com.steady.habittracker.data.AppData
 import com.steady.habittracker.data.HabitDomain
 import com.steady.habittracker.data.HabitType
+import com.steady.habittracker.data.SleepNightSession
 import com.steady.habittracker.data.TagIds
 import com.steady.habittracker.data.WorkoutSession
 import java.text.SimpleDateFormat
@@ -42,7 +44,10 @@ import java.util.Locale
  * History inspired by Anki stats: heatmap, multi charts, clear summary cards.
  */
 @Composable
-fun HistoryScreen(appData: AppData) {
+fun HistoryScreen(
+    appData: AppData,
+    onOpenSleepNight: (SleepNightSession) -> Unit = {}
+) {
     val graphData = remember(appData) { HabitDomain.computeLastNDays(appData, 30) }
     val logCounts = remember(appData) { HabitDomain.computeLastNDaysLogCounts(appData, 30) }
     val heatmap = remember(appData) { HabitDomain.computeHeatmap(appData, weeks = 16) }
@@ -59,6 +64,9 @@ fun HistoryScreen(appData: AppData) {
     val workoutDays7 = remember(appData) { HabitDomain.workoutDaysInWindow(appData, 7) }
     val accent = MaterialTheme.colorScheme.primary
     var expandedSessionId by remember { mutableStateOf<String?>(null) }
+    val sleepNights = remember(appData.sleepNights) {
+        appData.sleepNights.sortedByDescending { it.startedAt }.take(10)
+    }
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -71,6 +79,43 @@ fun HistoryScreen(appData: AppData) {
                 fontSize = 16.sp,
                 fontWeight = FontWeight.SemiBold
             )
+        }
+
+        // Sleep audio nights
+        if (sleepNights.isNotEmpty()) {
+            item {
+                SectionTitle("Sleep audio")
+            }
+            items(sleepNights, key = { it.id }) { night ->
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onOpenSleepNight(night) },
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Column(Modifier.padding(12.dp)) {
+                        Text(
+                            "Night → ${night.wakeDate}",
+                            fontWeight = FontWeight.SemiBold,
+                            fontSize = 13.sp,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Text(
+                            "Quiet ${night.quietScore}/100 · ${night.eventCount} events · " +
+                                "${night.snoreLikeCount} snore-like · ${"%.1f".format(night.loudMinutes)} loud min",
+                            fontSize = 11.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            if (night.completed) "Tap for events & playback · ${night.codec}"
+                            else "In progress… · ${night.codec}",
+                            fontSize = 11.sp,
+                            color = accent
+                        )
+                    }
+                }
+            }
         }
 
         // Workout sessions (#22)

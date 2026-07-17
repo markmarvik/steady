@@ -61,6 +61,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import com.steady.habittracker.data.AppData
+import com.steady.habittracker.data.AutoSource
 import com.steady.habittracker.data.Group
 import com.steady.habittracker.data.HabitDomain
 import com.steady.habittracker.data.NotificationPrefs
@@ -68,6 +69,11 @@ import com.steady.habittracker.data.Reminder
 import com.steady.habittracker.data.Schedule
 import com.steady.habittracker.data.SleepSettings
 import com.steady.habittracker.data.TimeBlock
+import com.steady.habittracker.data.SleepAudioPrefs
+import com.steady.habittracker.sensors.LightSampler
+import com.steady.habittracker.sensors.NoiseSampler
+import com.steady.habittracker.sensors.ScreenTimeReader
+import com.steady.habittracker.sensors.StepCounterReader
 
 @Composable
 fun ManageSectionHeader(
@@ -703,6 +709,244 @@ private fun SmartPrefSwitch(
             Text(subtitle, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 10.sp)
         }
         Switch(checked = checked, onCheckedChange = onCheckedChange)
+    }
+}
+
+@Composable
+fun SleepAudioCard(
+    appData: AppData,
+    onUpdatePrefs: (SleepAudioPrefs) -> Unit,
+    onStartNow: () -> Unit,
+    onStopNow: () -> Unit
+) {
+    val context = LocalContext.current
+    var permissionTick by remember { mutableIntStateOf(0) }
+    val micLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { permissionTick++ }
+    val micOk = remember(permissionTick) {
+        ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
+            PackageManager.PERMISSION_GRANTED
+    }
+    val prefs = appData.sleepAudioPrefs
+    val nights = appData.sleepNights.take(5)
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        shape = RoundedCornerShape(12.dp)
+    ) {
+        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text(
+                "Sleep audio / snore watch",
+                color = MaterialTheme.colorScheme.primary,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.SemiBold
+            )
+            Text(
+                "High-efficiency OGG/Opus overnight capture (AMR fallback). " +
+                    "Detects loud events and possible snoring cadence. Keeps last ${prefs.retainDays} days on device.",
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                fontSize = 10.sp
+            )
+            Row(
+                Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text("Enable night recording", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurface)
+                    Text(
+                        if (prefs.scheduleWithSleep)
+                            "Auto ${appData.sleep.bedTime} → ${appData.sleep.wakeTime}"
+                        else "Manual start only",
+                        fontSize = 10.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Switch(
+                    checked = prefs.enabled,
+                    onCheckedChange = { onUpdatePrefs(prefs.copy(enabled = it)) }
+                )
+            }
+            SmartPrefSwitch(
+                title = "Schedule with bed / wake",
+                subtitle = "Uses sleep spine times",
+                checked = prefs.scheduleWithSleep,
+                onCheckedChange = { onUpdatePrefs(prefs.copy(scheduleWithSleep = it)) }
+            )
+            SmartPrefSwitch(
+                title = "Only while charging",
+                subtitle = "Skip start if unplugged; stop if you unplug mid-night",
+                checked = prefs.requireCharging,
+                onCheckedChange = { onUpdatePrefs(prefs.copy(requireCharging = it)) }
+            )
+            if (!micOk) {
+                TextButton(onClick = { micLauncher.launch(Manifest.permission.RECORD_AUDIO) }) {
+                    Text("Allow microphone", fontSize = 12.sp)
+                }
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                TextButton(onClick = onStartNow) {
+                    Text("Start now", color = MaterialTheme.colorScheme.primary, fontSize = 12.sp)
+                }
+                TextButton(onClick = onStopNow) {
+                    Text("Stop", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
+                }
+            }
+            Text("Retain days", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurface)
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                listOf(2, 3, 5, 7).forEach { d ->
+                    val sel = prefs.retainDays == d
+                    TextButton(onClick = { onUpdatePrefs(prefs.copy(retainDays = d)) }) {
+                        Text(
+                            "$d",
+                            fontSize = 12.sp,
+                            color = if (sel) MaterialTheme.colorScheme.primary
+                            else MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+            Text("Loudness sensitivity", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurface)
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                listOf(
+                    2000 to "High",
+                    4000 to "Med",
+                    8000 to "Low"
+                ).forEach { (th, label) ->
+                    val sel = prefs.loudThreshold == th
+                    TextButton(onClick = { onUpdatePrefs(prefs.copy(loudThreshold = th)) }) {
+                        Text(
+                            label,
+                            fontSize = 11.sp,
+                            color = if (sel) MaterialTheme.colorScheme.primary
+                            else MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+            if (nights.isNotEmpty()) {
+                HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+                Text(
+                    "Recent nights · open History for playback",
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                nights.forEach { n ->
+                    Text(
+                        "${n.wakeDate}: quiet ${n.quietScore} · ${n.eventCount} events · ${n.snoreLikeCount} snore-like",
+                        fontSize = 11.sp,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                }
+            }
+            Text(
+                "Not a medical device. Snore labels are energy/cadence heuristics for personal tracking only.",
+                fontSize = 9.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+}
+
+@Composable
+fun AutoLogCard(
+    appData: AppData,
+    onToggleMaster: (Boolean) -> Unit,
+    onSyncNow: () -> Unit
+) {
+    val context = LocalContext.current
+    var permissionTick by remember { mutableIntStateOf(0) }
+    val micLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { permissionTick++ }
+    val activityLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { permissionTick++ }
+
+    val usageOk = remember(permissionTick) { ScreenTimeReader.hasUsageAccess(context) }
+    val lightOk = remember { LightSampler.isAvailable(context) }
+    val micOk = remember(permissionTick) { NoiseSampler.hasMicPermission(context) }
+    val stepsOk = remember(permissionTick) { StepCounterReader.hasPermission(context) }
+    val linked = remember(appData.habits) {
+        appData.habits.count { !it.archived && it.autoSource != AutoSource.NONE }
+    }
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        shape = RoundedCornerShape(12.dp)
+    ) {
+        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text("Auto-log (sensors)", color = MaterialTheme.colorScheme.primary, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+            Text(
+                "Screen use, bedtime light, ambient noise, phone steps, and Gadgetbridge/external broadcasts. All on-device.",
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                fontSize = 10.sp
+            )
+            Row(
+                Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text("Background sampling", color = MaterialTheme.colorScheme.onSurface, fontSize = 13.sp)
+                    Text("$linked habit(s) linked · every ~6h + on open", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 10.sp)
+                }
+                Switch(checked = appData.autoLogMasterEnabled, onCheckedChange = onToggleMaster)
+            }
+            TextButton(onClick = onSyncNow) {
+                Text("Sync sensors now", color = MaterialTheme.colorScheme.primary, fontSize = 12.sp)
+            }
+            HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+            Text("Permissions", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurface)
+            PermissionLine("Usage access (screen time)", usageOk) {
+                try {
+                    context.startActivity(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS))
+                } catch (_: Exception) {
+                }
+                permissionTick++
+            }
+            PermissionLine("Light sensor", lightOk, actionLabel = null) {}
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                PermissionLine("Activity (phone steps)", stepsOk) {
+                    activityLauncher.launch(Manifest.permission.ACTIVITY_RECOGNITION)
+                }
+            }
+            PermissionLine("Microphone (noise)", micOk) {
+                micLauncher.launch(Manifest.permission.RECORD_AUDIO)
+            }
+            Text(
+                "Link a source on each habit (Manage → edit habit → Auto-log). " +
+                    "Gadgetbridge: broadcast com.steady.habittracker.ACTION_EXTERNAL_METRIC with key=steps, value=N.",
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                fontSize = 10.sp
+            )
+        }
+    }
+}
+
+@Composable
+private fun PermissionLine(
+    title: String,
+    ok: Boolean,
+    actionLabel: String? = "Grant",
+    onGrant: () -> Unit
+) {
+    Row(
+        Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        Text(
+            "$title · ${if (ok) "OK" else "needed"}",
+            fontSize = 11.sp,
+            color = if (ok) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        if (!ok && actionLabel != null) {
+            TextButton(onClick = onGrant) { Text(actionLabel, fontSize = 11.sp) }
+        }
     }
 }
 

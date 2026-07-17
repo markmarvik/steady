@@ -52,11 +52,13 @@ import com.steady.habittracker.data.AndroidHabitRepository
 import com.steady.habittracker.data.AppData
 import com.steady.habittracker.data.Habit
 import com.steady.habittracker.reminders.NotificationHelper
+import com.steady.habittracker.data.SleepNightSession
 import com.steady.habittracker.ui.HistoryScreen
 import com.steady.habittracker.ui.LogEntryDialog
 import com.steady.habittracker.ui.ManageScreen
 import com.steady.habittracker.ui.OnboardingScreen
 import com.steady.habittracker.ui.SkipPromptDialog
+import com.steady.habittracker.ui.SleepNightDetailScreen
 import com.steady.habittracker.ui.SteadyViewModel
 import com.steady.habittracker.ui.TabButton
 import com.steady.habittracker.ui.TodayScreen
@@ -153,6 +155,7 @@ fun SteadyApp(
     var promptHabitId by remember { mutableStateOf<String?>(null) }
     var progressExpanded by remember { mutableStateOf(false) }
     var showSettings by remember { mutableStateOf(false) }
+    var openSleepNight by remember { mutableStateOf<SleepNightSession?>(null) }
 
     // Help / interactive onboarding tour ("run onboarding")
     var showHelpTour by remember { mutableStateOf(false) }
@@ -229,6 +232,8 @@ fun SteadyApp(
 
     LaunchedEffect(Unit) {
         viewModel.ensureScoreFinalized()
+        viewModel.ensureAutoLogScheduled()
+        viewModel.runAutoLogNow()
         NotificationHelper.ensureChannel(context)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             val granted = ContextCompat.checkSelfPermission(
@@ -418,9 +423,25 @@ fun SteadyApp(
         }
     } else {
     MaterialTheme(colorScheme = colorScheme) {
-    // Full-screen workout session or Dreamline wizard takes over content
+    // Full-screen workout session, sleep-audio detail, or Dreamline wizard
     val workoutRt = activeWorkoutRoutine
+    val sleepNight = openSleepNight
     when {
+        sleepNight != null -> {
+            Surface(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .safeDrawingPadding(),
+                color = bgColor
+            ) {
+                // Refresh night from latest appData if still present
+                val live = appData.sleepNights.find { it.id == sleepNight.id } ?: sleepNight
+                SleepNightDetailScreen(
+                    night = live,
+                    onBack = { openSleepNight = null }
+                )
+            }
+        }
         workoutRt != null -> {
             Surface(
                 modifier = Modifier
@@ -707,7 +728,10 @@ fun SteadyApp(
                         onOpenLogConsumed = {
                             activity?.deepLinkOpenMetricLog?.value = false
                             deepMetricLogState.value = false
-                        }
+                        },
+                        onAcceptAutoSuggestion = viewModel::acceptAutoSuggestion,
+                        onDismissAutoSuggestion = viewModel::dismissAutoSuggestion,
+                        onRunAutoLog = { viewModel.runAutoLogNow() }
                     )
                     1 -> PathScreen(
                         appData = appData,
@@ -716,7 +740,10 @@ fun SteadyApp(
                         onSaveAlignment = viewModel::savePathAlignment,
                         onArchiveGoal = viewModel::archiveGoal
                     )
-                    2 -> HistoryScreen(appData = appData)
+                    2 -> HistoryScreen(
+                        appData = appData,
+                        onOpenSleepNight = { openSleepNight = it }
+                    )
                     3 -> ManageScreen(
                         appData = appData,
                         onAddGroup = { n, h, p, icon -> viewModel.addGroup(n, h, p, icon) },
@@ -740,6 +767,18 @@ fun SteadyApp(
                         onToggleReminder = viewModel::toggleReminder,
                         onSetRemindersMasterEnabled = viewModel::setRemindersMasterEnabled,
                         onUpdateNotificationPrefs = viewModel::updateNotificationPrefs,
+                        onSetAutoLogMasterEnabled = viewModel::setAutoLogMasterEnabled,
+                        onRunAutoLogNow = { viewModel.runAutoLogNow() },
+                        onUpdateSleepAudioPrefs = viewModel::updateSleepAudioPrefs,
+                        onStartSleepAudio = {
+                            val reason = viewModel.startSleepAudioRecording()
+                            if (reason != null) {
+                                Toast.makeText(context, reason, Toast.LENGTH_LONG).show()
+                            } else {
+                                Toast.makeText(context, "Sleep audio starting…", Toast.LENGTH_SHORT).show()
+                            }
+                        },
+                        onStopSleepAudio = viewModel::stopSleepAudioRecording,
                         onAlignRemindersToSchedule = viewModel::alignRemindersToSchedule,
                         onArchiveGroup = { viewModel.deleteGroup(it) },
                         onExportCsv = { exportLauncher.launch("steady_backup_${java.time.LocalDate.now()}.json") },

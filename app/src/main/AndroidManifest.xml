@@ -9,6 +9,15 @@
     <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <!-- Auto-log sensors (all opt-in via OS settings / runtime prompts) -->
+    <uses-permission android:name="android.permission.PACKAGE_USAGE_STATS"
+        tools:ignore="ProtectedPermissions" />
+    <uses-permission android:name="android.permission.ACTIVITY_RECOGNITION" />
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+    <uses-feature android:name="android.hardware.sensor.light" android:required="false" />
+    <uses-feature android:name="android.hardware.microphone" android:required="false" />
 
     <application
         android:allowBackup="true"
@@ -82,6 +91,34 @@
             android:name=".widget.WidgetListService"
             android:permission="android.permission.BIND_REMOTEVIEWS"
             android:exported="false" />
+
+        <!-- Gadgetbridge / Tasker / adb external metrics (steps, etc.) -->
+        <receiver
+            android:name=".sensors.ExternalMetricsReceiver"
+            android:enabled="true"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.steady.habittracker.ACTION_EXTERNAL_METRIC" />
+                <action android:name="com.steady.habittracker.ACTION_EXTERNAL_STEPS" />
+            </intent-filter>
+        </receiver>
+
+        <!-- Overnight OGG sleep / snore capture -->
+        <service
+            android:name=".sleepaudio.SleepAudioService"
+            android:enabled="true"
+            android:exported="false"
+            android:foregroundServiceType="microphone" />
+
+        <receiver
+            android:name=".sleepaudio.SleepAudioAlarmReceiver"
+            android:enabled="true"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.steady.habittracker.sleepaudio.ALARM_START" />
+                <action android:name="com.steady.habittracker.sleepaudio.ALARM_STOP" />
+            </intent-filter>
+        </receiver>
 
     </application>
 

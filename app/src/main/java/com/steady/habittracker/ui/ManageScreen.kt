@@ -34,12 +34,16 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.steady.habittracker.data.AppData
+import com.steady.habittracker.data.AutoLogMode
+import com.steady.habittracker.data.AutoSource
 import com.steady.habittracker.data.Group
 import com.steady.habittracker.data.Habit
 import com.steady.habittracker.data.HabitDomain
 import com.steady.habittracker.data.HabitType
 import com.steady.habittracker.data.NotificationPrefs
 import com.steady.habittracker.data.Reminder
+import com.steady.habittracker.data.SleepAudioPrefs
+import com.steady.habittracker.sensors.AutoLogMapper
 import com.steady.habittracker.data.Schedule
 import com.steady.habittracker.data.ShowPreset
 import com.steady.habittracker.data.SleepSettings
@@ -78,6 +82,11 @@ fun ManageScreen(
     onToggleReminder: (String) -> Unit,
     onSetRemindersMasterEnabled: (Boolean) -> Unit = {},
     onUpdateNotificationPrefs: (NotificationPrefs) -> Unit = {},
+    onSetAutoLogMasterEnabled: (Boolean) -> Unit = {},
+    onRunAutoLogNow: () -> Unit = {},
+    onUpdateSleepAudioPrefs: (SleepAudioPrefs) -> Unit = {},
+    onStartSleepAudio: () -> Unit = {},
+    onStopSleepAudio: () -> Unit = {},
     onAlignRemindersToSchedule: () -> Unit = {},
     onArchiveGroup: (String) -> Unit = {},
     onExportCsv: () -> Unit = {},
@@ -778,6 +787,21 @@ fun ManageScreen(
                         )
                     }
                     item {
+                        AutoLogCard(
+                            appData = appData,
+                            onToggleMaster = onSetAutoLogMasterEnabled,
+                            onSyncNow = onRunAutoLogNow
+                        )
+                    }
+                    item {
+                        SleepAudioCard(
+                            appData = appData,
+                            onUpdatePrefs = onUpdateSleepAudioPrefs,
+                            onStartNow = onStartSleepAudio,
+                            onStopNow = onStopSleepAudio
+                        )
+                    }
+                    item {
                         Spacer(Modifier.height(4.dp))
                         Text("Backup", color = MaterialTheme.colorScheme.primary, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
                         Spacer(Modifier.height(6.dp))
@@ -1302,6 +1326,12 @@ private fun EditHabitDialog(
     var weekdays by remember { mutableStateOf(habit.weekdays) }
     var intervalDays by remember { mutableIntStateOf(habit.intervalDays.coerceAtLeast(1)) }
     var specificDates by remember { mutableStateOf(habit.specificDates) }
+    var autoSource by remember { mutableStateOf(habit.autoSource) }
+    var autoMode by remember { mutableStateOf(habit.autoMode) }
+    var autoThreshold by remember {
+        mutableStateOf(habit.autoThreshold?.toString() ?: "")
+    }
+    var autoMetricKey by remember { mutableStateOf(habit.autoMetricKey) }
 
     val tagIds = remember(tags) { tags.map { it.id }.toSet() }
     LaunchedEffect(tagIds) {
@@ -1371,6 +1401,64 @@ private fun EditHabitDialog(
                         modifier = Modifier.fillMaxWidth()
                     )
                 }
+                Spacer(Modifier.height(12.dp))
+                Text("Auto-log (sensors)", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                Text(
+                    "On-device only. Grant permissions in Planner if needed.",
+                    fontSize = 10.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(Modifier.height(4.dp))
+                AutoSourceChipRow(selected = autoSource, onSelect = { autoSource = it })
+                if (autoSource != AutoSource.NONE) {
+                    Spacer(Modifier.height(6.dp))
+                    Text("When data arrives", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        FilterChip(
+                            selected = autoMode == AutoLogMode.SUGGEST,
+                            onClick = { autoMode = AutoLogMode.SUGGEST },
+                            label = { Text("Suggest", fontSize = 11.sp) }
+                        )
+                        FilterChip(
+                            selected = autoMode == AutoLogMode.AUTO_APPLY,
+                            onClick = { autoMode = AutoLogMode.AUTO_APPLY },
+                            label = { Text("Auto-apply", fontSize = 11.sp) }
+                        )
+                    }
+                    Spacer(Modifier.height(4.dp))
+                    OutlinedTextField(
+                        value = autoThreshold,
+                        onValueChange = { autoThreshold = it },
+                        label = {
+                            Text(
+                                when (autoSource) {
+                                    AutoSource.LIGHT_DARK_CHECK, AutoSource.LIGHT_BEDTIME_AVG -> "Max lux (dark = under)"
+                                    AutoSource.SCREEN_AFTER_WINDDOWN, AutoSource.SCREEN_MINUTES -> "Max minutes to pass (checkbox)"
+                                    AutoSource.NOISE_EVENING_DB -> "Max ~dB to pass (checkbox)"
+                                    AutoSource.PHONE_STEPS, AutoSource.GADGETBRIDGE_STEPS -> "Step goal (checkbox)"
+                                    else -> "Threshold (optional)"
+                                }
+                            )
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
+                    if (autoSource == AutoSource.EXTERNAL_METRIC || autoSource == AutoSource.GADGETBRIDGE_STEPS) {
+                        OutlinedTextField(
+                            value = autoMetricKey,
+                            onValueChange = { autoMetricKey = it },
+                            label = { Text("Metric key (e.g. steps)") },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true,
+                            placeholder = { Text("steps") }
+                        )
+                    }
+                    Text(
+                        AutoLogMapper.sourceLabel(autoSource),
+                        fontSize = 10.sp,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
             }
         },
         confirmButton = {
@@ -1397,7 +1485,11 @@ private fun EditHabitDialog(
                             intervalDays = intervalDays,
                             anchorDate = anchor,
                             specificDates = specificDates,
-                            icon = icon.trim()
+                            icon = icon.trim(),
+                            autoSource = autoSource,
+                            autoMode = autoMode,
+                            autoThreshold = autoThreshold.toDoubleOrNull(),
+                            autoMetricKey = autoMetricKey.trim()
                         )
                     )
                 },
@@ -1411,6 +1503,34 @@ private fun EditHabitDialog(
             }
         }
     )
+}
+
+@Composable
+private fun AutoSourceChipRow(selected: AutoSource, onSelect: (AutoSource) -> Unit) {
+    val options = listOf(
+        AutoSource.NONE to "Off",
+        AutoSource.SCREEN_MINUTES to "Screen min",
+        AutoSource.SCREEN_AFTER_WINDDOWN to "Eve screen",
+        AutoSource.LIGHT_BEDTIME_AVG to "Light lux",
+        AutoSource.LIGHT_DARK_CHECK to "Dark room",
+        AutoSource.NOISE_EVENING_DB to "Noise",
+        AutoSource.PHONE_STEPS to "Phone steps",
+        AutoSource.GADGETBRIDGE_STEPS to "GB steps",
+        AutoSource.EXTERNAL_METRIC to "External"
+    )
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        options.chunked(3).forEach { row ->
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                row.forEach { (src, label) ->
+                    FilterChip(
+                        selected = selected == src,
+                        onClick = { onSelect(src) },
+                        label = { Text(label, fontSize = 10.sp) }
+                    )
+                }
+            }
+        }
+    }
 }
 
 @Composable

@@ -32,6 +32,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.steady.habittracker.data.AppData
+import com.steady.habittracker.data.AutoSuggestion
 import com.steady.habittracker.data.Habit
 import com.steady.habittracker.data.HabitDomain
 import com.steady.habittracker.data.HabitEntry
@@ -39,6 +40,8 @@ import com.steady.habittracker.data.HabitType
 import com.steady.habittracker.data.TimelineSection
 import com.steady.habittracker.data.displayGlyph
 import com.steady.habittracker.data.displayLabel
+import com.steady.habittracker.sensors.AutoLogEngine
+import com.steady.habittracker.sensors.AutoLogMapper
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -64,7 +67,10 @@ fun TodayScreen(
     onOpenCaptureConsumed: () -> Unit = {},
     /** Widget / deep-link: open + Log dialog once. */
     openLogRequest: Boolean = false,
-    onOpenLogConsumed: () -> Unit = {}
+    onOpenLogConsumed: () -> Unit = {},
+    onAcceptAutoSuggestion: (AutoSuggestion) -> Unit = {},
+    onDismissAutoSuggestion: (AutoSuggestion) -> Unit = {},
+    onRunAutoLog: () -> Unit = {}
 ) {
     if (appData.habits.none { !it.archived } || appData.groups.isEmpty()) {
         Text(
@@ -131,6 +137,10 @@ fun TodayScreen(
     val nameById = remember(appData.habits) { appData.habits.associate { it.id to it.name } }
     val tagLabels = remember(appData.habits, appData.tags) { HabitDomain.tagLabelByHabitId(appData) }
     val pendingCaptures = remember(appData.captures) { appData.captures.filter { !it.processed } }
+    val autoSuggestions = remember(appData.autoSuggestions, dateKey) {
+        AutoLogEngine.pendingSuggestions(appData, dateKey)
+    }
+    val habitNameById = remember(appData.habits) { appData.habits.associate { it.id to it.name } }
     val todayRoutines = remember(appData.routines, appData.workoutSessions, dateKey) {
         HabitDomain.routinesDueOn(appData, LocalDate.now())
     }
@@ -238,6 +248,55 @@ fun TodayScreen(
             modifier = Modifier.weight(1f),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
+            if (autoSuggestions.isNotEmpty()) {
+                item(key = "auto_log_header", contentType = "hdr") {
+                    Row(
+                        Modifier.fillMaxWidth().padding(horizontal = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            "Sensor suggestions",
+                            color = colors.primary,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        TextButton(onClick = onRunAutoLog) {
+                            Text("Refresh", fontSize = 11.sp, color = colors.primary)
+                        }
+                    }
+                }
+                items(autoSuggestions, key = { "sug_${it.habitId}_${it.date}" }) { sug ->
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = CardDefaults.cardColors(containerColor = colors.surfaceVariant),
+                        shape = RoundedCornerShape(10.dp)
+                    ) {
+                        Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Text(
+                                habitNameById[sug.habitId] ?: sug.habitId,
+                                fontWeight = FontWeight.SemiBold,
+                                fontSize = 13.sp,
+                                color = colors.onSurface
+                            )
+                            Text(
+                                "${AutoLogMapper.sourceLabel(sug.source)} · ${sug.note.ifBlank { sug.value.toString() }}",
+                                fontSize = 11.sp,
+                                color = colors.onSurfaceVariant
+                            )
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                TextButton(onClick = { onAcceptAutoSuggestion(sug) }) {
+                                    Text("Accept", fontSize = 12.sp)
+                                }
+                                TextButton(onClick = { onDismissAutoSuggestion(sug) }) {
+                                    Text("Dismiss", fontSize = 12.sp, color = colors.onSurfaceVariant)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
             if (pendingCaptures.isNotEmpty()) {
                 item(key = "inbox_header", contentType = "hdr") {
                     Text(

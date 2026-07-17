@@ -52,6 +52,21 @@ Three focused sub-tabs:
 - **Levels** from lifetime points (calm titles: Steady → Anchored → …)
 - Shown on the Today header and History Momentum section
 
+### Auto-log (sensors & external)
+- Opt-in per habit: **Suggest** or **Auto-apply**
+- **Screen time** (usage access) · **evening screen after wind-down**
+- **Bedtime light** (lux) · dark-room check
+- **Ambient noise** (mic, short samples)
+- **Phone steps** (optional) · **Gadgetbridge / external steps** via broadcast
+- Manage → Planner → Auto-log permissions; edit habit → Auto-log source
+
+### Sleep audio / snore watch
+- Optional overnight **OGG/Opus** (high-efficiency) segments; AMR fallback on older devices
+- Loud-event detection + **possible snore** cadence heuristic (not medical)
+- Retains last 2–7 nights on device; History → tap night → play events/segments
+- Schedule with bed/wake or Start/Stop from Manage → Planner
+- **Only while charging** (default on): skip start / stop if unplugged
+
 ### Widget & notifications
 - Home-screen widget: current group, missed items, what’s next
 - Exact alarms for group / daily-review reminders (reschedule on boot)
@@ -118,7 +133,7 @@ app/src/main/java/com/steady/habittracker/
   widget/        # App widget models + rendering
 ```
 
-- **Schema** versioned JSON in DataStore (current schema v10: Momentum score, smart notification prefs).
+- **Schema** versioned JSON in DataStore (current schema v12: sleep-audio nights + auto-log).
 - **Domain** logic is unit-tested under `app/src/test/`.
 
 ---

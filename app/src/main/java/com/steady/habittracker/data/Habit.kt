@@ -3,7 +3,7 @@ package com.steady.habittracker.data
 import kotlinx.serialization.Serializable
 
 /**
- * Data model v10.
+ * Data model v12.
  * - Groups = time-of-day slots on the 24h timeline (when you do it).
  * - Tags = category identity for History (what it is: Supplements, Movement…).
  * - SleepSettings anchors Morning + Bedtime routines to bed/wake times.
@@ -11,6 +11,8 @@ import kotlinx.serialization.Serializable
  * - Exercise routines + workout sessions for structured training (#20–#22).
  * - Habit.icon / Group.icon: optional emoji for lists, Today, widget (#29).
  * - ScoreState / NotificationPrefs: Steady Momentum + smart gentle reminders (v10).
+ * - AutoSource / AutoLogMode / AutoSuggestion: on-device sensor & external auto-logging (v11).
+ * - SleepAudio: OGG night recording, loud/snore events, multi-day retention (v12).
  * - archived + canSkip, parentId, skip/loggedAt, themes, schedules (v5).
  * All @Serializable for DataStore JSON (portable).
  */
@@ -27,6 +29,57 @@ enum class HabitType {
     SCALE_1_5,     // Mood, energy, soreness (1 low - 5 high)
     NOTE           // Pure journal/reflection (value ignored, note required)
 }
+
+/**
+ * On-device or external source that can propose/fill a habit log.
+ * All processing stays local; each source is opt-in per habit + OS permission.
+ */
+@Serializable
+enum class AutoSource {
+    /** Manual only (default). */
+    NONE,
+    /** Daily screen-on minutes via UsageStats (needs usage access). */
+    SCREEN_MINUTES,
+    /** Screen minutes after wind-down start (phone-free evening). */
+    SCREEN_AFTER_WINDDOWN,
+    /** Average ambient lux during wind-down window (light sensor). */
+    LIGHT_BEDTIME_AVG,
+    /** Checkbox: dark enough in wind-down (avg lux under threshold). */
+    LIGHT_DARK_CHECK,
+    /** Approximate ambient noise during wind-down (mic samples, opt-in). */
+    NOISE_EVENING_DB,
+    /** Steps from phone hardware counter (optional; Gadgetbridge preferred later). */
+    PHONE_STEPS,
+    /**
+     * Steps/metrics from Gadgetbridge or automation apps via
+     * [com.steady.habittracker.sensors.ExternalMetricsStore] / broadcast.
+     */
+    GADGETBRIDGE_STEPS,
+    /** Generic external metric key stored in ExternalMetricsStore (unit-agnostic). */
+    EXTERNAL_METRIC
+}
+
+/** How sensor/external values are applied when a source is linked. */
+@Serializable
+enum class AutoLogMode {
+    /** Show a suggestion on Today; user accepts or dismisses. */
+    SUGGEST,
+    /** Write the entry automatically (note marks source); user can still edit. */
+    AUTO_APPLY
+}
+
+/** Pending or last sensor proposal for a habit on a date. */
+@Serializable
+data class AutoSuggestion(
+    val habitId: String,
+    val date: String,
+    val value: Double,
+    val note: String = "",
+    val source: AutoSource = AutoSource.NONE,
+    val observedAt: Long = 0L,
+    /** When true, already applied or dismissed — hidden from banner. */
+    val resolved: Boolean = false
+)
 
 /**
  * When a habit appears on Today / widget (catalog stays in Manage always).
@@ -188,7 +241,19 @@ data class Habit(
      */
     val additionalGroupIds: List<String> = emptyList(),
     /** Optional emoji / short icon shown next to the name (#29). Empty = first-letter fallback. */
-    val icon: String = ""
+    val icon: String = "",
+    /** Sensor / external auto-log source (v11). */
+    val autoSource: AutoSource = AutoSource.NONE,
+    /** Suggest vs silent auto-apply when [autoSource] is set. */
+    val autoMode: AutoLogMode = AutoLogMode.SUGGEST,
+    /**
+     * Threshold / target for boolean-style sources (e.g. lux max for dark check,
+     * max evening screen minutes for "phone-free"). Also used as EXTERNAL_METRIC key
+     * when [autoMetricKey] is blank and unit carries meaning — prefer [autoMetricKey].
+     */
+    val autoThreshold: Double? = null,
+    /** Key for [AutoSource.EXTERNAL_METRIC] / Gadgetbridge field name (e.g. "steps"). */
+    val autoMetricKey: String = ""
 )
 
 // --- Exercise routines & workout sessions (#20–#22) ---
@@ -346,6 +411,80 @@ data class NotificationPrefs(
     val firesCount: Int = 0
 )
 
+/** Classification for overnight loud events (heuristic, not medical diagnosis). */
+@Serializable
+enum class SleepEventKind {
+    LOUD,
+    /** Periodic loud bursts suggestive of snoring. */
+    POSSIBLE_SNORE,
+    TALK_OR_TV,
+    OTHER
+}
+
+/** One loud episode within a night session (offset into a segment file for playback). */
+@Serializable
+data class SleepAudioEvent(
+    val id: String,
+    val kind: SleepEventKind = SleepEventKind.LOUD,
+    /** Epoch millis when the event started. */
+    val startAt: Long,
+    val durationMs: Int,
+    /** Peak amplitude 0–32767 from MediaRecorder. */
+    val peakAmplitude: Int = 0,
+    /** Relative 0–100 loudness score. */
+    val loudness: Int = 0,
+    /** Segment file name under the night folder (not absolute path). */
+    val segmentFile: String = "",
+    /** Seek offset within [segmentFile] for playback (ms). */
+    val offsetInSegmentMs: Int = 0
+)
+
+/** One overnight OGG recording session (metadata in DataStore; audio on disk). */
+@Serializable
+data class SleepNightSession(
+    val id: String,
+    /** Calendar date of the morning this night ends (wake day), yyyy-MM-dd. */
+    val wakeDate: String,
+    val startedAt: Long,
+    val endedAt: Long? = null,
+    val events: List<SleepAudioEvent> = emptyList(),
+    val segmentFiles: List<String> = emptyList(),
+    val eventCount: Int = 0,
+    val snoreLikeCount: Int = 0,
+    val loudMinutes: Float = 0f,
+    /** 0–100 rough quietness score (higher = quieter night). */
+    val quietScore: Int = 0,
+    val codec: String = "ogg/opus",
+    val note: String = "",
+    val completed: Boolean = false
+)
+
+/** Preferences for snoring / sleep-audio capture. */
+@Serializable
+data class SleepAudioPrefs(
+    /** Master enable for scheduled night recording. */
+    val enabled: Boolean = false,
+    /** Keep audio + sessions for this many wake-days. */
+    val retainDays: Int = 3,
+    /** Segment length minutes (OGG chunks). */
+    val segmentMinutes: Int = 15,
+    /** Amplitude threshold 0–32767 (default ~moderate room noise). */
+    val loudThreshold: Int = 4000,
+    /** Min continuous loud ms to count as an event. */
+    val minEventMs: Int = 600,
+    /** Max single event ms before splitting / classifying as sustained. */
+    val maxEventMs: Int = 12000,
+    /** Auto-start at bedTime from [SleepSettings]. */
+    val scheduleWithSleep: Boolean = true,
+    /**
+     * Only run overnight capture while the device is charging / plugged in.
+     * Start is skipped off-charger; active sessions stop if unplugged.
+     */
+    val requireCharging: Boolean = true,
+    /** Optional habit id to auto-fill SCALE_1_5 sleep quality from quietScore. */
+    val linkedHabitId: String? = null
+)
+
 @Serializable
 data class AppData(
     val groups: List<Group> = emptyList(),
@@ -353,7 +492,7 @@ data class AppData(
     // date (yyyy-MM-dd) -> habitId -> entry
     val entries: Map<String, Map<String, HabitEntry>> = emptyMap(),
     val reminders: List<Reminder> = emptyList(),
-    val schemaVersion: Int = 10,
+    val schemaVersion: Int = 12,
     val onboarded: Boolean = false,
     val colorScheme: String = "default",   // accent id from accentSchemes() (green, rose, blush, …)
     val backgroundMode: String = "dark",   // id from backgroundModes() (dark, amoled, light, forest, …)
@@ -377,7 +516,18 @@ data class AppData(
     /** Steady Momentum scoring ledger (v10). */
     val score: ScoreState = ScoreState(),
     /** Smart reminder prefs + daily fire counter (v10). */
-    val notificationPrefs: NotificationPrefs = NotificationPrefs()
+    val notificationPrefs: NotificationPrefs = NotificationPrefs(),
+    /** Pending sensor / external auto-log suggestions (v11). */
+    val autoSuggestions: List<AutoSuggestion> = emptyList(),
+    /**
+     * Master switch for background sensor sampling (light/noise workers).
+     * Per-habit sources still required.
+     */
+    val autoLogMasterEnabled: Boolean = true,
+    /** Overnight snore / loud-noise audio capture prefs (v12). */
+    val sleepAudioPrefs: SleepAudioPrefs = SleepAudioPrefs(),
+    /** Recent sleep-audio nights (audio files live under app filesDir). */
+    val sleepNights: List<SleepNightSession> = emptyList()
 )
 
 /**
@@ -547,6 +697,28 @@ fun AppData.withPathChecks(checks: List<PathAlignmentCheck>): AppData = copy(pat
 
 fun AppData.withScore(score: ScoreState): AppData = copy(score = score)
 fun AppData.withNotificationPrefs(prefs: NotificationPrefs): AppData = copy(notificationPrefs = prefs)
+fun AppData.withAutoSuggestions(list: List<AutoSuggestion>): AppData = copy(autoSuggestions = list)
+fun AppData.withAutoLogMasterEnabled(enabled: Boolean): AppData = copy(autoLogMasterEnabled = enabled)
+fun AppData.withSleepAudioPrefs(prefs: SleepAudioPrefs): AppData = copy(sleepAudioPrefs = prefs)
+fun AppData.withSleepNights(nights: List<SleepNightSession>): AppData = copy(sleepNights = nights)
+fun AppData.withUpsertedSleepNight(night: SleepNightSession): AppData {
+    val others = sleepNights.filter { it.id != night.id }
+    return copy(sleepNights = (listOf(night) + others).sortedByDescending { it.startedAt })
+}
+
+fun AppData.withUpsertedAutoSuggestion(suggestion: AutoSuggestion): AppData {
+    val others = autoSuggestions.filterNot {
+        it.habitId == suggestion.habitId && it.date == suggestion.date && !it.resolved
+    }
+    return copy(autoSuggestions = others + suggestion)
+}
+
+fun AppData.withResolvedAutoSuggestion(habitId: String, date: String): AppData =
+    copy(
+        autoSuggestions = autoSuggestions.map {
+            if (it.habitId == habitId && it.date == date && !it.resolved) it.copy(resolved = true) else it
+        }
+    )
 
 /** Stable tag constants for Dreamline / Path filtering. */
 object GoalTags {
