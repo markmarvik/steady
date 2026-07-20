@@ -1642,141 +1642,104 @@ data class BackgroundModeOption(
 )
 
 /**
- * Full background catalog. Keep [backgroundModeOption] / [resolveThemeColors] in sync.
- * Legacy ids dark / amoled / light are preserved.
+ * Compact Linux-rice-inspired background catalog (curated; legacy ids alias in [backgroundModeOption]).
  */
 fun backgroundModes(): List<BackgroundModeOption> = listOf(
-    // —— Dark neutrals ——
+    // Keep stable default id "dark"
     BackgroundModeOption(
-        "dark", "Slate", "dark",
-        0xFF0F172A.toInt(), 0xFF1E2937.toInt(), 0xFF334155.toInt(), 0xFF1E3A5F.toInt(), false
+        "dark", "Nord", "rice",
+        0xFF2E3440.toInt(), 0xFF3B4252.toInt(), 0xFF434C5E.toInt(), 0xFF3B4252.toInt(), false
     ),
     BackgroundModeOption(
-        "amoled", "OLED black", "dark",
-        0xFF000000.toInt(), 0xFF0F0F0F.toInt(), 0xFF1A1A1A.toInt(), 0xFF1A1A1A.toInt(), false
+        "catppuccin", "Catppuccin", "rice",
+        0xFF1E1E2E.toInt(), 0xFF313244.toInt(), 0xFF45475A.toInt(), 0xFF313244.toInt(), false
     ),
     BackgroundModeOption(
-        "charcoal", "Charcoal", "dark",
-        0xFF121212.toInt(), 0xFF1E1E1E.toInt(), 0xFF2C2C2C.toInt(), 0xFF252525.toInt(), false
+        "tokyonight", "Tokyo Night", "rice",
+        0xFF1A1B26.toInt(), 0xFF24283B.toInt(), 0xFF414868.toInt(), 0xFF24283B.toInt(), false
     ),
     BackgroundModeOption(
-        "graphite", "Graphite", "dark",
-        0xFF1A1C1E.toInt(), 0xFF25282C.toInt(), 0xFF353A40.toInt(), 0xFF2A2E33.toInt(), false
+        "gruvbox", "Gruvbox", "rice",
+        0xFF282828.toInt(), 0xFF3C3836.toInt(), 0xFF504945.toInt(), 0xFF3C3836.toInt(), false
     ),
     BackgroundModeOption(
-        "midnight", "Midnight", "dark",
-        0xFF0B1026.toInt(), 0xFF151B36.toInt(), 0xFF232A4A.toInt(), 0xFF1A2340.toInt(), false
+        "dracula", "Dracula", "rice",
+        0xFF282A36.toInt(), 0xFF44475A.toInt(), 0xFF6272A4.toInt(), 0xFF44475A.toInt(), false
     ),
     BackgroundModeOption(
-        "navy", "Navy", "dark",
-        0xFF0A1628.toInt(), 0xFF132337.toInt(), 0xFF1E334D.toInt(), 0xFF152C44.toInt(), false
-    ),
-    // —— Tinted darks ——
-    BackgroundModeOption(
-        "forest", "Forest", "tinted",
-        0xFF0C1A14.toInt(), 0xFF15261E.toInt(), 0xFF243B30.toInt(), 0xFF1A3226.toInt(), false
+        "rosepine", "Rosé Pine", "rice",
+        0xFF191724.toInt(), 0xFF1F1D2E.toInt(), 0xFF26233A.toInt(), 0xFF1F1D2E.toInt(), false
     ),
     BackgroundModeOption(
-        "ocean", "Ocean", "tinted",
-        0xFF0A1920.toInt(), 0xFF122830.toInt(), 0xFF1C3A45.toInt(), 0xFF152F38.toInt(), false
+        "everforest", "Everforest", "rice",
+        0xFF2D353B.toInt(), 0xFF343F44.toInt(), 0xFF3D484D.toInt(), 0xFF343F44.toInt(), false
     ),
     BackgroundModeOption(
-        "plum", "Plum", "tinted",
-        0xFF140F1F.toInt(), 0xFF1F1830.toInt(), 0xFF302645.toInt(), 0xFF261E3A.toInt(), false
+        "onedark", "One Dark", "rice",
+        0xFF282C34.toInt(), 0xFF21252B.toInt(), 0xFF3E4451.toInt(), 0xFF2C313A.toInt(), false
     ),
     BackgroundModeOption(
-        "wine", "Wine", "tinted",
-        0xFF1A0F14.toInt(), 0xFF271820.toInt(), 0xFF3A2430.toInt(), 0xFF2E1C26.toInt(), false
+        "amoled", "OLED", "rice",
+        0xFF000000.toInt(), 0xFF0A0A0A.toInt(), 0xFF1A1A1A.toInt(), 0xFF121212.toInt(), false
     ),
     BackgroundModeOption(
-        "ember", "Ember", "tinted",
-        0xFF1A120C.toInt(), 0xFF271C14.toInt(), 0xFF3A2A1C.toInt(), 0xFF2E2218.toInt(), false
-    ),
-    BackgroundModeOption(
-        "mocha", "Mocha", "tinted",
-        0xFF1C1410.toInt(), 0xFF2A1E18.toInt(), 0xFF3D2E24.toInt(), 0xFF32261E.toInt(), false
-    ),
-    BackgroundModeOption(
-        "aurora", "Aurora", "tinted",
-        0xFF0A1A1C.toInt(), 0xFF12282B.toInt(), 0xFF1C3C40.toInt(), 0xFF153236.toInt(), false
-    ),
-    BackgroundModeOption(
-        "dusk", "Dusk", "tinted",
-        0xFF16131F.toInt(), 0xFF221C30.toInt(), 0xFF342A48.toInt(), 0xFF2A243C.toInt(), false
-    ),
-    // —— Light ——
-    BackgroundModeOption(
-        "light", "Soft white", "light",
-        0xFFF8FAFC.toInt(), 0xFFFFFFFF.toInt(), 0xFFE2E8F0.toInt(), 0xFFE2E8F0.toInt(), true
-    ),
-    BackgroundModeOption(
-        "paper", "Paper", "light",
-        0xFFF5F0E8.toInt(), 0xFFFFFBF5.toInt(), 0xFFE8E0D4.toInt(), 0xFFEDE6DA.toInt(), true
-    ),
-    BackgroundModeOption(
-        "cream", "Cream", "light",
-        0xFFFFF8F0.toInt(), 0xFFFFFFFB.toInt(), 0xFFF0E6D8.toInt(), 0xFFF5EDE3.toInt(), true
-    ),
-    BackgroundModeOption(
-        "mist", "Mist", "light",
-        0xFFF0F4F8.toInt(), 0xFFFFFFFF.toInt(), 0xFFDCE4EC.toInt(), 0xFFE4EBF2.toInt(), true
-    ),
-    BackgroundModeOption(
-        "sage_bg", "Sage", "light",
-        0xFFF0F5F1.toInt(), 0xFFFAFDFB.toInt(), 0xFFDCE8DE.toInt(), 0xFFE6F0E8.toInt(), true
-    ),
-    BackgroundModeOption(
-        "blush_bg", "Blush", "light",
-        0xFFFDF2F4.toInt(), 0xFFFFF8F9.toInt(), 0xFFF5E0E6.toInt(), 0xFFF8E8ED.toInt(), true
-    ),
-    BackgroundModeOption(
-        "lavender_bg", "Lavender", "light",
-        0xFFF5F3FA.toInt(), 0xFFFCFBFE.toInt(), 0xFFE6E0F0.toInt(), 0xFFEDE8F5.toInt(), true
-    ),
-    BackgroundModeOption(
-        "sky_bg", "Sky", "light",
-        0xFFEFF6FB.toInt(), 0xFFF8FCFF.toInt(), 0xFFD6E8F5.toInt(), 0xFFE2F0F8.toInt(), true
+        "light", "Latte", "light",
+        0xFFEFF1F5.toInt(), 0xFFFFFFFF.toInt(), 0xFFCCD0DA.toInt(), 0xFFE6E9EF.toInt(), true
     )
 )
 
-/** Resolve stored [AppData.backgroundMode] id → palette. Unknown ids fall back to slate dark. */
-fun backgroundModeOption(modeId: String): BackgroundModeOption =
-    backgroundModes().firstOrNull { it.id == modeId }
+/** Dual swatch packs: one tap sets background + matching accent (Settings compact view). */
+data class ThemePack(
+    val id: String,
+    val label: String,
+    val backgroundId: String,
+    val accentId: String,
+    val blurb: String = ""
+)
+
+fun themePacks(): List<ThemePack> = listOf(
+    ThemePack("pack_nord", "Nord", "dark", "nord", "Arctic frost"),
+    ThemePack("pack_catppuccin", "Catppuccin", "catppuccin", "mauve", "Mocha mauve"),
+    ThemePack("pack_tokyo", "Tokyo Night", "tokyonight", "tokyonight", "Neon city"),
+    ThemePack("pack_gruvbox", "Gruvbox", "gruvbox", "gruvbox", "Warm retro"),
+    ThemePack("pack_dracula", "Dracula", "dracula", "dracula", "Vampire purple"),
+    ThemePack("pack_rosepine", "Rosé Pine", "rosepine", "rosepine", "Soft rose"),
+    ThemePack("pack_everforest", "Everforest", "everforest", "everforest", "Calm greens"),
+    ThemePack("pack_onedark", "One Dark", "onedark", "onedark", "Atom classic"),
+    ThemePack("pack_oled", "OLED + Green", "amoled", "default", "True black"),
+    ThemePack("pack_latte", "Catppuccin Latte", "light", "teal", "Soft light")
+)
+
+/** Resolve stored [AppData.backgroundMode] id → palette. Unknown / legacy ids alias to rice sets. */
+fun backgroundModeOption(modeId: String): BackgroundModeOption {
+    val id = when (modeId) {
+        "charcoal", "graphite" -> "onedark"
+        "midnight", "navy", "ocean" -> "tokyonight"
+        "forest" -> "everforest"
+        "plum", "dusk" -> "rosepine"
+        "wine", "ember", "mocha" -> "gruvbox"
+        "aurora" -> "catppuccin"
+        "paper", "cream", "mist", "sage_bg", "blush_bg", "lavender_bg", "sky_bg" -> "light"
+        else -> modeId
+    }
+    return backgroundModes().firstOrNull { it.id == id }
         ?: backgroundModes().first { it.id == "dark" }
+}
 
 /**
- * Full accent catalog. Keep [accentColorArgb] in sync via this list.
- * Feminine options: soft pinks, rose, lavender, berry, peach, etc.
+ * Compact rice-inspired accent catalog (~10 presets). Legacy ids alias in [accentColorArgb].
  */
 fun accentSchemes(): List<AccentSchemeOption> = listOf(
-    // Classic
-    AccentSchemeOption("default", "Green", 0xFF22C55E.toInt(), "classic"),
-    AccentSchemeOption("blue", "Blue", 0xFF3B82F6.toInt(), "classic"),
-    AccentSchemeOption("teal", "Teal", 0xFF14B8A6.toInt(), "classic"),
-    AccentSchemeOption("slate", "Slate", 0xFF64748B.toInt(), "classic"),
-    AccentSchemeOption("purple", "Purple", 0xFF8B5CF6.toInt(), "classic"),
-    AccentSchemeOption("orange", "Orange", 0xFFF97316.toInt(), "classic"),
-    AccentSchemeOption("red", "Red", 0xFFEF4444.toInt(), "classic"),
-    AccentSchemeOption("indigo", "Indigo", 0xFF6366F1.toInt(), "classic"),
-    AccentSchemeOption("cyan", "Cyan", 0xFF06B6D4.toInt(), "classic"),
-    // Feminine / soft
-    AccentSchemeOption("rose", "Rose", 0xFFF43F5E.toInt(), "feminine"),
-    AccentSchemeOption("blush", "Blush", 0xFFF9A8D4.toInt(), "feminine"),
-    AccentSchemeOption("pink", "Pink", 0xFFEC4899.toInt(), "feminine"),
-    AccentSchemeOption("coral", "Coral", 0xFFFB7185.toInt(), "feminine"),
-    AccentSchemeOption("peach", "Peach", 0xFFFDBA74.toInt(), "feminine"),
-    AccentSchemeOption("lavender", "Lavender", 0xFFC4B5FD.toInt(), "feminine"),
-    AccentSchemeOption("lilac", "Lilac", 0xFFA78BFA.toInt(), "feminine"),
-    AccentSchemeOption("berry", "Berry", 0xFFBE185D.toInt(), "feminine"),
-    AccentSchemeOption("fuchsia", "Fuchsia", 0xFFD946EF.toInt(), "feminine"),
-    AccentSchemeOption("mauve", "Mauve", 0xFFC084A3.toInt(), "feminine"),
-    AccentSchemeOption("champagne", "Champagne", 0xFFE8C4A0.toInt(), "feminine"),
-    // Bold / extra
-    AccentSchemeOption("amber", "Amber", 0xFFF59E0B.toInt(), "bold"),
-    AccentSchemeOption("lime", "Lime", 0xFF84CC16.toInt(), "bold"),
-    AccentSchemeOption("emerald", "Emerald", 0xFF10B981.toInt(), "bold"),
-    AccentSchemeOption("sky", "Sky", 0xFF38BDF8.toInt(), "bold"),
-    AccentSchemeOption("violet", "Violet", 0xFF7C3AED.toInt(), "bold")
+    AccentSchemeOption("default", "Green", 0xFFA6E3A1.toInt(), "rice"),       // catppuccin green
+    AccentSchemeOption("nord", "Nord frost", 0xFF88C0D0.toInt(), "rice"),
+    AccentSchemeOption("tokyonight", "Tokyo blue", 0xFF7AA2F7.toInt(), "rice"),
+    AccentSchemeOption("gruvbox", "Gruvbox", 0xFFFE8019.toInt(), "rice"),
+    AccentSchemeOption("dracula", "Dracula", 0xFFBD93F9.toInt(), "rice"),
+    AccentSchemeOption("mauve", "Mauve", 0xFFCBA6F7.toInt(), "rice"),          // catppuccin
+    AccentSchemeOption("rosepine", "Rosé", 0xFFEBBCBA.toInt(), "rice"),
+    AccentSchemeOption("everforest", "Everforest", 0xFFA7C080.toInt(), "rice"),
+    AccentSchemeOption("onedark", "One Dark", 0xFF61AFEF.toInt(), "rice"),
+    AccentSchemeOption("teal", "Teal", 0xFF94E2D5.toInt(), "rice")             // catppuccin teal
 )
 
 /**
@@ -1785,16 +1748,26 @@ fun accentSchemes(): List<AccentSchemeOption> = listOf(
  * Unknown ids fall back to green.
  */
 fun accentColorArgb(schemeId: String): Int {
-    val id = schemeId.trim()
-    if (id.startsWith("custom:", ignoreCase = true)) {
-        return parseCustomAccentHex(id.removePrefix("custom:").removePrefix("CUSTOM:"))
-            ?: 0xFF22C55E.toInt()
+    val raw = schemeId.trim()
+    if (raw.startsWith("custom:", ignoreCase = true)) {
+        return parseCustomAccentHex(raw.removePrefix("custom:").removePrefix("CUSTOM:"))
+            ?: 0xFFA6E3A1.toInt()
     }
-    if (id.startsWith("custom_", ignoreCase = true)) {
-        return parseCustomAccentHex(id.removePrefix("custom_").removePrefix("CUSTOM_"))
-            ?: 0xFF22C55E.toInt()
+    if (raw.startsWith("custom_", ignoreCase = true)) {
+        return parseCustomAccentHex(raw.removePrefix("custom_").removePrefix("CUSTOM_"))
+            ?: 0xFFA6E3A1.toInt()
     }
-    return accentSchemes().firstOrNull { it.id == id }?.colorArgb ?: 0xFF22C55E.toInt()
+    val id = when (raw) {
+        "blue", "sky", "indigo", "cyan" -> "tokyonight"
+        "purple", "violet", "lilac", "lavender" -> "mauve"
+        "orange", "amber", "peach" -> "gruvbox"
+        "red", "rose", "berry", "coral", "pink", "fuchsia" -> "rosepine"
+        "slate" -> "nord"
+        "lime", "emerald" -> "everforest"
+        "blush", "champagne", "mauve_old" -> "rosepine"
+        else -> raw
+    }
+    return accentSchemes().firstOrNull { it.id == id }?.colorArgb ?: 0xFFA6E3A1.toInt()
 }
 
 /** Build a stable custom scheme id from an ARGB color (always stores RGB hex). */

@@ -64,6 +64,8 @@ import com.steady.habittracker.data.SleepAudioPrefs
 import com.steady.habittracker.data.withSleepAudioPrefs
 import com.steady.habittracker.data.withLocalWebPrefs
 import com.steady.habittracker.data.withPomodoroPrefs
+import com.steady.habittracker.data.CapturePrefs
+import com.steady.habittracker.data.withCapturePrefs
 import com.steady.habittracker.sensors.AutoLogEngine
 import com.steady.habittracker.sensors.AutoLogWorker
 import com.steady.habittracker.sleepaudio.SleepAudioScheduler
@@ -322,6 +324,13 @@ class SteadyViewModel(
         viewModelScope.launch {
             val current = appData.value
             repository.saveData(current.withPomodoroPrefs(prefs))
+        }
+    }
+
+    fun updateCapturePrefs(prefs: CapturePrefs) {
+        viewModelScope.launch {
+            val current = appData.value
+            repository.saveData(current.withCapturePrefs(prefs))
         }
     }
 

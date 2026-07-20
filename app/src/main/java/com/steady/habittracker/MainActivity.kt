@@ -791,6 +791,7 @@ fun SteadyApp(
                         },
                         onAddExtensionBlock = { type, gid -> viewModel.addExtensionBlock(type, gid) },
                         onUpdateLocalWebPrefs = viewModel::updateLocalWebPrefs,
+                        onUpdateCapturePrefs = viewModel::updateCapturePrefs,
                         onDeleteHabit = viewModel::deleteHabit,
                         onSetReminder = viewModel::setReminder,
                         onToggleReminder = viewModel::toggleReminder,
@@ -908,168 +909,161 @@ fun SteadyApp(
                     )
                     Spacer(Modifier.height(16.dp))
                     Text(
-                        "Background",
+                        "Theme packs",
                         fontWeight = FontWeight.SemiBold,
                         color = MaterialTheme.colorScheme.onSurface,
                         fontSize = 13.sp
                     )
-                    Spacer(Modifier.height(6.dp))
-                    val bgModes = com.steady.habittracker.data.backgroundModes()
-                    val bgFamilyLabels = mapOf(
-                        "dark" to "Dark neutrals",
-                        "tinted" to "Tinted dark",
-                        "light" to "Light"
+                    Text(
+                        "Popular Linux rice palettes — one tap sets background + accent.",
+                        fontSize = 11.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
-                    listOf("dark", "tinted", "light").forEach { family ->
-                        val familyModes = bgModes.filter { it.family == family }
-                        if (familyModes.isEmpty()) return@forEach
-                        Text(
-                            bgFamilyLabels[family] ?: family,
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Medium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(bottom = 6.dp, top = 4.dp)
-                        )
-                        familyModes.chunked(4).forEach { row ->
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                row.forEach { opt ->
-                                    val isSel = appData.backgroundMode == opt.id
-                                    val swatchBg = Color(opt.backgroundArgb)
-                                    val labelColor = if (opt.isLight) Color(0xFF0F172A) else Color.White
-                                    Column(
-                                        horizontalAlignment = Alignment.CenterHorizontally,
-                                        modifier = Modifier.weight(1f)
+                    Spacer(Modifier.height(8.dp))
+                    val packs = com.steady.habittracker.data.themePacks()
+                    packs.chunked(2).forEach { row ->
+                        Row(
+                            Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            row.forEach { pack ->
+                                val bg = com.steady.habittracker.data.backgroundModeOption(pack.backgroundId)
+                                val accent = Color(com.steady.habittracker.data.accentColorArgb(pack.accentId))
+                                val selected = appData.backgroundMode == pack.backgroundId &&
+                                    (appData.colorScheme == pack.accentId ||
+                                        (!com.steady.habittracker.data.isCustomAccentScheme(appData.colorScheme) &&
+                                            com.steady.habittracker.data.accentColorArgb(appData.colorScheme) ==
+                                            com.steady.habittracker.data.accentColorArgb(pack.accentId)))
+                                Column(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .clip(RoundedCornerShape(12.dp))
+                                        .background(Color(bg.surfaceArgb))
+                                        .border(
+                                            if (selected) BorderStroke(2.dp, accent)
+                                            else BorderStroke(1.dp, Color.White.copy(alpha = 0.08f)),
+                                            RoundedCornerShape(12.dp)
+                                        )
+                                        .clickable {
+                                            viewModel.setBackgroundMode(pack.backgroundId)
+                                            viewModel.setColorScheme(pack.accentId)
+                                        }
+                                        .padding(10.dp)
+                                ) {
+                                    Row(
+                                        Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                        verticalAlignment = Alignment.CenterVertically
                                     ) {
                                         Box(
-                                            modifier = Modifier
-                                                .fillMaxWidth()
-                                                .height(44.dp)
-                                                .clip(RoundedCornerShape(8.dp))
-                                                .background(swatchBg)
-                                                .border(
-                                                    if (isSel) BorderStroke(2.dp, MaterialTheme.colorScheme.primary)
-                                                    else BorderStroke(1.dp, Color.Gray.copy(alpha = 0.4f)),
-                                                    RoundedCornerShape(8.dp)
-                                                )
-                                                .clickable { viewModel.setBackgroundMode(opt.id) },
-                                            contentAlignment = Alignment.Center
-                                        ) {
-                                            if (isSel) {
-                                                Icon(
-                                                    Icons.Default.Check,
-                                                    contentDescription = "${opt.label} selected",
-                                                    tint = labelColor,
-                                                    modifier = Modifier.size(16.dp)
-                                                )
-                                            }
-                                        }
-                                        Text(
-                                            opt.label,
-                                            color = if (isSel) MaterialTheme.colorScheme.primary
-                                            else MaterialTheme.colorScheme.onSurfaceVariant,
-                                            fontSize = 9.sp,
-                                            fontWeight = if (isSel) FontWeight.Bold else FontWeight.Normal,
-                                            modifier = Modifier.padding(top = 2.dp),
-                                            maxLines = 1
+                                            Modifier
+                                                .weight(1f)
+                                                .height(28.dp)
+                                                .clip(RoundedCornerShape(6.dp))
+                                                .background(Color(bg.backgroundArgb))
+                                        )
+                                        Box(
+                                            Modifier
+                                                .size(28.dp)
+                                                .clip(CircleShape)
+                                                .background(accent)
                                         )
                                     }
-                                }
-                                repeat(4 - row.size) {
-                                    Spacer(Modifier.weight(1f))
+                                    Spacer(Modifier.height(6.dp))
+                                    Text(
+                                        pack.label,
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = if (bg.isLight) Color(0xFF0F172A) else Color(0xFFE2E8F0)
+                                    )
+                                    Text(
+                                        pack.blurb,
+                                        fontSize = 10.sp,
+                                        color = if (bg.isLight) Color(0xFF64748B) else Color(0xFF94A3B8),
+                                        maxLines = 1
+                                    )
                                 }
                             }
-                            Spacer(Modifier.height(6.dp))
+                            if (row.size == 1) Spacer(Modifier.weight(1f))
+                        }
+                        Spacer(Modifier.height(8.dp))
+                    }
+
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        "Accent only",
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        fontSize = 12.sp
+                    )
+                    Spacer(Modifier.height(6.dp))
+                    val schemes = com.steady.habittracker.data.accentSchemes()
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        schemes.take(5).forEach { opt ->
+                            val isSel = appData.colorScheme == opt.id
+                            Box(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(36.dp)
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .background(Color(opt.colorArgb))
+                                    .border(
+                                        if (isSel) BorderStroke(2.dp, Color.White)
+                                        else BorderStroke(0.dp, Color.Transparent),
+                                        RoundedCornerShape(10.dp)
+                                    )
+                                    .clickable { viewModel.setColorScheme(opt.id) },
+                                contentAlignment = Alignment.Center
+                            ) {
+                                if (isSel) {
+                                    Icon(Icons.Default.Check, null, tint = Color.White, modifier = Modifier.size(16.dp))
+                                }
+                            }
+                        }
+                    }
+                    Spacer(Modifier.height(6.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        schemes.drop(5).forEach { opt ->
+                            val isSel = appData.colorScheme == opt.id
+                            Box(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(36.dp)
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .background(Color(opt.colorArgb))
+                                    .border(
+                                        if (isSel) BorderStroke(2.dp, Color.White)
+                                        else BorderStroke(0.dp, Color.Transparent),
+                                        RoundedCornerShape(10.dp)
+                                    )
+                                    .clickable { viewModel.setColorScheme(opt.id) },
+                                contentAlignment = Alignment.Center
+                            ) {
+                                if (isSel) {
+                                    Icon(Icons.Default.Check, null, tint = Color.White, modifier = Modifier.size(16.dp))
+                                }
+                            }
+                        }
+                        repeat((5 - schemes.drop(5).size).coerceAtLeast(0)) {
+                            Spacer(Modifier.weight(1f))
                         }
                     }
 
-                    Spacer(Modifier.height(16.dp))
-                    Text("Accent Color (foreground / highlights)", fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurface, fontSize = 13.sp)
-                    Spacer(Modifier.height(6.dp))
-
+                    Spacer(Modifier.height(12.dp))
                     AccentHuePicker(
                         currentSchemeId = appData.colorScheme,
                         currentArgb = com.steady.habittracker.data.accentColorArgb(appData.colorScheme),
                         onCustomColor = { viewModel.setColorScheme(it) }
                     )
+
                     Spacer(Modifier.height(12.dp))
-                    Text("Presets", fontSize = 11.sp, fontWeight = FontWeight.Medium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-
-                    val schemes = com.steady.habittracker.data.accentSchemes()
-                    val familyLabels = mapOf(
-                        "classic" to "Classic",
-                        "feminine" to "Soft & feminine",
-                        "bold" to "Bold extras"
-                    )
-                    Column {
-                        listOf("classic", "feminine", "bold").forEach { family ->
-                            val familySchemes = schemes.filter { it.family == family }
-                            if (familySchemes.isEmpty()) return@forEach
-                            Text(
-                                familyLabels[family] ?: family,
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.Medium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.padding(bottom = 6.dp, top = 4.dp)
-                            )
-                            familySchemes.chunked(4).forEach { row ->
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.spacedBy(10.dp)
-                                ) {
-                                    row.forEach { opt ->
-                                        val key = opt.id
-                                        val label = opt.label
-                                        val col = Color(opt.colorArgb)
-                                        val isSel = appData.colorScheme == key
-                                        Column(
-                                            horizontalAlignment = Alignment.CenterHorizontally,
-                                            modifier = Modifier.weight(1f)
-                                        ) {
-                                            Box(
-                                                modifier = Modifier
-                                                    .size(42.dp)
-                                                    .clip(CircleShape)
-                                                    .background(col)
-                                                    .border(
-                                                        if (isSel) BorderStroke(3.dp, MaterialTheme.colorScheme.primary)
-                                                        else BorderStroke(1.dp, Color(0x33FFFFFF)),
-                                                        CircleShape
-                                                    )
-                                                    .clickable { viewModel.setColorScheme(key) },
-                                                contentAlignment = Alignment.Center
-                                            ) {
-                                                if (isSel) {
-                                                    Icon(
-                                                        Icons.Default.Check,
-                                                        null,
-                                                        tint = Color.White,
-                                                        modifier = Modifier.size(18.dp)
-                                                    )
-                                                }
-                                            }
-                                            Text(
-                                                label,
-                                                fontSize = 9.sp,
-                                                color = if (isSel) MaterialTheme.colorScheme.primary
-                                                else MaterialTheme.colorScheme.onSurfaceVariant,
-                                                modifier = Modifier.padding(top = 2.dp)
-                                            )
-                                        }
-                                    }
-                                    repeat(4 - row.size) {
-                                        Spacer(Modifier.weight(1f))
-                                    }
-                                }
-                                Spacer(Modifier.height(8.dp))
-                            }
-                        }
-                    }
-
-                    Spacer(Modifier.height(8.dp))
-                    Text("Live Preview (with current bg + accent)", fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurface, fontSize = 12.sp)
+                    Text("Live Preview", fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurface, fontSize = 12.sp)
                     // Mini preview card simulating UI elements
                     Card(
                         modifier = Modifier.fillMaxWidth(),

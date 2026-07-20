@@ -110,9 +110,9 @@ Four focused sub-tabs:
 - Fully local — no cloud
 
 ### Appearance
-- Background: Dark · AMOLED · Light
-- Accent: Green · Blue · Orange · Purple · Slate · Teal · Red
-- Guided tour + welcome guide anytime from **Settings** (header info button removed)
+- **Theme packs** inspired by Linux rice palettes: Nord, Catppuccin, Tokyo Night, Gruvbox, Dracula, Rosé Pine, Everforest, One Dark, OLED, Latte
+- Compact accent swatches + custom HSV accent
+- Guided tour + welcome guide from **Settings**
 
 ---
 

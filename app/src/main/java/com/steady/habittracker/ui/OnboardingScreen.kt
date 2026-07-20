@@ -1035,16 +1035,7 @@ private fun ThemeStep(
 ) {
     val schemes = remember { accentSchemes() }
     val backgrounds = remember { backgroundModes() }
-    val accentFamilyLabels = mapOf(
-        "classic" to "Classic",
-        "feminine" to "Soft & feminine",
-        "bold" to "Bold extras"
-    )
-    val bgFamilyLabels = mapOf(
-        "dark" to "Dark neutrals",
-        "tinted" to "Tinted dark",
-        "light" to "Light"
-    )
+    val packs = remember { com.steady.habittracker.data.themePacks() }
     val bgOpt = backgroundModeOption(selectedBackground)
     val previewBg = Color(bgOpt.backgroundArgb)
     val previewSurface = Color(bgOpt.surfaceArgb)
@@ -1060,7 +1051,7 @@ private fun ThemeStep(
         )
         Spacer(Modifier.height(4.dp))
         Text(
-            "Background and accent color. Change anytime in Settings.",
+            "Linux rice-inspired packs. Change anytime in Settings.",
             fontSize = 13.sp,
             color = muted
         )
@@ -1101,7 +1092,7 @@ private fun ThemeStep(
                     Spacer(Modifier.width(10.dp))
                     Column(Modifier.weight(1f)) {
                         Text(
-                            backgrounds.firstOrNull { it.id == selectedBackground }?.label ?: "Slate",
+                            backgrounds.firstOrNull { it.id == selectedBackground }?.label ?: "Nord",
                             color = previewOn,
                             fontWeight = FontWeight.SemiBold,
                             fontSize = 13.sp
@@ -1116,139 +1107,104 @@ private fun ThemeStep(
             }
 
             Spacer(Modifier.height(18.dp))
-            Text("Background", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = body)
+            Text("Theme packs", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = body)
             Spacer(Modifier.height(8.dp))
 
-            listOf("dark", "tinted", "light").forEach { family ->
-                val familyModes = backgrounds.filter { it.family == family }
-                if (familyModes.isEmpty()) return@forEach
-                Text(
-                    bgFamilyLabels[family] ?: family,
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    color = muted
-                )
-                Spacer(Modifier.height(6.dp))
-                familyModes.chunked(4).forEach { row ->
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        row.forEach { opt ->
-                            val isSel = selectedBackground == opt.id
-                            val swatch = Color(opt.backgroundArgb)
-                            val checkTint = if (opt.isLight) Color(0xFF0F172A) else Color.White
-                            Column(
-                                horizontalAlignment = Alignment.CenterHorizontally,
-                                modifier = Modifier.weight(1f)
-                            ) {
-                                Box(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .height(44.dp)
-                                        .clip(RoundedCornerShape(10.dp))
-                                        .background(swatch)
-                                        .border(
-                                            if (isSel) BorderStroke(2.dp, accent)
-                                            else BorderStroke(1.dp, Color(0x33FFFFFF)),
-                                            RoundedCornerShape(10.dp)
-                                        )
-                                        .clickable { onSelectBackground(opt.id) },
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    if (isSel) {
-                                        Icon(
-                                            Icons.Default.Check,
-                                            contentDescription = "${opt.label} selected",
-                                            tint = checkTint,
-                                            modifier = Modifier.size(18.dp)
-                                        )
-                                    }
+            packs.chunked(2).forEach { row ->
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    row.forEach { pack ->
+                        val pBg = backgroundModeOption(pack.backgroundId)
+                        val pAccent = Color(com.steady.habittracker.data.accentColorArgb(pack.accentId))
+                        val isSel = selectedBackground == pack.backgroundId && selectedScheme == pack.accentId
+                        Column(
+                            modifier = Modifier
+                                .weight(1f)
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(Color(pBg.surfaceArgb))
+                                .border(
+                                    if (isSel) BorderStroke(2.dp, pAccent)
+                                    else BorderStroke(1.dp, Color.White.copy(alpha = 0.1f)),
+                                    RoundedCornerShape(12.dp)
+                                )
+                                .clickable {
+                                    onSelectBackground(pack.backgroundId)
+                                    onSelectScheme(pack.accentId)
                                 }
-                                Text(
-                                    opt.label,
-                                    fontSize = 9.sp,
-                                    color = if (isSel) accent else muted,
-                                    fontWeight = if (isSel) FontWeight.SemiBold else FontWeight.Normal,
-                                    modifier = Modifier.padding(top = 3.dp),
-                                    textAlign = TextAlign.Center,
-                                    maxLines = 1
+                                .padding(10.dp)
+                        ) {
+                            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Box(
+                                    Modifier
+                                        .weight(1f)
+                                        .height(24.dp)
+                                        .clip(RoundedCornerShape(6.dp))
+                                        .background(Color(pBg.backgroundArgb))
+                                )
+                                Box(
+                                    Modifier
+                                        .size(24.dp)
+                                        .clip(CircleShape)
+                                        .background(pAccent)
                                 )
                             }
-                        }
-                        repeat(4 - row.size) {
-                            Spacer(Modifier.weight(1f))
+                            Spacer(Modifier.height(6.dp))
+                            Text(
+                                pack.label,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = if (pBg.isLight) Color(0xFF0F172A) else Color(0xFFE2E8F0)
+                            )
                         }
                     }
-                    Spacer(Modifier.height(8.dp))
+                    if (row.size == 1) Spacer(Modifier.weight(1f))
                 }
+                Spacer(Modifier.height(8.dp))
             }
 
             Spacer(Modifier.height(8.dp))
-            Text("Accent color", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = body)
+            Text("Accent only", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = body)
             Spacer(Modifier.height(8.dp))
 
-            listOf("classic", "feminine", "bold").forEach { family ->
-                val familySchemes = schemes.filter { it.family == family }
-                if (familySchemes.isEmpty()) return@forEach
-                Text(
-                    accentFamilyLabels[family] ?: family,
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    color = muted
-                )
-                Spacer(Modifier.height(6.dp))
-                familySchemes.chunked(4).forEach { row ->
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(10.dp)
-                    ) {
-                        row.forEach { opt ->
-                            val col = Color(opt.colorArgb)
-                            val isSel = selectedScheme == opt.id
-                            Column(
-                                horizontalAlignment = Alignment.CenterHorizontally,
-                                modifier = Modifier.weight(1f)
-                            ) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(48.dp)
-                                        .clip(CircleShape)
-                                        .background(col)
-                                        .border(
-                                            if (isSel) BorderStroke(3.dp, Color.White)
-                                            else BorderStroke(1.dp, Color(0x33FFFFFF)),
-                                            CircleShape
-                                        )
-                                        .clickable { onSelectScheme(opt.id) },
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    if (isSel) {
-                                        Icon(
-                                            Icons.Default.Check,
-                                            contentDescription = "${opt.label} selected",
-                                            tint = Color.White,
-                                            modifier = Modifier.size(20.dp)
-                                        )
-                                    }
-                                }
-                                Text(
-                                    opt.label,
-                                    fontSize = 10.sp,
-                                    color = if (isSel) accent else muted,
-                                    fontWeight = if (isSel) FontWeight.SemiBold else FontWeight.Normal,
-                                    modifier = Modifier.padding(top = 4.dp),
-                                    textAlign = TextAlign.Center
+            schemes.chunked(5).forEach { row ->
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    row.forEach { opt ->
+                        val col = Color(opt.colorArgb)
+                        val isSel = selectedScheme == opt.id
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(36.dp)
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(col)
+                                .border(
+                                    if (isSel) BorderStroke(2.dp, Color.White)
+                                    else BorderStroke(0.dp, Color.Transparent),
+                                    RoundedCornerShape(10.dp)
+                                )
+                                .clickable { onSelectScheme(opt.id) },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            if (isSel) {
+                                Icon(
+                                    Icons.Default.Check,
+                                    contentDescription = "${opt.label} selected",
+                                    tint = Color.White,
+                                    modifier = Modifier.size(16.dp)
                                 )
                             }
                         }
-                        repeat(4 - row.size) {
-                            Spacer(Modifier.weight(1f))
-                        }
                     }
-                    Spacer(Modifier.height(10.dp))
+                    repeat(5 - row.size) {
+                        Spacer(Modifier.weight(1f))
+                    }
                 }
-                Spacer(Modifier.height(4.dp))
+                Spacer(Modifier.height(8.dp))
             }
         }
 

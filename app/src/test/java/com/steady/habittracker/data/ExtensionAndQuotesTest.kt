@@ -77,6 +77,10 @@ class ExtensionAndQuotesTest {
         val id = customAccentSchemeId(0xFF3B82F6.toInt())
         assertTrue(isCustomAccentScheme(id))
         assertEquals(0xFF3B82F6.toInt(), accentColorArgb(id))
-        assertEquals(0xFF22C55E.toInt(), accentColorArgb("unknown_preset"))
+        // Unknown presets fall back to Catppuccin green
+        assertEquals(0xFFA6E3A1.toInt(), accentColorArgb("unknown_preset"))
+        assertTrue(themePacks().size >= 8)
+        assertTrue(backgroundModes().size <= 12)
+        assertTrue(accentSchemes().size <= 12)
     }
 }

@@ -193,6 +193,47 @@ object CaptureTags {
     val PRESETS: List<String> = listOf(
         IDEAS, NOTES, REMINDERS, MEMORIES, THOUGHTS, GRATITUDE, DISTRACTIONS, ENERGY
     )
+    /** Short glyph for polished capture chips. */
+    fun glyph(tag: String): String = when (tag) {
+        IDEAS -> "💡"
+        NOTES -> "📝"
+        REMINDERS -> "⏰"
+        MEMORIES -> "✨"
+        THOUGHTS -> "💭"
+        GRATITUDE -> "🙏"
+        DISTRACTIONS -> "🚫"
+        ENERGY -> "⚡"
+        else -> "·"
+    }
+}
+
+/**
+ * Quick Capture configuration (Manage → Blocks / Capture).
+ * Controls dialog tags, defaults, and optional energy scale.
+ */
+@Serializable
+data class CapturePrefs(
+    /** Tags shown in the capture dialog (order preserved). Empty → all presets. */
+    val enabledTags: List<String> = CaptureTags.PRESETS,
+    /** Pre-selected when the dialog opens. */
+    val defaultTags: List<String> = listOf(CaptureTags.IDEAS),
+    /** User-defined extra tags (merged into the chip list). */
+    val customTags: List<String> = emptyList(),
+    val showNoteField: Boolean = true,
+    /** Allow selecting more than one tag. */
+    val multiTag: Boolean = true,
+    /** Optional 1–5 energy/mood scale in the dialog. */
+    val showEnergyScale: Boolean = false,
+    val placeholderTitle: String = "What's on your mind?",
+    val placeholderNote: String = "Optional details…",
+    /** Confirm button label. */
+    val saveLabel: String = "Save"
+) {
+    fun visibleTags(): List<String> {
+        val base = if (enabledTags.isEmpty()) CaptureTags.PRESETS else enabledTags
+        val custom = customTags.map { it.trim() }.filter { it.isNotEmpty() }
+        return (base + custom).distinct()
+    }
 }
 
 /** Pending or last sensor proposal for a habit on a date. */
@@ -648,6 +689,8 @@ data class AppData(
     val schedules: List<Schedule> = emptyList(),
     val activeScheduleId: String? = null,
     val captures: List<CaptureItem> = emptyList(),  // #8 quick capture inbox support
+    /** Quick Capture dialog configuration (Manage). */
+    val capturePrefs: CapturePrefs = CapturePrefs(),
     /** Master switch for all habit reminders (Settings). When false, no alarms are scheduled. */
     val remindersMasterEnabled: Boolean = true,
     /** Category tags for History (Supplements, Movement, …). */
@@ -807,6 +850,7 @@ fun AppData.withAddedCapture(capture: CaptureItem): AppData = copy(captures = ca
 fun AppData.withUpdatedCapture(updated: CaptureItem): AppData =
     copy(captures = captures.map { if (it.id == updated.id) updated else it })
 fun AppData.withoutCapture(id: String): AppData = copy(captures = captures.filter { it.id != id })
+fun AppData.withCapturePrefs(prefs: CapturePrefs): AppData = copy(capturePrefs = prefs)
 
 // Exercise routine helpers (#21)
 fun AppData.withAddedRoutine(routine: ExerciseRoutine): AppData = copy(routines = routines + routine)

@@ -80,6 +80,7 @@ fun ManageScreen(
     ) -> Unit,
     onAddExtensionBlock: (com.steady.habittracker.data.ExtensionType, String?) -> Unit = { _, _ -> },
     onUpdateLocalWebPrefs: (com.steady.habittracker.data.LocalWebPrefs) -> Unit = {},
+    onUpdateCapturePrefs: (com.steady.habittracker.data.CapturePrefs) -> Unit = {},
     onDeleteHabit: (String) -> Unit,  // now archives
     onSetReminder: (Reminder) -> Unit,
     onToggleReminder: (String) -> Unit,
@@ -754,7 +755,8 @@ fun ManageScreen(
                     onAddExtension = onAddExtensionBlock,
                     onEditHabit = { showEditHabit = it },
                     onUpdateLocalWebPrefs = onUpdateLocalWebPrefs,
-                    onUpdateNotificationPrefs = onUpdateNotificationPrefs
+                    onUpdateNotificationPrefs = onUpdateNotificationPrefs,
+                    onUpdateCapturePrefs = onUpdateCapturePrefs
                 )
             }
 
@@ -1876,13 +1878,202 @@ private fun AddHabitWithTypeDialogLocal(
 }
 
 @Composable
+private fun CapturePrefsCard(
+    prefs: com.steady.habittracker.data.CapturePrefs,
+    onUpdate: (com.steady.habittracker.data.CapturePrefs) -> Unit
+) {
+    var customInput by remember { mutableStateOf("") }
+    val enabled = prefs.enabledTags.ifEmpty { com.steady.habittracker.data.CaptureTags.PRESETS }.toSet()
+    val defaults = prefs.defaultTags.toSet()
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        shape = RoundedCornerShape(12.dp)
+    ) {
+        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(
+                "Quick Capture",
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.primary,
+                fontSize = 14.sp
+            )
+            Text(
+                "Configure the Today capture sheet: tags, defaults, note field, energy scale.",
+                fontSize = 11.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text("Show note field", fontSize = 13.sp)
+                    Text("Extra details under the title", fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                Switch(
+                    checked = prefs.showNoteField,
+                    onCheckedChange = { onUpdate(prefs.copy(showNoteField = it)) }
+                )
+            }
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text("Multi-tag", fontSize = 13.sp)
+                    Text("Select several tags at once", fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                Switch(
+                    checked = prefs.multiTag,
+                    onCheckedChange = { onUpdate(prefs.copy(multiTag = it)) }
+                )
+            }
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text("Energy scale", fontSize = 13.sp)
+                    Text("1–5 check-in on capture", fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                Switch(
+                    checked = prefs.showEnergyScale,
+                    onCheckedChange = { onUpdate(prefs.copy(showEnergyScale = it)) }
+                )
+            }
+
+            Text("Visible tags", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+            Text("Tap to show/hide · long-press sets default", fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            com.steady.habittracker.data.CaptureTags.PRESETS.chunked(2).forEach { row ->
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth()) {
+                    row.forEach { tag ->
+                        val isOn = tag in enabled
+                        val isDefault = tag in defaults
+                        FilterChip(
+                            selected = isOn,
+                            onClick = {
+                                val nextEnabled = if (isOn) {
+                                    (enabled - tag).toList().ifEmpty { listOf(tag) }
+                                } else {
+                                    (enabled + tag).toList()
+                                }
+                                val nextDefaults = defaults.filter { it in nextEnabled.toSet() }
+                                    .ifEmpty { listOf(nextEnabled.first()) }
+                                onUpdate(
+                                    prefs.copy(
+                                        enabledTags = nextEnabled,
+                                        defaultTags = nextDefaults
+                                    )
+                                )
+                            },
+                            label = {
+                                Text(
+                                    buildString {
+                                        append(com.steady.habittracker.data.CaptureTags.glyph(tag))
+                                        append(' ')
+                                        append(tag)
+                                        if (isDefault) append(" ★")
+                                    },
+                                    fontSize = 11.sp
+                                )
+                            },
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                    if (row.size == 1) Spacer(Modifier.weight(1f))
+                }
+            }
+            // Default tags row
+            Text("Default tag(s)", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth()) {
+                enabled.forEach { tag ->
+                    FilterChip(
+                        selected = tag in defaults,
+                        onClick = {
+                            val next = if (prefs.multiTag) {
+                                if (tag in defaults) (defaults - tag).ifEmpty { setOf(tag) }
+                                else defaults + tag
+                            } else {
+                                setOf(tag)
+                            }
+                            onUpdate(prefs.copy(defaultTags = next.toList()))
+                        },
+                        label = { Text(tag, fontSize = 11.sp) }
+                    )
+                }
+            }
+
+            Text("Custom tags", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+            Row(
+                Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                OutlinedTextField(
+                    value = customInput,
+                    onValueChange = { customInput = it },
+                    label = { Text("Add tag") },
+                    singleLine = true,
+                    modifier = Modifier.weight(1f)
+                )
+                TextButton(
+                    onClick = {
+                        val t = customInput.trim()
+                        if (t.isNotEmpty() && t !in prefs.customTags) {
+                            onUpdate(prefs.copy(customTags = prefs.customTags + t))
+                            customInput = ""
+                        }
+                    }
+                ) { Text("Add") }
+            }
+            if (prefs.customTags.isNotEmpty()) {
+                prefs.customTags.forEach { tag ->
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(tag, modifier = Modifier.weight(1f), fontSize = 13.sp)
+                        TextButton(onClick = {
+                            onUpdate(prefs.copy(customTags = prefs.customTags.filter { it != tag }))
+                        }) {
+                            Text("Remove", color = MaterialTheme.colorScheme.error, fontSize = 11.sp)
+                        }
+                    }
+                }
+            }
+
+            OutlinedTextField(
+                value = prefs.placeholderTitle,
+                onValueChange = { onUpdate(prefs.copy(placeholderTitle = it.take(80))) },
+                label = { Text("Title placeholder") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth()
+            )
+            OutlinedTextField(
+                value = prefs.saveLabel,
+                onValueChange = { onUpdate(prefs.copy(saveLabel = it.take(24).ifBlank { "Save" })) },
+                label = { Text("Save button label") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth()
+            )
+        }
+    }
+}
+
+@Composable
 private fun BlocksConfigSection(
     appData: AppData,
     groups: List<Group>,
     onAddExtension: (com.steady.habittracker.data.ExtensionType, String?) -> Unit,
     onEditHabit: (Habit) -> Unit,
     onUpdateLocalWebPrefs: (com.steady.habittracker.data.LocalWebPrefs) -> Unit,
-    onUpdateNotificationPrefs: (NotificationPrefs) -> Unit
+    onUpdateNotificationPrefs: (NotificationPrefs) -> Unit,
+    onUpdateCapturePrefs: (com.steady.habittracker.data.CapturePrefs) -> Unit = {}
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
     val activeBlocks = remember(appData.habits) {
@@ -1957,6 +2148,12 @@ private fun BlocksConfigSection(
                     }
                 }
             }
+        }
+        item {
+            CapturePrefsCard(
+                prefs = appData.capturePrefs,
+                onUpdate = onUpdateCapturePrefs
+            )
         }
         item {
             Card(

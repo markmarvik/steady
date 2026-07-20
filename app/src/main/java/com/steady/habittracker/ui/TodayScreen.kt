@@ -112,6 +112,7 @@ fun TodayScreen(
 
     if (showCaptureDialog) {
         CaptureDialog(
+            prefs = appData.capturePrefs,
             onDismiss = { showCaptureDialog = false },
             onCapture = { title, note, tags ->
                 onQuickCapture(title, note, tags)
@@ -229,21 +230,47 @@ fun TodayScreen(
     }
 
     Column(modifier = Modifier.fillMaxSize()) {
-        Row(modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp), horizontalArrangement = Arrangement.End) {
-            TextButton(onClick = { showCaptureDialog = true }) {
-                Text("+ Capture", color = colors.primary, fontSize = 12.sp)
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(bottom = 10.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Spacer(Modifier.weight(1f))
+            // Compact pill actions
+            Surface(
+                onClick = { showCaptureDialog = true },
+                shape = RoundedCornerShape(20.dp),
+                color = colors.primary.copy(alpha = 0.14f)
+            ) {
+                Row(
+                    Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Text("✦", fontSize = 12.sp, color = colors.primary)
+                    Text(
+                        if (pendingCaptures.isEmpty()) "Capture"
+                        else "Capture · ${pendingCaptures.size}",
+                        color = colors.primary,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
             }
-            if (pendingCaptures.isNotEmpty()) {
+            Surface(
+                onClick = { showMetricDialog = true },
+                shape = RoundedCornerShape(20.dp),
+                color = colors.surfaceVariant
+            ) {
                 Text(
-                    " (${pendingCaptures.size} inbox)",
-                    color = colors.onSurfaceVariant,
-                    fontSize = 10.sp,
-                    modifier = Modifier.align(Alignment.CenterVertically)
+                    "Log",
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+                    color = colors.onSurface,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Medium
                 )
-            }
-            Spacer(Modifier.width(4.dp))
-            TextButton(onClick = { showMetricDialog = true }) {
-                Text("+ Log", color = colors.primary, fontSize = 12.sp)
             }
         }
 
@@ -738,76 +765,6 @@ private fun HabitRow(
             }
         }
     }
-}
-
-/** Proper capture dialog for Today +Capture (addresses issue: no input before, no visibility) */
-@Composable
-fun CaptureDialog(
-    onDismiss: () -> Unit,
-    onCapture: (title: String, note: String, tags: List<String>) -> Unit
-) {
-    var title by remember { mutableStateOf("") }
-    var note by remember { mutableStateOf("") }
-    var selectedTags by remember { mutableStateOf(setOf(com.steady.habittracker.data.CaptureTags.IDEAS)) }
-
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        containerColor = MaterialTheme.colorScheme.surface,
-        titleContentColor = MaterialTheme.colorScheme.onSurface,
-        textContentColor = MaterialTheme.colorScheme.onSurface,
-        title = { Text("Quick Capture") },
-        text = {
-            Column {
-                Text(
-                    "Tag ideas, notes, reminders, and check-ins for History.",
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    fontSize = 12.sp
-                )
-                Spacer(Modifier.height(8.dp))
-                // Quick tag presets (#30, #36)
-                com.steady.habittracker.data.CaptureTags.PRESETS.chunked(4).forEach { row ->
-                    Row(
-                        horizontalArrangement = Arrangement.spacedBy(4.dp),
-                        modifier = Modifier.padding(bottom = 4.dp)
-                    ) {
-                        row.forEach { tag ->
-                            FilterChip(
-                                selected = tag in selectedTags,
-                                onClick = {
-                                    selectedTags = if (tag in selectedTags) selectedTags - tag else selectedTags + tag
-                                },
-                                label = { Text(tag, fontSize = 10.sp) }
-                            )
-                        }
-                    }
-                }
-                Spacer(Modifier.height(6.dp))
-                OutlinedTextField(
-                    value = title,
-                    onValueChange = { title = it },
-                    label = { Text("Title / idea") },
-                    modifier = Modifier.fillMaxWidth(),
-                    singleLine = true
-                )
-                Spacer(Modifier.height(6.dp))
-                OutlinedTextField(
-                    value = note,
-                    onValueChange = { note = it },
-                    label = { Text("Note / details (optional)") },
-                    modifier = Modifier.fillMaxWidth(),
-                    minLines = 3
-                )
-            }
-        },
-        confirmButton = {
-            TextButton(onClick = {
-                if (title.isNotBlank()) onCapture(title.trim(), note.trim(), selectedTags.toList())
-            }) { Text("Capture") }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text("Cancel") }
-        }
-    )
 }
 
 /** Searchable metric / habit logger for ad-hoc / sporadic entries (e.g. weight, HRV). Supports date backfill + quick create. */
