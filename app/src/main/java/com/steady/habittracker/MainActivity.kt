@@ -26,7 +26,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.Info
+
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.*
 import androidx.compose.ui.draw.clip
@@ -193,6 +193,11 @@ fun SteadyApp(
     val activity = context as? MainActivity
     val accent = getAccentColor(appData.colorScheme)
 
+    // Keep LAN web server in sync with prefs (#38)
+    LaunchedEffect(appData.localWebPrefs.enabled, appData.localWebPrefs.port, appData.localWebPrefs.pin) {
+        com.steady.habittracker.web.LocalWebServer.setEnabled(context, appData)
+    }
+
     val deepLogState = activity?.deepLinkLogHabit ?: remember { mutableStateOf<String?>(null) }
     val deepGroupState = activity?.deepLinkOpenGroup ?: remember { mutableStateOf<String?>(null) }
     val deepCaptureState = activity?.deepLinkOpenCapture ?: remember { mutableStateOf(false) }
@@ -223,6 +228,41 @@ fun SteadyApp(
     }
     LaunchedEffect(deepMetricLog) {
         if (deepMetricLog) selectedTab = 0
+    }
+
+    // Extension log side-effects: open capture / workout / sleep review (#33)
+    val pendingCapture by viewModel.pendingOpenCapture.collectAsState()
+    val pendingWorkout by viewModel.pendingOpenWorkout.collectAsState()
+    val pendingSleep by viewModel.pendingOpenSleepReview.collectAsState()
+    val extSummary by viewModel.lastExtensionSummary.collectAsState()
+    LaunchedEffect(pendingCapture) {
+        if (pendingCapture) {
+            selectedTab = 0
+            activity?.deepLinkOpenCapture?.value = true
+            viewModel.pendingOpenCapture.value = false
+        }
+    }
+    LaunchedEffect(pendingWorkout) {
+        if (pendingWorkout) {
+            selectedTab = 0
+            // Prefer first active routine if any
+            val rt = appData.routines.firstOrNull { !it.archived }
+            if (rt != null) activeWorkoutRoutine = rt
+            viewModel.pendingOpenWorkout.value = false
+        }
+    }
+    LaunchedEffect(pendingSleep) {
+        if (pendingSleep) {
+            selectedTab = 2
+            openSleepNight = appData.sleepNights.firstOrNull()
+            viewModel.pendingOpenSleepReview.value = false
+        }
+    }
+    LaunchedEffect(extSummary) {
+        if (extSummary.isNotBlank()) {
+            Toast.makeText(context, extSummary.take(120), Toast.LENGTH_LONG).show()
+            viewModel.lastExtensionSummary.value = ""
+        }
     }
 
     // Notification permission (Android 13+)
@@ -527,21 +567,7 @@ fun SteadyApp(
                     IconButton(onClick = { showSettings = true }) {
                         Icon(Icons.Default.Settings, contentDescription = "Settings", tint = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
-                    IconButton(onClick = {
-                        if (showHelpTour) {
-                            showHelpTour = false
-                        } else {
-                            showHelpTour = true
-                            tourStep = 0
-                            selectedTab = 0
-                        }
-                    }) {
-                        Icon(
-                            Icons.Default.Info,
-                            contentDescription = if (showHelpTour) "Close tour" else "Help / Tour",
-                            tint = if (showHelpTour) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
+                    // Info (i) button removed (#31) — tour/help lives in Settings
                 }
             }
 
@@ -762,6 +788,8 @@ fun SteadyApp(
                                 icon = icon
                             )
                         },
+                        onAddExtensionBlock = { type, gid -> viewModel.addExtensionBlock(type, gid) },
+                        onUpdateLocalWebPrefs = viewModel::updateLocalWebPrefs,
                         onDeleteHabit = viewModel::deleteHabit,
                         onSetReminder = viewModel::setReminder,
                         onToggleReminder = viewModel::toggleReminder,
@@ -1102,7 +1130,7 @@ fun SteadyApp(
                             Text("Welcome guide")
                         }
                     }
-                    Text("Guided tour walks the screens. Welcome guide is the first-run summary. Header ? also starts the tour.", fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("Guided tour walks the screens. Welcome guide is the first-run summary.", fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             },
             confirmButton = {

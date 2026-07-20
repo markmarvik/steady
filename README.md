@@ -12,7 +12,28 @@ Native Android app built with **Kotlin** and **Jetpack Compose**. Local-first: n
 
 ## What Steady is for
 
-Steady helps you run a **daily routine** (sleep-anchored morning → focus → wind-down) and stay pointed at **longer-term goals** (Dreamline / Path). Log flexibly, see trends, get gentle reminders when a group starts, and keep a home-screen widget that shows *what to do right now*.
+Steady helps you run a **daily routine** (sleep-anchored morning → focus → wind-down) and stay pointed at **longer-term goals** (Dreamline / Path). Log flexibly, see trends, get gentle reminders when a group starts, and keep a home-screen widget that shows *what to do right now*. Complex capabilities like overnight monitoring are surfaced the same way — as routine blocks you control.
+
+---
+
+## Design Philosophy: Special Habit Blocks & Extensions
+
+**All features in Steady are (or will be) expressed as special habit blocks or extensions** that appear in the Today timeline and home widget. This is the unifying principle that keeps the app simple, cohesive, and true to its routine-centered design.
+
+Instead of separate screens or background-only services, complex capabilities (overnight snoring detection, sensor sessions, timers, etc.) are modeled as schedulable blocks you place in your Daily Planner groups:
+
+- **Evening / Bedtime Routine**: "Activate Snoring Recording" block
+- **Morning Routine**: "Stop Snoring Recording & Review" block
+
+Logging these blocks triggers the underlying rich behavior (start/stop services, analysis, summaries) while still participating fully in streaks, momentum scoring, reminders, widget visibility, and history.
+
+**Benefits**:
+- One mental model for the entire app
+- Today + Widget become the complete daily command center
+- Future features follow the exact same uniform pattern
+- Maximum user control and intentionality (features are explicitly part of *your* routines)
+
+See Manage → **Blocks** to add templates (sensor auto-read, screen usage, snore watch, ESM check-ins, Pomodoro) and architecture issue #33 for the full design.
 
 ---
 
@@ -38,12 +59,13 @@ Steady helps you run a **daily routine** (sleep-anchored morning → focus → w
 - Workout session history
 
 ### Manage
-Three focused sub-tabs:
+Four focused sub-tabs:
 
 | Sub-tab | What it does |
 |--------|----------------|
 | **Habits** | Flat catalog: create, edit, archive habits; **tags** for History; **exercise routines** |
 | **Groups** | Timeline groups (Morning, Focus, Bedtime…); **attach existing habits**, order, move primary |
+| **Blocks** | Special extensions: snore watch, sensor snapshot, screen usage, check-ins, Pomodoro, **local web UI** |
 | **Planner** | Sleep spine + **24h timeline**, **reminders** (aligned to schedule), **backup** export |
 
 ### Momentum (scoring)
@@ -60,23 +82,37 @@ Three focused sub-tabs:
 - **Phone steps** (optional) · **Gadgetbridge / external steps** via broadcast
 - Manage → Planner → Auto-log permissions; edit habit → Auto-log source
 
-### Sleep audio / snore watch
-- Optional overnight **OGG/Opus** (high-efficiency) segments; AMR fallback on older devices
-- Loud-event detection + **possible snore** cadence heuristic (not medical)
-- Retains last 2–7 nights on device; History → tap night → play events/segments
-- Schedule with bed/wake or Start/Stop from Manage → Planner
-- **Only while charging** (default on): skip start / stop if unplugged
+### Sleep audio / snore watch (Special habit block extension)
+- **Implemented as special habit blocks** (see Design Philosophy / #33):
+  - "Activate Snoring Recording" in **Evening / Bedtime**
+  - "Stop & Review Night" in **Morning**
+- Overnight recording, loud-event + snore heuristic detection, OGG/Opus segments, last-N-nights retention, charging gate unchanged
+- Control and status via Today / widget; review nights from History
+- Fully integrated with momentum, streaks, and routine reminders
+
+### Sensor & screen extensions
+- **Sensor Auto-Read** blocks: GPS (one-shot), steps, light/noise/screen snapshots linked to the log
+- **Screen Usage** blocks: daily total + top-app breakdown (usage access)
+- Snapshots stored locally and included in backup
 
 ### Widget & notifications
 - Home-screen widget: current group, missed items, what’s next
 - Exact alarms for group / daily-review reminders (reschedule on boot)
 - **Smart & gentle**: adaptive timing from your log history, quiet hours, daily cap, streak-risk copy, skip empty groups
+- **Daily motivational quotes** and **random awareness check-ins** (opt-in, Manage → Blocks / Planner)
+- Per-habit reminders, missed-habit evening nudge, reminder strength
 - Deep links from notifications and widget into the app
+- Special extension blocks receive tailored status lines on Today
+
+### Local web UI (LAN)
+- Opt-in lightweight server on the phone (`Manage → Blocks`)
+- Desktop browser on the same Wi‑Fi: Today mirror + Pomodoro timer
+- Fully local — no cloud
 
 ### Appearance
 - Background: Dark · AMOLED · Light
 - Accent: Green · Blue · Orange · Purple · Slate · Teal · Red
-- Guided tour + welcome guide anytime from Settings
+- Guided tour + welcome guide anytime from **Settings** (header info button removed)
 
 ---
 
@@ -87,7 +123,8 @@ Three focused sub-tabs:
 3. **Path** — run **Start Dreamline** to define dreams; check in with **Am I on path?**
 4. **Manage → Planner** — set wake/bed, edit the 24h timeline, enable reminders.
 5. **Manage → Habits / Groups** — catalog habits and timeline membership.
-6. **Settings (gear)** — theme only; help/tour lives there too.
+6. **Manage → Blocks** — add special extensions and enable LAN web / quotes / check-ins.
+7. **Settings (gear)** — theme + help/tour.
 7. **Backup** — Manage → Backup → Export / Import Backup (full JSON: habits, logs, Momentum, reminders, Path).
 
 Tips:

@@ -77,6 +77,42 @@ object ScreenTimeReader {
     fun screenOnMinutes(context: Context, date: LocalDate = LocalDate.now()): Long? =
         screenOnMillis(context, date)?.div(60_000L)
 
+    /**
+     * Top apps by foreground time for [date] (#35).
+     * Returns package → minutes, sorted descending, up to [limit].
+     * If [packages] is non-empty, only those packages are included (then sorted).
+     */
+    fun topAppsMinutes(
+        context: Context,
+        date: LocalDate = LocalDate.now(),
+        limit: Int = 8,
+        packages: List<String> = emptyList()
+    ): List<Pair<String, Long>> {
+        if (!hasUsageAccess(context)) return emptyList()
+        val usm = context.getSystemService(Context.USAGE_STATS_SERVICE) as? UsageStatsManager
+            ?: return emptyList()
+        val zone = ZoneId.systemDefault()
+        val start = date.atStartOfDay(zone).toInstant().toEpochMilli()
+        val end = date.plusDays(1).atStartOfDay(zone).toInstant().toEpochMilli()
+            .coerceAtMost(System.currentTimeMillis())
+        return try {
+            val stats = usm.queryUsageStats(UsageStatsManager.INTERVAL_DAILY, start, end)
+                ?: return emptyList()
+            val filter = packages.map { it.trim() }.filter { it.isNotEmpty() }.toSet()
+            stats
+                .asSequence()
+                .filter { it.totalTimeInForeground > 0 }
+                .filter { filter.isEmpty() || it.packageName in filter }
+                .map { it.packageName to (it.totalTimeInForeground / 60_000L) }
+                .filter { it.second > 0 }
+                .sortedByDescending { it.second }
+                .take(limit.coerceAtLeast(1))
+                .toList()
+        } catch (_: Exception) {
+            emptyList()
+        }
+    }
+
     private fun sumScreenOn(usm: UsageStatsManager, start: Long, end: Long): Long {
         val events = usm.queryEvents(start, end)
         val event = UsageEvents.Event()

@@ -3,7 +3,7 @@ package com.steady.habittracker.data
 import kotlinx.serialization.Serializable
 
 /**
- * Data model v12.
+ * Data model v13.
  * - Groups = time-of-day slots on the 24h timeline (when you do it).
  * - Tags = category identity for History (what it is: Supplements, Movement…).
  * - SleepSettings anchors Morning + Bedtime routines to bed/wake times.
@@ -13,6 +13,7 @@ import kotlinx.serialization.Serializable
  * - ScoreState / NotificationPrefs: Steady Momentum + smart gentle reminders (v10).
  * - AutoSource / AutoLogMode / AutoSuggestion: on-device sensor & external auto-logging (v11).
  * - SleepAudio: OGG night recording, loud/snore events, multi-day retention (v12).
+ * - ExtensionType / ExtensionConfig / habit reminders / sensor snapshots / local web + pomodoro (v13, #33–#38).
  * - archived + canSkip, parentId, skip/loggedAt, themes, schedules (v5).
  * All @Serializable for DataStore JSON (portable).
  */
@@ -66,6 +67,132 @@ enum class AutoLogMode {
     SUGGEST,
     /** Write the entry automatically (note marks source); user can still edit. */
     AUTO_APPLY
+}
+
+/**
+ * Special habit block / extension kind (#33).
+ * Standard habits stay [NONE]; special ones get custom Today/Widget UI and side-effects on log.
+ */
+@Serializable
+enum class ExtensionType {
+    NONE,
+    /** Evening: start overnight snore / sleep-audio capture. */
+    SNORE_WATCH_ACTIVATE,
+    /** Morning: stop capture and review night. */
+    SNORE_WATCH_STOP,
+    /** Multi-sensor snapshot (GPS, steps, light, noise, screen) (#34). */
+    SENSOR_AUTO_READ,
+    /** Daily / per-app screen usage tracker (#35). */
+    SCREEN_USAGE,
+    /** Opens structured workout session logger. */
+    WORKOUT_SESSION,
+    /** ESM-style awareness check-in window (#36). */
+    ESM_CHECKIN,
+    /** Focus / Pomodoro timer block (#38). */
+    POMODORO
+}
+
+/** Notification / habit reminder intensity (#30). */
+@Serializable
+enum class ReminderStrength {
+    GENTLE,
+    NORMAL,
+    STRONG
+}
+
+/** Sensors a SENSOR_AUTO_READ block may capture (#34). */
+@Serializable
+enum class SensorKind {
+    GPS,
+    STEPS,
+    LIGHT,
+    NOISE,
+    SCREEN,
+    EXTERNAL
+}
+
+/**
+ * Per-habit extension configuration (serializable, small).
+ * Unused fields are ignored for [ExtensionType.NONE].
+ */
+@Serializable
+data class ExtensionConfig(
+    /** Sensors to sample for [ExtensionType.SENSOR_AUTO_READ]. */
+    val sensors: List<SensorKind> = emptyList(),
+    /** Package names for [ExtensionType.SCREEN_USAGE] per-app breakdown (empty = top apps). */
+    val packages: List<String> = emptyList(),
+    /** When set, this block auto-triggers after the parent habit is logged complete. */
+    val chainAfterHabitId: String? = null,
+    /** Optional exact HH:mm for time-based prominence (reminders still optional). */
+    val triggerTime: String? = null,
+    /** Auto-apply readings without confirm dialog. */
+    val autoApply: Boolean = false,
+    /** Include per-app breakdown for screen usage. */
+    val includeAppBreakdown: Boolean = true,
+    /** Soft daily screen limit (minutes) for color coding. */
+    val dailyLimitMinutes: Int? = null,
+    /** Pomodoro work minutes. */
+    val pomodoroWorkMin: Int = 25,
+    /** Pomodoro break minutes. */
+    val pomodoroBreakMin: Int = 5
+)
+
+/** Per-habit reminder settings when configuring a habit (#30). */
+@Serializable
+data class HabitReminderPrefs(
+    val enabled: Boolean = false,
+    /** HH:mm local. */
+    val time: String = "09:00",
+    val strength: ReminderStrength = ReminderStrength.GENTLE,
+    /** Nudge if still pending later in the day. */
+    val remindOnMissed: Boolean = false
+)
+
+/** One multi-sensor capture linked to a habit log (#34). */
+@Serializable
+data class SensorSnapshot(
+    val id: String,
+    val habitId: String,
+    val date: String,
+    val loggedAt: Long = System.currentTimeMillis(),
+    /** Human-readable metric map (e.g. "gps" → "37.77,-122.42 ±12m"). */
+    val readings: Map<String, String> = emptyMap(),
+    val note: String = ""
+)
+
+/** Local LAN web server prefs (#38). */
+@Serializable
+data class LocalWebPrefs(
+    val enabled: Boolean = false,
+    val port: Int = 8787,
+    /** Optional PIN; empty = open on LAN. */
+    val pin: String = ""
+)
+
+/** Global Pomodoro defaults (#38). */
+@Serializable
+data class PomodoroPrefs(
+    val workMin: Int = 25,
+    val breakMin: Int = 5,
+    val linkedHabitId: String? = null,
+    /** Running session start epoch ms; 0 = idle. */
+    val sessionStartedAt: Long = 0L,
+    val sessionIsBreak: Boolean = false
+)
+
+/** Preset tags for quick capture / ESM (#30, #36). */
+object CaptureTags {
+    const val IDEAS = "Ideas"
+    const val NOTES = "Notes"
+    const val REMINDERS = "Reminders"
+    const val MEMORIES = "Memories"
+    const val THOUGHTS = "Thoughts"
+    const val GRATITUDE = "Gratitude"
+    const val DISTRACTIONS = "Distractions"
+    const val ENERGY = "Energy"
+    val PRESETS: List<String> = listOf(
+        IDEAS, NOTES, REMINDERS, MEMORIES, THOUGHTS, GRATITUDE, DISTRACTIONS, ENERGY
+    )
 }
 
 /** Pending or last sensor proposal for a habit on a date. */
@@ -253,7 +380,13 @@ data class Habit(
      */
     val autoThreshold: Double? = null,
     /** Key for [AutoSource.EXTERNAL_METRIC] / Gadgetbridge field name (e.g. "steps"). */
-    val autoMetricKey: String = ""
+    val autoMetricKey: String = "",
+    /** Special block / extension type (#33). Default [ExtensionType.NONE] for normal habits. */
+    val extensionType: ExtensionType = ExtensionType.NONE,
+    /** Config for [extensionType] (sensors, packages, pomodoro, chaining). */
+    val extensionConfig: ExtensionConfig = ExtensionConfig(),
+    /** Optional per-habit reminder (#30). */
+    val habitReminder: HabitReminderPrefs = HabitReminderPrefs()
 )
 
 // --- Exercise routines & workout sessions (#20–#22) ---
@@ -408,7 +541,23 @@ data class NotificationPrefs(
     val celebrateFullClear: Boolean = true,
     /** Date (yyyy-MM-dd) the fire counter applies to. */
     val firesDate: String = "",
-    val firesCount: Int = 0
+    val firesCount: Int = 0,
+    /** Daily motivational consistency quotes (#32). */
+    val motivationalQuotesEnabled: Boolean = false,
+    /** HH:mm for the daily quote notification. */
+    val motivationalQuotesTime: String = "08:00",
+    /** ESM-style random awareness check-ins (#36). */
+    val randomCheckInsEnabled: Boolean = false,
+    /** low | medium | high — average spacing between polls. */
+    val randomCheckInFrequency: String = "medium",
+    /** Remind about still-pending habits later in the day (#30). */
+    val missedHabitReminders: Boolean = false,
+    /** Prefer explicit dismiss/snooze over auto-cancel (#30). */
+    val requireExplicitDismiss: Boolean = false,
+    /** Default reminder strength for group / habit nudges (#30). */
+    val reminderStrength: ReminderStrength = ReminderStrength.GENTLE,
+    /** Last random check-in fire epoch ms (spacing). */
+    val lastRandomCheckInAt: Long = 0L
 )
 
 /** Classification for overnight loud events (heuristic, not medical diagnosis). */
@@ -492,7 +641,7 @@ data class AppData(
     // date (yyyy-MM-dd) -> habitId -> entry
     val entries: Map<String, Map<String, HabitEntry>> = emptyMap(),
     val reminders: List<Reminder> = emptyList(),
-    val schemaVersion: Int = 12,
+    val schemaVersion: Int = 13,
     val onboarded: Boolean = false,
     val colorScheme: String = "default",   // accent id from accentSchemes() (green, rose, blush, …)
     val backgroundMode: String = "dark",   // id from backgroundModes() (dark, amoled, light, forest, …)
@@ -527,7 +676,13 @@ data class AppData(
     /** Overnight snore / loud-noise audio capture prefs (v12). */
     val sleepAudioPrefs: SleepAudioPrefs = SleepAudioPrefs(),
     /** Recent sleep-audio nights (audio files live under app filesDir). */
-    val sleepNights: List<SleepNightSession> = emptyList()
+    val sleepNights: List<SleepNightSession> = emptyList(),
+    /** Multi-sensor snapshots from SENSOR_AUTO_READ blocks (#34). */
+    val sensorSnapshots: List<SensorSnapshot> = emptyList(),
+    /** Local LAN web UI (#38). */
+    val localWebPrefs: LocalWebPrefs = LocalWebPrefs(),
+    /** Pomodoro defaults / active session (#38). */
+    val pomodoroPrefs: PomodoroPrefs = PomodoroPrefs()
 )
 
 /**
@@ -705,6 +860,11 @@ fun AppData.withUpsertedSleepNight(night: SleepNightSession): AppData {
     val others = sleepNights.filter { it.id != night.id }
     return copy(sleepNights = (listOf(night) + others).sortedByDescending { it.startedAt })
 }
+fun AppData.withSensorSnapshots(list: List<SensorSnapshot>): AppData = copy(sensorSnapshots = list)
+fun AppData.withAddedSensorSnapshot(snap: SensorSnapshot): AppData =
+    copy(sensorSnapshots = (listOf(snap) + sensorSnapshots).take(200))
+fun AppData.withLocalWebPrefs(prefs: LocalWebPrefs): AppData = copy(localWebPrefs = prefs)
+fun AppData.withPomodoroPrefs(prefs: PomodoroPrefs): AppData = copy(pomodoroPrefs = prefs)
 
 fun AppData.withUpsertedAutoSuggestion(suggestion: AutoSuggestion): AppData {
     val others = autoSuggestions.filterNot {

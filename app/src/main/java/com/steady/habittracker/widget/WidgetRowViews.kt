@@ -29,9 +29,18 @@ fun buildRowRemoteViews(context: Context, row: WidgetRow): RemoteViews {
             val isNote = row.habitType == HabitType.NOTE.name
 
             // Pending list only — never show filled checkmarks here
-            rv.setTextViewText(R.id.habit_row_check, pendingRowIcon(row.habitType, row.isCheckbox))
+            val checkIcon = when {
+                row.extensionType.isNotBlank() && row.extensionHint.isNotBlank() -> "◆"
+                else -> pendingRowIcon(row.habitType, row.isCheckbox)
+            }
+            rv.setTextViewText(R.id.habit_row_check, checkIcon)
             rv.setTextColor(R.id.habit_row_check, textColor)
-            rv.setTextViewText(R.id.habit_row_text, row.title)
+            val label = if (row.extensionHint.isNotBlank()) {
+                "${row.title} · ${row.extensionHint}"
+            } else {
+                row.title
+            }
+            rv.setTextViewText(R.id.habit_row_text, label)
             rv.setTextColor(R.id.habit_row_text, textColor)
             rv.setInt(R.id.habit_row_root, "setBackgroundColor", rowBg)
 

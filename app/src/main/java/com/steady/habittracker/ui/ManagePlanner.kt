@@ -609,6 +609,54 @@ fun RemindersCard(
                 checked = prefs.celebrateFullClear,
                 onCheckedChange = { onUpdateNotificationPrefs(prefs.copy(celebrateFullClear = it)) }
             )
+            SmartPrefSwitch(
+                title = "Missed habit reminders",
+                subtitle = "Evening nudge if habits still pending",
+                checked = prefs.missedHabitReminders,
+                onCheckedChange = { onUpdateNotificationPrefs(prefs.copy(missedHabitReminders = it)) }
+            )
+            SmartPrefSwitch(
+                title = "Require dismiss",
+                subtitle = "Keep reminders until you open them",
+                checked = prefs.requireExplicitDismiss,
+                onCheckedChange = { onUpdateNotificationPrefs(prefs.copy(requireExplicitDismiss = it)) }
+            )
+            SmartPrefSwitch(
+                title = "Daily motivational quotes",
+                subtitle = "Consistency quotes at ${prefs.motivationalQuotesTime}",
+                checked = prefs.motivationalQuotesEnabled,
+                onCheckedChange = { onUpdateNotificationPrefs(prefs.copy(motivationalQuotesEnabled = it)) }
+            )
+            SmartPrefSwitch(
+                title = "Random awareness check-ins",
+                subtitle = "ESM-style polls (${prefs.randomCheckInFrequency})",
+                checked = prefs.randomCheckInsEnabled,
+                onCheckedChange = { onUpdateNotificationPrefs(prefs.copy(randomCheckInsEnabled = it)) }
+            )
+
+            Row(
+                Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text("Reminder strength", color = MaterialTheme.colorScheme.onSurface, fontSize = 13.sp)
+                    Text(prefs.reminderStrength.name.lowercase(), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 10.sp)
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    com.steady.habittracker.data.ReminderStrength.entries.forEach { s ->
+                        val selected = prefs.reminderStrength == s
+                        TextButton(onClick = { onUpdateNotificationPrefs(prefs.copy(reminderStrength = s)) }) {
+                            Text(
+                                s.name.take(1),
+                                fontSize = 11.sp,
+                                color = if (selected) MaterialTheme.colorScheme.primary
+                                else MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+            }
 
             Row(
                 Modifier.fillMaxWidth(),

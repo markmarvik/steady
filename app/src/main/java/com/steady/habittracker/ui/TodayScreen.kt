@@ -55,7 +55,7 @@ fun TodayScreen(
     onRequestLog: (Habit) -> Unit = { h -> onLogEntry(h.id, 1.0, "", java.time.LocalDate.now().toString()) },  // preferred for dialog popup + keyboard
     onSkip: (String) -> Unit,
     onShowSkipPrompt: (habitId: String) -> Unit = {},
-    onQuickCapture: (title: String, note: String) -> Unit = { _, _ -> },  // #10 quick capture for inbox
+    onQuickCapture: (title: String, note: String, tags: List<String>) -> Unit = { _, _, _ -> },  // #10 quick capture
     onProcessCapture: (id: String) -> Unit = {},
     onDeleteCapture: (id: String) -> Unit = {},
     // manual metric logging support (#19)
@@ -113,8 +113,8 @@ fun TodayScreen(
     if (showCaptureDialog) {
         CaptureDialog(
             onDismiss = { showCaptureDialog = false },
-            onCapture = { title, note ->
-                onQuickCapture(title, note)
+            onCapture = { title, note, tags ->
+                onQuickCapture(title, note, tags)
                 showCaptureDialog = false
             }
         )
@@ -166,6 +166,10 @@ fun TodayScreen(
                 val isSkipped = entry?.skipped == true
                 val title = if (!habit.canSkip) "${habit.name} (essential)" else habit.name
                 val meta = buildList {
+                    if (habit.extensionType != com.steady.habittracker.data.ExtensionType.NONE) {
+                        add(com.steady.habittracker.data.ExtensionCatalog.label(habit.extensionType))
+                        com.steady.habittracker.extensions.ExtensionManager.statusLine(habit, appData)?.let { add(it) }
+                    }
                     tagLabels[habit.id]?.takeIf { it.isNotBlank() }?.let { add(it) }
                     habit.afterHabitId?.let { nameById[it] }?.let { add("after $it") }
                     if (entry != null && habit.type != HabitType.CHECKBOX && entry.value > 0) {
@@ -740,10 +744,11 @@ private fun HabitRow(
 @Composable
 fun CaptureDialog(
     onDismiss: () -> Unit,
-    onCapture: (title: String, note: String) -> Unit
+    onCapture: (title: String, note: String, tags: List<String>) -> Unit
 ) {
-    var title by remember { mutableStateOf("Quick idea ${System.currentTimeMillis() % 10000}") }
+    var title by remember { mutableStateOf("") }
     var note by remember { mutableStateOf("") }
+    var selectedTags by remember { mutableStateOf(setOf(com.steady.habittracker.data.CaptureTags.IDEAS)) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -753,8 +758,30 @@ fun CaptureDialog(
         title = { Text("Quick Capture") },
         text = {
             Column {
-                Text("Capture an idea, todo, metric note or thought to process later.", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
+                Text(
+                    "Tag ideas, notes, reminders, and check-ins for History.",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontSize = 12.sp
+                )
                 Spacer(Modifier.height(8.dp))
+                // Quick tag presets (#30, #36)
+                com.steady.habittracker.data.CaptureTags.PRESETS.chunked(4).forEach { row ->
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        modifier = Modifier.padding(bottom = 4.dp)
+                    ) {
+                        row.forEach { tag ->
+                            FilterChip(
+                                selected = tag in selectedTags,
+                                onClick = {
+                                    selectedTags = if (tag in selectedTags) selectedTags - tag else selectedTags + tag
+                                },
+                                label = { Text(tag, fontSize = 10.sp) }
+                            )
+                        }
+                    }
+                }
+                Spacer(Modifier.height(6.dp))
                 OutlinedTextField(
                     value = title,
                     onValueChange = { title = it },
@@ -774,7 +801,7 @@ fun CaptureDialog(
         },
         confirmButton = {
             TextButton(onClick = {
-                if (title.isNotBlank()) onCapture(title.trim(), note.trim())
+                if (title.isNotBlank()) onCapture(title.trim(), note.trim(), selectedTags.toList())
             }) { Text("Capture") }
         },
         dismissButton = {

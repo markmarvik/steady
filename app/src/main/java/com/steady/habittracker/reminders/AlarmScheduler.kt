@@ -18,9 +18,100 @@ object AlarmScheduler {
         data.reminders.forEach { r ->
             am.cancel(makePending(context, r.id))
         }
+        cancelSpecial(context, am, SpecialAlarmIds.MOTIVATIONAL_QUOTE)
+        cancelSpecial(context, am, SpecialAlarmIds.RANDOM_CHECKIN)
+        cancelSpecial(context, am, SpecialAlarmIds.MISSED_HABITS)
+        data.habits.forEach { h ->
+            cancelSpecial(context, am, SpecialAlarmIds.habitReminderId(h.id))
+        }
         if (!data.remindersMasterEnabled) return
         data.reminders.filter { it.enabled }.forEach { r ->
             scheduleOne(context, am, r, data)
+        }
+        // Daily motivational quotes (#32) — independent of group reminders list
+        if (data.notificationPrefs.motivationalQuotesEnabled) {
+            scheduleSpecial(
+                context, am, SpecialAlarmIds.MOTIVATIONAL_QUOTE,
+                data.notificationPrefs.motivationalQuotesTime,
+                kind = "quote",
+                data = data
+            )
+        }
+        // Random ESM check-ins (#36) — schedule next window
+        if (data.notificationPrefs.randomCheckInsEnabled) {
+            scheduleRandomCheckIn(context, am, data)
+        }
+        // Missed-habit evening pass (#30)
+        if (data.notificationPrefs.missedHabitReminders) {
+            scheduleSpecial(
+                context, am, SpecialAlarmIds.MISSED_HABITS,
+                "20:00",
+                kind = "missed",
+                data = data
+            )
+        }
+        // Per-habit reminders (#30)
+        data.habits.filter { !it.archived && it.habitReminder.enabled }.forEach { h ->
+            scheduleSpecial(
+                context, am, SpecialAlarmIds.habitReminderId(h.id),
+                h.habitReminder.time,
+                kind = "habit",
+                extraId = h.id,
+                name = h.name,
+                data = data
+            )
+        }
+    }
+
+    private fun cancelSpecial(context: Context, am: AlarmManager, id: String) {
+        am.cancel(makePending(context, id))
+    }
+
+    private fun scheduleSpecial(
+        context: Context,
+        am: AlarmManager,
+        id: String,
+        timeHhMm: String,
+        kind: String,
+        extraId: String? = null,
+        name: String = "",
+        data: AppData?
+    ) {
+        val synthetic = Reminder(
+            id = id,
+            groupId = null,
+            time = timeHhMm,
+            days = (1..7).toSet(),
+            enabled = true
+        )
+        val pi = makePending(context, id, groupId = extraId, name = name, kind = kind)
+        val triggerAt = computeNextTriggerMillis(synthetic, data = data)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && !am.canScheduleExactAlarms()) {
+            am.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerAt, pi)
+        } else {
+            am.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerAt, pi)
+        }
+    }
+
+    private fun scheduleRandomCheckIn(context: Context, am: AlarmManager, data: AppData) {
+        val prefs = data.notificationPrefs
+        val spacingMin = when (prefs.randomCheckInFrequency.lowercase()) {
+            "low" -> 120
+            "high" -> 45
+            else -> 75
+        }
+        val jitter = (0 until (spacingMin / 3).coerceAtLeast(5)).random()
+        val last = prefs.lastRandomCheckInAt
+        val now = System.currentTimeMillis()
+        val earliest = if (last > 0) last + (spacingMin + jitter) * 60_000L else now + 30 * 60_000L
+        var triggerAt = earliest.coerceAtLeast(now + 15 * 60_000L)
+        // Push into active hours (avoid quiet)
+        triggerAt = HabitDomain.pushPastQuietHours(triggerAt, prefs)
+        val pi = makePending(context, SpecialAlarmIds.RANDOM_CHECKIN, kind = "checkin")
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && !am.canScheduleExactAlarms()) {
+            am.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerAt, pi)
+        } else {
+            am.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerAt, pi)
         }
     }
 
@@ -69,12 +160,14 @@ object AlarmScheduler {
         context: Context,
         id: String,
         groupId: String? = null,
-        name: String = ""
+        name: String = "",
+        kind: String = "group"
     ): PendingIntent {
         val i = Intent(context, ReminderReceiver::class.java).apply {
             putExtra("reminderId", id)
             putExtra("groupId", groupId)
             putExtra("name", name)
+            putExtra("kind", kind)
         }
         return PendingIntent.getBroadcast(
             context, id.hashCode(), i,

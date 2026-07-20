@@ -62,6 +62,8 @@ import com.steady.habittracker.data.AutoSuggestion
 import com.steady.habittracker.reminders.AlarmScheduler
 import com.steady.habittracker.data.SleepAudioPrefs
 import com.steady.habittracker.data.withSleepAudioPrefs
+import com.steady.habittracker.data.withLocalWebPrefs
+import com.steady.habittracker.data.withPomodoroPrefs
 import com.steady.habittracker.sensors.AutoLogEngine
 import com.steady.habittracker.sensors.AutoLogWorker
 import com.steady.habittracker.sleepaudio.SleepAudioScheduler
@@ -69,8 +71,10 @@ import com.steady.habittracker.sleepaudio.SleepAudioService
 import com.steady.habittracker.sleepaudio.SleepAudioStorage
 import com.steady.habittracker.widget.WidgetRenderer
 import android.app.Application
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -89,6 +93,19 @@ class SteadyViewModel(
             started = SharingStarted.WhileSubscribed(5_000),
             initialValue = AppData()
         )
+
+    /** Last extension log summary for snackbar / UI (#33). */
+    val lastExtensionSummary = MutableStateFlow("")
+    val pendingOpenCapture = MutableStateFlow(false)
+    val pendingOpenWorkout = MutableStateFlow(false)
+    val pendingOpenSleepReview = MutableStateFlow(false)
+
+    fun consumeExtensionUiHints() {
+        pendingOpenCapture.value = false
+        pendingOpenWorkout.value = false
+        pendingOpenSleepReview.value = false
+        lastExtensionSummary.value = ""
+    }
 
     // Today key (yyyy-MM-dd)
     val today: String get() = repository.getToday()
@@ -160,14 +177,32 @@ class SteadyViewModel(
     fun logEntry(habitId: String, value: Double, note: String = "", date: String = today) {
         viewModelScope.launch {
             val current = appData.value
+            val habit = current.habits.find { it.id == habitId }
             val entry = HabitEntry(
                 value = value,
                 note = note.trim(),
                 loggedAt = System.currentTimeMillis()
             )
-            val updated = current.withUpdatedEntry(date, habitId, entry)
+            var updated = current.withUpdatedEntry(date, habitId, entry)
+            // Special habit block side-effects + chainAfter children (#33+)
+            if (habit != null && value >= 0.5) {
+                val ctx = appContext
+                if (ctx != null) {
+                    val result = com.steady.habittracker.extensions.ExtensionManager.onHabitLogged(
+                        ctx, updated, habit, entry, date
+                    )
+                    updated = result.data
+                    if (result.summaryNote.isNotBlank()) lastExtensionSummary.value = result.summaryNote
+                    if (result.openCapture) pendingOpenCapture.value = true
+                    if (result.openWorkout) pendingOpenWorkout.value = true
+                    if (result.openSleepReview) pendingOpenSleepReview.value = true
+                }
+            }
             repository.saveData(updated)
             refreshWidget(updated)
+            if (habit?.habitReminder?.enabled == true) {
+                rescheduleReminders(updated)
+            }
         }
     }
 
@@ -211,9 +246,12 @@ class SteadyViewModel(
         specificDates: List<String> = emptyList(),
         why: String = "",
         additionalGroupIds: List<String> = emptyList(),
-        icon: String = ""
+        icon: String = "",
+        extensionType: com.steady.habittracker.data.ExtensionType = com.steady.habittracker.data.ExtensionType.NONE,
+        extensionConfig: com.steady.habittracker.data.ExtensionConfig = com.steady.habittracker.data.ExtensionConfig(),
+        habitReminder: com.steady.habittracker.data.HabitReminderPrefs = com.steady.habittracker.data.HabitReminderPrefs()
     ) {
-        if (name.isBlank()) return
+        if (name.isBlank() || groupId.isBlank()) return
         viewModelScope.launch {
             val current = appData.value
             val order = current.habits.filter { it.groupId == groupId }.size
@@ -236,11 +274,54 @@ class SteadyViewModel(
                 anchorDate = if (showPreset == com.steady.habittracker.data.ShowPreset.EVERY_N_DAYS) todayStr else null,
                 specificDates = specificDates,
                 additionalGroupIds = additionalGroupIds.filter { it != groupId && it.isNotBlank() }.distinct(),
-                icon = icon.trim()
+                icon = icon.trim(),
+                extensionType = extensionType,
+                extensionConfig = extensionConfig,
+                habitReminder = habitReminder
             )
             val updated = current.withAddedHabit(newHabit)
             repository.saveData(updated)
             refreshWidget(updated)
+            if (habitReminder.enabled) rescheduleReminders(updated)
+        }
+    }
+
+    /** Create a special block from [ExtensionCatalog] template into a group (#33, #37). */
+    fun addExtensionBlock(
+        type: com.steady.habittracker.data.ExtensionType,
+        groupId: String? = null,
+        nameOverride: String? = null
+    ) {
+        val template = com.steady.habittracker.data.ExtensionCatalog.templateFor(type) ?: return
+        val gid = groupId
+            ?: com.steady.habittracker.data.ExtensionCatalog.suggestGroupId(appData.value, template.suggestTimeHint)
+            ?: return
+        addHabit(
+            name = nameOverride ?: template.defaultName,
+            groupId = gid,
+            type = HabitType.CHECKBOX,
+            icon = template.defaultIcon,
+            extensionType = type,
+            extensionConfig = template.defaultConfig
+        )
+    }
+
+    fun updateLocalWebPrefs(prefs: com.steady.habittracker.data.LocalWebPrefs) {
+        viewModelScope.launch {
+            val current = appData.value
+            val updated = current.withLocalWebPrefs(prefs)
+            repository.saveData(updated)
+            val ctx = appContext
+            if (ctx != null) {
+                com.steady.habittracker.web.LocalWebServer.setEnabled(ctx, updated)
+            }
+        }
+    }
+
+    fun updatePomodoroPrefs(prefs: com.steady.habittracker.data.PomodoroPrefs) {
+        viewModelScope.launch {
+            val current = appData.value
+            repository.saveData(current.withPomodoroPrefs(prefs))
         }
     }
 
@@ -385,6 +466,9 @@ class SteadyViewModel(
             }
             repository.saveData(newData)
             refreshWidget(newData)
+            if (updated.habitReminder.enabled || existing?.habitReminder?.enabled == true) {
+                rescheduleReminders(newData)
+            }
         }
     }
 

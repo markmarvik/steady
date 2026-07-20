@@ -55,9 +55,10 @@ import com.steady.habittracker.data.displayLabel
 import java.time.LocalDate
 
 /**
- * Manage = three focused areas:
+ * Manage = four focused areas:
  * - Habits: create / edit / archive habits (+ tags, exercise routines)
  * - Groups: timeline groups + membership (attach existing habits, order, move)
+ * - Blocks: special habit extensions (#33, #37)
  * - Planner: sleep/schedule, reminders, backup
  */
 @Composable
@@ -77,6 +78,8 @@ fun ManageScreen(
         additionalGroupIds: List<String>,
         icon: String
     ) -> Unit,
+    onAddExtensionBlock: (com.steady.habittracker.data.ExtensionType, String?) -> Unit = { _, _ -> },
+    onUpdateLocalWebPrefs: (com.steady.habittracker.data.LocalWebPrefs) -> Unit = {},
     onDeleteHabit: (String) -> Unit,  // now archives
     onSetReminder: (Reminder) -> Unit,
     onToggleReminder: (String) -> Unit,
@@ -111,7 +114,7 @@ fun ManageScreen(
     schedules: List<Schedule> = emptyList(),
     activeScheduleId: String? = null
 ) {
-    // 0 Habits · 1 Groups · 2 Planner
+    // 0 Habits · 1 Groups · 2 Blocks · 3 Planner
     var manageTab by remember { mutableIntStateOf(0) }
     var selectedGroupId by remember { mutableStateOf<String?>(null) }
     var showAddGroup by remember { mutableStateOf(false) }
@@ -236,7 +239,8 @@ fun ManageScreen(
         ) {
             TabButton("Habits", manageTab == 0, modifier = Modifier.weight(1f)) { manageTab = 0 }
             TabButton("Groups", manageTab == 1, modifier = Modifier.weight(1f)) { manageTab = 1 }
-            TabButton("Planner", manageTab == 2, modifier = Modifier.weight(1f)) { manageTab = 2 }
+            TabButton("Blocks", manageTab == 2, modifier = Modifier.weight(1f)) { manageTab = 2 }
+            TabButton("Planner", manageTab == 3, modifier = Modifier.weight(1f)) { manageTab = 3 }
         }
 
         Spacer(Modifier.height(8.dp))
@@ -742,6 +746,18 @@ fun ManageScreen(
                 }
             }
 
+            2 -> {
+                // ——— Blocks: special habit extensions (#33, #37) ———
+                BlocksConfigSection(
+                    appData = appData,
+                    groups = activeGroups,
+                    onAddExtension = onAddExtensionBlock,
+                    onEditHabit = { showEditHabit = it },
+                    onUpdateLocalWebPrefs = onUpdateLocalWebPrefs,
+                    onUpdateNotificationPrefs = onUpdateNotificationPrefs
+                )
+            }
+
             else -> {
                 // ——— Planner: schedule + reminders + backup ———
                 LazyColumn(
@@ -845,7 +861,8 @@ fun ManageScreen(
     }
     if (showCreateHabit) {
         AddHabitWithTypeDialogLocal(
-            initialGroupId = activeGroups.firstOrNull()?.id.orEmpty(),
+            // No default group (#30) — user must select at least one
+            initialGroupId = "",
             groups = activeGroups,
             tags = HabitDomain.getActiveTags(appData),
             onDismiss = { showCreateHabit = false },
@@ -1102,28 +1119,59 @@ internal fun ShowWhenPicker(
     }
     when (preset) {
         ShowPreset.CUSTOM_DAYS -> {
-            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                listOf(1 to "M", 2 to "T", 3 to "W", 4 to "T", 5 to "F", 6 to "S", 7 to "S").forEach { (d, lab) ->
-                    ThemedFilterChip(
-                        selected = d in weekdays,
-                        onClick = {
-                            onWeekdays(if (d in weekdays) weekdays - d else weekdays + d)
-                        },
-                        label = { Text(lab) }
-                    )
+            // Wrap weekdays so Sat/Sun fit (#30)
+            listOf(
+                listOf(1 to "Mon", 2 to "Tue", 3 to "Wed", 4 to "Thu"),
+                listOf(5 to "Fri", 6 to "Sat", 7 to "Sun")
+            ).forEach { row ->
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 4.dp)
+                ) {
+                    row.forEach { (d, lab) ->
+                        ThemedFilterChip(
+                            selected = d in weekdays,
+                            onClick = {
+                                onWeekdays(if (d in weekdays) weekdays - d else weekdays + d)
+                            },
+                            label = { Text(lab, fontSize = 11.sp) },
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
                 }
             }
         }
         ShowPreset.EVERY_N_DAYS -> {
-            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.fillMaxWidth()) {
                 listOf(2, 3, 7).forEach { n ->
                     ThemedFilterChip(
-                        selected = intervalDays == n,
+                        selected = intervalDays == n && intervalDays in listOf(2, 3, 7),
                         onClick = { onInterval(n); onPreset(ShowPreset.EVERY_N_DAYS) },
                         label = { Text("Every ${n}d", fontSize = 11.sp) }
                     )
                 }
             }
+            Spacer(Modifier.height(4.dp))
+            var customN by remember(intervalDays) {
+                mutableStateOf(if (intervalDays in listOf(2, 3, 7)) "" else intervalDays.toString())
+            }
+            OutlinedTextField(
+                value = customN,
+                onValueChange = { v ->
+                    customN = v.filter { it.isDigit() }.take(3)
+                    val n = customN.toIntOrNull()
+                    if (n != null && n >= 1) {
+                        onInterval(n)
+                        onPreset(ShowPreset.EVERY_N_DAYS)
+                    }
+                },
+                label = { Text("Custom every N days") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+                placeholder = { Text("e.g. 5") }
+            )
         }
         ShowPreset.SPECIFIC_DATES -> {
             var dateInput by remember { mutableStateOf(LocalDate.now().toString()) }
@@ -1332,6 +1380,26 @@ private fun EditHabitDialog(
         mutableStateOf(habit.autoThreshold?.toString() ?: "")
     }
     var autoMetricKey by remember { mutableStateOf(habit.autoMetricKey) }
+    var remEnabled by remember { mutableStateOf(habit.habitReminder.enabled) }
+    var remTime by remember { mutableStateOf(habit.habitReminder.time) }
+    var remMissed by remember { mutableStateOf(habit.habitReminder.remindOnMissed) }
+    var remStrength by remember { mutableStateOf(habit.habitReminder.strength) }
+    var extType by remember { mutableStateOf(habit.extensionType) }
+    var extSensors by remember {
+        mutableStateOf(habit.extensionConfig.sensors.toSet())
+    }
+    var extChainAfter by remember {
+        mutableStateOf(habit.extensionConfig.chainAfterHabitId.orEmpty())
+    }
+    var extLimitMin by remember {
+        mutableStateOf(habit.extensionConfig.dailyLimitMinutes?.toString().orEmpty())
+    }
+    var extPomodoroWork by remember {
+        mutableIntStateOf(habit.extensionConfig.pomodoroWorkMin)
+    }
+    var extIncludeApps by remember {
+        mutableStateOf(habit.extensionConfig.includeAppBreakdown)
+    }
 
     val tagIds = remember(tags) { tags.map { it.id }.toSet() }
     LaunchedEffect(tagIds) {
@@ -1400,6 +1468,108 @@ private fun EditHabitDialog(
                         label = { Text("Unit") },
                         modifier = Modifier.fillMaxWidth()
                     )
+                }
+                Spacer(Modifier.height(12.dp))
+                Text("Reminder (this habit)", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    ThemedCheckbox(checked = remEnabled, onCheckedChange = { remEnabled = it })
+                    Text("Enable reminder", fontSize = 12.sp)
+                }
+                if (remEnabled) {
+                    OutlinedTextField(
+                        value = remTime,
+                        onValueChange = { remTime = it },
+                        label = { Text("Time HH:mm") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        ThemedCheckbox(checked = remMissed, onCheckedChange = { remMissed = it })
+                        Text("Also for missed (pending only fires)", fontSize = 11.sp)
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        com.steady.habittracker.data.ReminderStrength.entries.forEach { s ->
+                            FilterChip(
+                                selected = remStrength == s,
+                                onClick = { remStrength = s },
+                                label = { Text(s.name.lowercase(), fontSize = 10.sp) }
+                            )
+                        }
+                    }
+                }
+                Spacer(Modifier.height(12.dp))
+                Text("Special block type (#33)", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                Text(
+                    com.steady.habittracker.data.ExtensionCatalog.label(extType),
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.primary
+                )
+                com.steady.habittracker.data.ExtensionType.entries.chunked(3).forEach { row ->
+                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.padding(bottom = 4.dp)) {
+                        row.forEach { t ->
+                            FilterChip(
+                                selected = extType == t,
+                                onClick = { extType = t },
+                                label = {
+                                    Text(
+                                        com.steady.habittracker.data.ExtensionCatalog.label(t),
+                                        fontSize = 9.sp
+                                    )
+                                }
+                            )
+                        }
+                    }
+                }
+                if (extType == com.steady.habittracker.data.ExtensionType.SENSOR_AUTO_READ) {
+                    Spacer(Modifier.height(6.dp))
+                    Text("Sensors to capture", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    com.steady.habittracker.data.SensorKind.entries.chunked(3).forEach { row ->
+                        Row(horizontalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.padding(bottom = 4.dp)) {
+                            row.forEach { sk ->
+                                FilterChip(
+                                    selected = sk in extSensors,
+                                    onClick = {
+                                        extSensors = if (sk in extSensors) extSensors - sk else extSensors + sk
+                                    },
+                                    label = { Text(sk.name, fontSize = 9.sp) }
+                                )
+                            }
+                        }
+                    }
+                    OutlinedTextField(
+                        value = extChainAfter,
+                        onValueChange = { extChainAfter = it },
+                        label = { Text("Chain after habit id (optional)") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+                if (extType == com.steady.habittracker.data.ExtensionType.SCREEN_USAGE) {
+                    Spacer(Modifier.height(6.dp))
+                    OutlinedTextField(
+                        value = extLimitMin,
+                        onValueChange = { extLimitMin = it.filter { c -> c.isDigit() }.take(4) },
+                        label = { Text("Soft daily limit (minutes)") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        ThemedCheckbox(checked = extIncludeApps, onCheckedChange = { extIncludeApps = it })
+                        Text("Include top apps breakdown", fontSize = 12.sp)
+                    }
+                }
+                if (extType == com.steady.habittracker.data.ExtensionType.POMODORO) {
+                    Spacer(Modifier.height(6.dp))
+                    Text("Work minutes: $extPomodoroWork", fontSize = 12.sp)
+                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        listOf(15, 25, 45, 50).forEach { n ->
+                            FilterChip(
+                                selected = extPomodoroWork == n,
+                                onClick = { extPomodoroWork = n },
+                                label = { Text("${n}m", fontSize = 11.sp) }
+                            )
+                        }
+                    }
                 }
                 Spacer(Modifier.height(12.dp))
                 Text("Auto-log (sensors)", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
@@ -1489,7 +1659,28 @@ private fun EditHabitDialog(
                             autoSource = autoSource,
                             autoMode = autoMode,
                             autoThreshold = autoThreshold.toDoubleOrNull(),
-                            autoMetricKey = autoMetricKey.trim()
+                            autoMetricKey = autoMetricKey.trim(),
+                            extensionType = extType,
+                            extensionConfig = habit.extensionConfig.copy(
+                                sensors = if (extType == com.steady.habittracker.data.ExtensionType.SENSOR_AUTO_READ) {
+                                    extSensors.toList().ifEmpty {
+                                        listOf(
+                                            com.steady.habittracker.data.SensorKind.STEPS,
+                                            com.steady.habittracker.data.SensorKind.SCREEN
+                                        )
+                                    }
+                                } else habit.extensionConfig.sensors,
+                                chainAfterHabitId = extChainAfter.trim().ifBlank { null },
+                                dailyLimitMinutes = extLimitMin.toIntOrNull(),
+                                includeAppBreakdown = extIncludeApps,
+                                pomodoroWorkMin = extPomodoroWork
+                            ),
+                            habitReminder = com.steady.habittracker.data.HabitReminderPrefs(
+                                enabled = remEnabled,
+                                time = remTime.ifBlank { "09:00" },
+                                strength = remStrength,
+                                remindOnMissed = remMissed
+                            )
                         )
                     )
                 },
@@ -1652,6 +1843,223 @@ private fun AddHabitWithTypeDialogLocal(
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
     )
+}
+
+@Composable
+private fun BlocksConfigSection(
+    appData: AppData,
+    groups: List<Group>,
+    onAddExtension: (com.steady.habittracker.data.ExtensionType, String?) -> Unit,
+    onEditHabit: (Habit) -> Unit,
+    onUpdateLocalWebPrefs: (com.steady.habittracker.data.LocalWebPrefs) -> Unit,
+    onUpdateNotificationPrefs: (NotificationPrefs) -> Unit
+) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val activeBlocks = remember(appData.habits) {
+        com.steady.habittracker.data.ExtensionCatalog.activeExtensionHabits(appData)
+    }
+    val prefs = appData.notificationPrefs
+    val web = appData.localWebPrefs
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        item {
+            Text(
+                "Special habit blocks",
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.primary,
+                fontSize = 14.sp
+            )
+            Text(
+                "Extensions appear on Today & the widget like normal habits. Add a template to a suggested group, then schedule it in Planner.",
+                fontSize = 11.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        items(com.steady.habittracker.data.ExtensionCatalog.TEMPLATES, key = { it.type.name }) { t ->
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text("${t.defaultIcon} ${t.title}", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                    Text(t.description, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(t.category, fontSize = 10.sp, color = MaterialTheme.colorScheme.primary)
+                    val count = appData.habits.count { !it.archived && it.extensionType == t.type }
+                    TextButton(
+                        onClick = { onAddExtension(t.type, null) },
+                        enabled = groups.isNotEmpty()
+                    ) {
+                        Text(
+                            if (count > 0) "Add another to planner ($count active)" else "Add to planner",
+                            fontSize = 12.sp
+                        )
+                    }
+                }
+            }
+        }
+        if (activeBlocks.isNotEmpty()) {
+            item {
+                Text("Active blocks", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+            }
+            items(activeBlocks, key = { it.id }) { h ->
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onEditHabit(h) },
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                    shape = RoundedCornerShape(10.dp)
+                ) {
+                    Column(Modifier.padding(10.dp)) {
+                        Text(
+                            "${h.icon.ifBlank { "◆" }} ${h.name}",
+                            fontWeight = FontWeight.Medium,
+                            fontSize = 13.sp
+                        )
+                        Text(
+                            com.steady.habittracker.data.ExtensionCatalog.label(h.extensionType) +
+                                " · " + (groups.find { it.id == h.groupId }?.name ?: h.groupId),
+                            fontSize = 11.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+        }
+        item {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text("Awareness & quotes", fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.primary)
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            Text("Daily motivational quotes", fontSize = 13.sp)
+                            Text("Consistency quotes each morning", fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        Switch(
+                            checked = prefs.motivationalQuotesEnabled,
+                            onCheckedChange = {
+                                onUpdateNotificationPrefs(prefs.copy(motivationalQuotesEnabled = it))
+                            }
+                        )
+                    }
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            Text("Random check-ins (ESM)", fontSize = 13.sp)
+                            Text("Gentle “what are you doing?” polls", fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        Switch(
+                            checked = prefs.randomCheckInsEnabled,
+                            onCheckedChange = {
+                                onUpdateNotificationPrefs(prefs.copy(randomCheckInsEnabled = it))
+                            }
+                        )
+                    }
+                    if (prefs.randomCheckInsEnabled) {
+                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            listOf("low", "medium", "high").forEach { f ->
+                                FilterChip(
+                                    selected = prefs.randomCheckInFrequency == f,
+                                    onClick = {
+                                        onUpdateNotificationPrefs(prefs.copy(randomCheckInFrequency = f))
+                                    },
+                                    label = { Text(f, fontSize = 11.sp) }
+                                )
+                            }
+                        }
+                    }
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            Text("Missed habit evening nudge", fontSize = 13.sp)
+                            Text("20:00 if items still pending", fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        Switch(
+                            checked = prefs.missedHabitReminders,
+                            onCheckedChange = {
+                                onUpdateNotificationPrefs(prefs.copy(missedHabitReminders = it))
+                            }
+                        )
+                    }
+                }
+            }
+        }
+        item {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text("Local web UI (LAN)", fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.primary)
+                    Text(
+                        "Desktop browser on the same Wi‑Fi. Pomodoro + Today mirror.",
+                        fontSize = 11.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("Enable server", fontSize = 13.sp)
+                        Switch(
+                            checked = web.enabled,
+                            onCheckedChange = {
+                                val next = web.copy(enabled = it)
+                                onUpdateLocalWebPrefs(next)
+                            }
+                        )
+                    }
+                    if (web.enabled) {
+                        val url = remember(web.port, web.enabled) {
+                            try {
+                                com.steady.habittracker.web.LocalWebServer.localAddressHint(context)
+                            } catch (_: Exception) {
+                                "http://<phone-ip>:${web.port}"
+                            }
+                        }
+                        Text("Open on desktop: $url", fontSize = 12.sp, color = MaterialTheme.colorScheme.primary)
+                        OutlinedTextField(
+                            value = web.port.toString(),
+                            onValueChange = { v ->
+                                v.toIntOrNull()?.let { p ->
+                                    if (p in 1024..65535) onUpdateLocalWebPrefs(web.copy(port = p))
+                                }
+                            },
+                            label = { Text("Port") },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        OutlinedTextField(
+                            value = web.pin,
+                            onValueChange = { onUpdateLocalWebPrefs(web.copy(pin = it.take(12))) },
+                            label = { Text("Optional PIN") },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                }
+            }
+        }
+        item { Spacer(Modifier.height(24.dp)) }
+    }
 }
 
 @Immutable

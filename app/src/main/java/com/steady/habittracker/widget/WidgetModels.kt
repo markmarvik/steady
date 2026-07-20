@@ -1,6 +1,8 @@
 package com.steady.habittracker.widget
 
 import com.steady.habittracker.data.AppData
+import com.steady.habittracker.data.ExtensionCatalog
+import com.steady.habittracker.data.ExtensionType
 import com.steady.habittracker.data.HabitDomain
 import com.steady.habittracker.data.HabitType
 import com.steady.habittracker.data.displayLabel
@@ -22,7 +24,11 @@ data class WidgetRow(
     val isCheckbox: Boolean = true,
     /** HabitType name for pending icon (CHECKBOX, COUNTER, …). Empty for sections. */
     val habitType: String = "",
-    val isCurrentGroup: Boolean = false
+    val isCurrentGroup: Boolean = false,
+    /** ExtensionType name when not NONE (#33 widget surface). */
+    val extensionType: String = "",
+    /** Compact status for special blocks (e.g. snore armed, screen so far). */
+    val extensionHint: String = ""
 )
 
 /**
@@ -52,16 +58,53 @@ fun buildWidgetRows(data: AppData, now: LocalTime = LocalTime.now()): List<Widge
         for (h in section.habits) {
             if (rows.size >= 40) break
             val stack = if (h.afterHabitId != null) "↳ " else ""
+            val ext = h.extensionType
+            val extLabel = if (ext != ExtensionType.NONE) {
+                " · ${ExtensionCatalog.label(ext)}"
+            } else ""
+            // statusLine needs Context for screen time; keep offline-safe hints here
+            val hint = when (ext) {
+                ExtensionType.NONE -> ""
+                ExtensionType.SNORE_WATCH_ACTIVATE ->
+                    if (data.sleepAudioPrefs.enabled) "armed" else "start"
+                ExtensionType.SNORE_WATCH_STOP ->
+                    data.sleepNights.firstOrNull()?.let { "n:${it.eventCount}" } ?: "review"
+                ExtensionType.SENSOR_AUTO_READ -> "sensors"
+                ExtensionType.SCREEN_USAGE -> "screen"
+                ExtensionType.WORKOUT_SESSION -> "workout"
+                ExtensionType.ESM_CHECKIN -> "check-in"
+                ExtensionType.POMODORO -> "${h.extensionConfig.pomodoroWorkMin}m"
+            }
             rows.add(
                 WidgetRow(
                     kind = WidgetRowKind.HABIT,
-                    title = stack + h.displayLabel(),
+                    title = stack + h.displayLabel() + extLabel,
                     habitId = h.id,
-                    isCheckbox = h.type == HabitType.CHECKBOX,
+                    isCheckbox = h.type == HabitType.CHECKBOX || ext != ExtensionType.NONE,
                     habitType = h.type.name,
-                    isCurrentGroup = section.isNow
+                    isCurrentGroup = section.isNow,
+                    extensionType = if (ext != ExtensionType.NONE) ext.name else "",
+                    extensionHint = hint
                 )
             )
+        }
+        // Active extension status pill at end of current section (#33)
+        if (section.isNow) {
+            val activeSnore = data.habits.any {
+                !it.archived && it.extensionType == ExtensionType.SNORE_WATCH_ACTIVATE &&
+                    data.sleepAudioPrefs.enabled
+            }
+            if (activeSnore && rows.size < 40) {
+                rows.add(
+                    WidgetRow(
+                        kind = WidgetRowKind.SECTION,
+                        title = "● Snore Watch active",
+                        isCurrentGroup = true,
+                        extensionType = ExtensionType.SNORE_WATCH_ACTIVATE.name,
+                        extensionHint = "recording"
+                    )
+                )
+            }
         }
     }
     return rows

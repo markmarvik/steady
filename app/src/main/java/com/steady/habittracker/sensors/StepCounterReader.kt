@@ -37,6 +37,24 @@ object StepCounterReader {
     }
 
     /**
+     * Best-effort sync estimate from last sensor sample (no listener wait).
+     * Used by extension blocks; prefer [todaySteps] when async is OK.
+     */
+    fun cachedTodayHint(context: Context, today: String = java.time.LocalDate.now().toString()): String? {
+        if (!hasPermission(context) || !isAvailable(context)) return null
+        val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        val baselineDate = prefs.getString(KEY_BASELINE_DATE, null) ?: return null
+        val baseline = prefs.getFloat(KEY_BASELINE, -1f)
+        val lastRaw = prefs.getFloat(KEY_LAST_RAW, -1f)
+        if (baseline < 0 || lastRaw < 0) return null
+        return if (baselineDate == today) {
+            (lastRaw - baseline).toInt().coerceAtLeast(0).toString()
+        } else {
+            "0 (new day)"
+        }
+    }
+
+    /**
      * Today's steps from hardware counter, or null if unavailable.
      */
     suspend fun todaySteps(context: Context, today: String): Int? {
