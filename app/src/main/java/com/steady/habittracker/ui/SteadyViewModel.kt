@@ -315,6 +315,7 @@ class SteadyViewModel(
             repository.saveData(updated)
             val ctx = appContext
             if (ctx != null) {
+                // Starts/stops foreground LocalWebService (binds HTTP 0.0.0.0 + optional HTTPS)
                 com.steady.habittracker.web.LocalWebServer.setEnabled(ctx, updated)
             }
         }

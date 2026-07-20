@@ -22,6 +22,7 @@
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-feature android:name="android.hardware.sensor.light" android:required="false" />
     <uses-feature android:name="android.hardware.microphone" android:required="false" />
 
@@ -125,6 +126,13 @@
                 <action android:name="com.steady.habittracker.sleepaudio.ALARM_STOP" />
             </intent-filter>
         </receiver>
+
+        <!-- LAN web UI server (keeps sockets alive while enabled) -->
+        <service
+            android:name=".web.LocalWebService"
+            android:enabled="true"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
 
     </application>
 

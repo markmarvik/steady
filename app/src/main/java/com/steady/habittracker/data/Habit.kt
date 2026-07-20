@@ -164,9 +164,15 @@ data class SensorSnapshot(
 @Serializable
 data class LocalWebPrefs(
     val enabled: Boolean = false,
+    /** HTTP port (binds 0.0.0.0). HTTPS uses port+1 when [httpsEnabled]. */
     val port: Int = 8787,
     /** Optional PIN; empty = open on LAN. */
-    val pin: String = ""
+    val pin: String = "",
+    /**
+     * Self-signed TLS on port+1 (default on). Browsers will warn once —
+     * use “Advanced → proceed” or stick to http:// on the HTTP port.
+     */
+    val httpsEnabled: Boolean = true
 )
 
 /** Global Pomodoro defaults (#38). */

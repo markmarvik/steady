@@ -2236,7 +2236,8 @@ private fun BlocksConfigSection(
                 Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Text("Local web UI (LAN)", fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.primary)
                     Text(
-                        "Desktop browser on the same Wi‑Fi. Pomodoro + Today mirror.",
+                        "Runs a small server on this phone. Use http:// (not https://) on the HTTP port. " +
+                            "Same Wi‑Fi as your PC. Leave Steady open or in the background with the notification.",
                         fontSize = 11.sp,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -2255,29 +2256,103 @@ private fun BlocksConfigSection(
                         )
                     }
                     if (web.enabled) {
-                        val url = remember(web.port, web.enabled) {
-                            try {
-                                com.steady.habittracker.web.LocalWebServer.localAddressHint(context)
-                            } catch (_: Exception) {
-                                "http://<phone-ip>:${web.port}"
+                        var tick by remember { mutableIntStateOf(0) }
+                        LaunchedEffect(web.enabled, web.port, web.httpsEnabled) {
+                            while (true) {
+                                kotlinx.coroutines.delay(1000)
+                                tick++
                             }
                         }
-                        Text("Open on desktop: $url", fontSize = 12.sp, color = MaterialTheme.colorScheme.primary)
+                        val running = remember(tick) {
+                            com.steady.habittracker.web.LocalWebServer.isRunning()
+                        }
+                        val status = remember(tick) {
+                            com.steady.habittracker.web.LocalWebServer.statusMessage
+                        }
+                        val err = remember(tick) {
+                            com.steady.habittracker.web.LocalWebServer.lastError
+                        }
+                        val httpUrls = remember(tick, web.port) {
+                            com.steady.habittracker.web.LocalWebServer.httpUrls().distinct()
+                        }
+                        val httpsUrls = remember(tick, web.port, web.httpsEnabled) {
+                            com.steady.habittracker.web.LocalWebServer.httpsUrls().distinct()
+                        }
+                        Text(
+                            if (running) "● Running" else "○ Starting / stopped",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = if (running) MaterialTheme.colorScheme.primary
+                            else MaterialTheme.colorScheme.error
+                        )
+                        Text(status, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        if (err != null) {
+                            Text("Error: $err", fontSize = 11.sp, color = MaterialTheme.colorScheme.error)
+                        }
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            "HTTP — use this first (no certificate warning):",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        httpUrls.take(4).forEach { u ->
+                            Text(u, fontSize = 13.sp, color = MaterialTheme.colorScheme.primary)
+                        }
+                        Text(
+                            "Type exactly http://… not https:// — browsers may auto-upgrade and fail.",
+                            fontSize = 10.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        if (httpsUrls.isNotEmpty()) {
+                            Spacer(Modifier.height(4.dp))
+                            Text(
+                                "HTTPS (self-signed, port ${web.port + 1}) — accept the browser warning once:",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                            httpsUrls.take(3).forEach { u ->
+                                Text(u, fontSize = 12.sp, color = MaterialTheme.colorScheme.primary)
+                            }
+                        }
+                        TextButton(
+                            onClick = {
+                                // Force restart service
+                                com.steady.habittracker.web.LocalWebService.stop(context)
+                                com.steady.habittracker.web.LocalWebService.start(context)
+                                tick++
+                            }
+                        ) {
+                            Text("Restart server", fontSize = 12.sp)
+                        }
                         OutlinedTextField(
                             value = web.port.toString(),
                             onValueChange = { v ->
                                 v.toIntOrNull()?.let { p ->
-                                    if (p in 1024..65535) onUpdateLocalWebPrefs(web.copy(port = p))
+                                    if (p in 1024..65534) onUpdateLocalWebPrefs(web.copy(port = p))
                                 }
                             },
-                            label = { Text("Port") },
+                            label = { Text("HTTP port (HTTPS = port+1)") },
                             singleLine = true,
                             modifier = Modifier.fillMaxWidth()
                         )
+                        Row(
+                            Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(Modifier.weight(1f)) {
+                                Text("HTTPS (self-signed)", fontSize = 13.sp)
+                                Text("TLS on port ${web.port + 1}", fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                            Switch(
+                                checked = web.httpsEnabled,
+                                onCheckedChange = { onUpdateLocalWebPrefs(web.copy(httpsEnabled = it)) }
+                            )
+                        }
                         OutlinedTextField(
                             value = web.pin,
                             onValueChange = { onUpdateLocalWebPrefs(web.copy(pin = it.take(12))) },
-                            label = { Text("Optional PIN") },
+                            label = { Text("Optional API PIN") },
                             singleLine = true,
                             modifier = Modifier.fillMaxWidth()
                         )

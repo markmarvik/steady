@@ -1,8 +1,11 @@
 package com.steady.habittracker.web
 
 import android.content.Context
-import android.net.wifi.WifiManager
-import android.text.format.Formatter
+import android.net.ConnectivityManager
+import android.net.LinkProperties
+import android.net.NetworkCapabilities
+import android.os.Build
+import android.util.Log
 import com.steady.habittracker.data.AndroidHabitRepository
 import com.steady.habittracker.data.AppData
 import com.steady.habittracker.data.CaptureItem
@@ -27,104 +30,300 @@ import org.json.JSONObject
 import java.io.BufferedReader
 import java.io.InputStreamReader
 import java.io.OutputStream
+import java.net.Inet4Address
 import java.net.InetSocketAddress
+import java.net.NetworkInterface
 import java.net.ServerSocket
 import java.net.Socket
+import java.security.KeyStore
 import java.time.LocalDate
+import java.util.Collections
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
+import javax.net.ssl.KeyManagerFactory
+import javax.net.ssl.SSLContext
+import javax.net.ssl.SSLServerSocket
+import javax.net.ssl.SSLServerSocketFactory
 import kotlin.concurrent.thread
 
 /**
- * Minimal LAN-only HTTP server for desktop access (#38).
- * No external deps — plain ServerSocket + JSON/HTML.
+ * LAN web server for desktop access.
+ * - HTTP on [LocalWebPrefs.port] (default 8787), bound to 0.0.0.0
+ * - Optional HTTPS on [LocalWebPrefs.port] + 1 with bundled self-signed cert
  *
- * Endpoints:
- *  GET  /              HTML dashboard + Pomodoro
- *  GET  /habits        HTML habit catalog + create
- *  GET  /api/today     sections + habits + captures
- *  GET  /api/habits    catalog
- *  GET  /api/groups
- *  GET  /api/history   streak / recent days summary
- *  GET  /api/pomodoro
- *  GET  /api/quote
- *  POST /api/log       {habitId, value?, note?}
- *  POST /api/unlog     {habitId}
- *  POST /api/habit     {name, groupId, type?} create
- *  POST /api/archive   {habitId}
- *  POST /api/capture   {title, note?, tags?}
- *  POST /api/pomodoro  {action: start|stop|break, workMin?, breakMin?}
+ * Prefer starting via [LocalWebService] so Android keeps the process alive.
  */
 object LocalWebServer {
+    private const val TAG = "SteadyWeb"
+    private const val KEYSTORE_ASSET = "steady_local.p12"
+    private const val KEYSTORE_PASS = "steady-local"
+
+    private val lock = Any()
     private val running = AtomicBoolean(false)
-    private val serverRef = AtomicReference<ServerSocket?>(null)
+    private val httpSocket = AtomicReference<ServerSocket?>(null)
+    private val httpsSocket = AtomicReference<ServerSocket?>(null)
     private val prefsRef = AtomicReference(LocalWebPrefs())
     private var appContext: Context? = null
+
+    /** Last status for UI (thread-safe). */
+    @Volatile
+    var statusMessage: String = "Stopped"
+        private set
+
+    @Volatile
+    var lastError: String? = null
+        private set
+
+    @Volatile
+    var boundHttpPort: Int = 0
+        private set
+
+    @Volatile
+    var boundHttpsPort: Int = 0
+        private set
+
+    fun isRunning(): Boolean = running.get()
 
     fun setEnabled(context: Context, data: AppData) {
         appContext = context.applicationContext
         prefsRef.set(data.localWebPrefs)
         if (data.localWebPrefs.enabled) {
-            start(context.applicationContext, data.localWebPrefs.port)
+            LocalWebService.start(context.applicationContext)
         } else {
+            LocalWebService.stop(context.applicationContext)
             stop()
         }
     }
 
-    fun start(context: Context, port: Int = 8787) {
-        appContext = context.applicationContext
-        if (running.get()) {
-            // Restart if port changed
-            val current = serverRef.get()
-            if (current != null && !current.isClosed && current.localPort == port) return
-            stop()
-        }
-        thread(name = "steady-web", isDaemon = true) {
-            try {
-                val ss = ServerSocket()
-                ss.reuseAddress = true
-                ss.bind(InetSocketAddress(port))
-                serverRef.set(ss)
-                running.set(true)
-                while (running.get()) {
+    /**
+     * Start listening. Safe to call repeatedly.
+     * Called from [LocalWebService] on a background thread.
+     */
+    fun start(context: Context, prefs: LocalWebPrefs = prefsRef.get()): Boolean {
+        synchronized(lock) {
+            appContext = context.applicationContext
+            prefsRef.set(prefs)
+            stopInternal()
+
+            val httpPort = prefs.port.coerceIn(1024, 65534)
+            val httpsPort = (httpPort + 1).coerceAtMost(65535)
+            lastError = null
+
+            return try {
+                // Explicit wildcard — all interfaces (Wi‑Fi + localhost)
+                val http = ServerSocket()
+                http.reuseAddress = true
+                http.bind(InetSocketAddress("0.0.0.0", httpPort))
+                httpSocket.set(http)
+                boundHttpPort = http.localPort
+
+                var httpsOk = false
+                if (prefs.httpsEnabled) {
                     try {
-                        val client = ss.accept()
-                        thread(isDaemon = true) { handleClient(client) }
-                    } catch (_: Exception) {
-                        if (!running.get()) break
+                        val factory = sslServerSocketFactory(context)
+                        if (factory != null) {
+                            val https = factory.createServerSocket() as SSLServerSocket
+                            https.reuseAddress = true
+                            https.bind(InetSocketAddress("0.0.0.0", httpsPort))
+                            // Accept self-signed / LAN browsers
+                            https.enabledProtocols = arrayOf("TLSv1.2", "TLSv1.3")
+                            httpsSocket.set(https)
+                            boundHttpsPort = https.localPort
+                            httpsOk = true
+                        } else {
+                            Log.w(TAG, "HTTPS keystore missing; HTTP only")
+                        }
+                    } catch (e: Exception) {
+                        Log.e(TAG, "HTTPS bind failed", e)
+                        boundHttpsPort = 0
+                        lastError = "HTTPS failed: ${e.message}"
+                    }
+                } else {
+                    boundHttpsPort = 0
+                }
+
+                running.set(true)
+                statusMessage = buildStatus(httpsOk)
+
+                thread(name = "steady-web-http", isDaemon = true) {
+                    acceptLoop(http, "http")
+                }
+                if (httpsOk) {
+                    val hs = httpsSocket.get()
+                    if (hs != null) {
+                        thread(name = "steady-web-https", isDaemon = true) {
+                            acceptLoop(hs, "https")
+                        }
                     }
                 }
-            } catch (_: Exception) {
+
+                Log.i(TAG, statusMessage)
+                true
+            } catch (e: Exception) {
+                Log.e(TAG, "HTTP bind failed on $httpPort", e)
+                lastError = e.message ?: e.javaClass.simpleName
+                statusMessage = "Failed: $lastError"
                 running.set(false)
+                stopInternal()
+                false
             }
         }
     }
 
     fun stop() {
-        running.set(false)
-        try {
-            serverRef.getAndSet(null)?.close()
-        } catch (_: Exception) { }
+        synchronized(lock) {
+            stopInternal()
+            statusMessage = "Stopped"
+            lastError = null
+            boundHttpPort = 0
+            boundHttpsPort = 0
+        }
     }
 
-    fun isRunning(): Boolean = running.get()
+    private fun stopInternal() {
+        running.set(false)
+        try {
+            httpSocket.getAndSet(null)?.close()
+        } catch (_: Exception) { }
+        try {
+            httpsSocket.getAndSet(null)?.close()
+        } catch (_: Exception) { }
+        // Brief pause so the OS releases the port before rebind
+        try {
+            Thread.sleep(80)
+        } catch (_: InterruptedException) { }
+    }
 
-    fun localAddressHint(context: Context): String {
-        val port = prefsRef.get().port
-        return try {
-            val wm = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
-            @Suppress("DEPRECATION")
-            val ip = Formatter.formatIpAddress(wm.connectionInfo.ipAddress)
-            if (ip == "0.0.0.0") "http://<phone-ip>:$port" else "http://$ip:$port"
-        } catch (_: Exception) {
-            "http://<phone-ip>:$port"
+    private fun buildStatus(httpsOk: Boolean): String {
+        val ips = lanIpv4Addresses()
+        val ipHint = ips.firstOrNull() ?: "127.0.0.1"
+        return buildString {
+            append("Listening · HTTP http://$ipHint:$boundHttpPort")
+            if (httpsOk) append(" · HTTPS https://$ipHint:$boundHttpsPort (self-signed)")
         }
+    }
+
+    private fun acceptLoop(server: ServerSocket, label: String) {
+        while (running.get() && !server.isClosed) {
+            try {
+                val client = server.accept()
+                thread(name = "steady-web-client-$label", isDaemon = true) {
+                    handleClient(client)
+                }
+            } catch (e: Exception) {
+                if (running.get()) {
+                    Log.w(TAG, "accept ($label) error: ${e.message}")
+                }
+                break
+            }
+        }
+    }
+
+    private fun sslServerSocketFactory(context: Context): SSLServerSocketFactory? {
+        return try {
+            val ks = KeyStore.getInstance("PKCS12")
+            context.assets.open(KEYSTORE_ASSET).use { stream ->
+                ks.load(stream, KEYSTORE_PASS.toCharArray())
+            }
+            val kmf = KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm())
+            kmf.init(ks, KEYSTORE_PASS.toCharArray())
+            val ctx = SSLContext.getInstance("TLS")
+            ctx.init(kmf.keyManagers, null, null)
+            ctx.serverSocketFactory
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to load TLS keystore", e)
+            null
+        }
+    }
+
+    /** Best-effort LAN IPv4 addresses (Wi‑Fi first). */
+    fun lanIpv4Addresses(): List<String> {
+        val found = linkedSetOf<String>()
+        // ConnectivityManager active network (API 23+)
+        try {
+            val ctx = appContext
+            if (ctx != null) {
+                val cm = ctx.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+                if (cm != null) {
+                    val network = cm.activeNetwork
+                    val caps = network?.let { cm.getNetworkCapabilities(it) }
+                    val lp: LinkProperties? = network?.let { cm.getLinkProperties(it) }
+                    val isWifiOrEth = caps?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true ||
+                        caps?.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) == true
+                    if (isWifiOrEth && lp != null) {
+                        lp.linkAddresses.forEach { la ->
+                            val a = la.address
+                            if (a is Inet4Address && !a.isLoopbackAddress) {
+                                found.add(a.hostAddress ?: return@forEach)
+                            }
+                        }
+                    }
+                }
+            }
+        } catch (_: Exception) { }
+
+        // Enumerate all interfaces
+        try {
+            val ifaces = Collections.list(NetworkInterface.getNetworkInterfaces())
+            for (ni in ifaces) {
+                if (!ni.isUp || ni.isLoopback) continue
+                val name = ni.name.lowercase()
+                val addrs = Collections.list(ni.inetAddresses)
+                for (addr in addrs) {
+                    if (addr is Inet4Address && !addr.isLoopbackAddress) {
+                        val host = addr.hostAddress ?: continue
+                        // Prefer wlan/eth
+                        if (name.startsWith("wlan") || name.startsWith("eth") || name.startsWith("en")) {
+                            found.add(host)
+                        } else {
+                            found.add(host)
+                        }
+                    }
+                }
+            }
+        } catch (_: Exception) { }
+
+        // Deprecated WifiManager fallback
+        try {
+            val ctx = appContext
+            if (ctx != null) {
+                @Suppress("DEPRECATION")
+                val wm = ctx.applicationContext.getSystemService(Context.WIFI_SERVICE) as? android.net.wifi.WifiManager
+                @Suppress("DEPRECATION")
+                val ipInt = wm?.connectionInfo?.ipAddress ?: 0
+                if (ipInt != 0) {
+                    @Suppress("DEPRECATION")
+                    val ip = android.text.format.Formatter.formatIpAddress(ipInt)
+                    if (ip != "0.0.0.0") found.add(ip)
+                }
+            }
+        } catch (_: Exception) { }
+
+        return found.toList()
+    }
+
+    fun httpUrls(): List<String> {
+        val port = if (boundHttpPort > 0) boundHttpPort else prefsRef.get().port
+        val ips = lanIpv4Addresses().ifEmpty { listOf("127.0.0.1") }
+        return ips.map { "http://$it:$port" } + "http://127.0.0.1:$port"
+    }
+
+    fun httpsUrls(): List<String> {
+        if (boundHttpsPort <= 0) return emptyList()
+        val ips = lanIpv4Addresses().ifEmpty { listOf("127.0.0.1") }
+        return ips.map { "https://$it:$boundHttpsPort" } + "https://127.0.0.1:$boundHttpsPort"
+    }
+
+    /** @deprecated use [httpUrls] */
+    fun localAddressHint(context: Context): String {
+        appContext = context.applicationContext
+        return httpUrls().firstOrNull() ?: "http://127.0.0.1:${prefsRef.get().port}"
     }
 
     private fun handleClient(socket: Socket) {
         try {
-            socket.soTimeout = 15_000
+            socket.soTimeout = 20_000
             val reader = BufferedReader(InputStreamReader(socket.getInputStream()))
             val requestLine = reader.readLine() ?: return
             val parts = requestLine.split(" ")
@@ -166,6 +365,16 @@ object LocalWebServer {
                     writeResponse(socket.getOutputStream(), 200, "text/html; charset=utf-8", htmlDashboard())
                 path == "/habits" ->
                     writeResponse(socket.getOutputStream(), 200, "text/html; charset=utf-8", htmlHabits())
+                path == "/api/status" && method == "GET" ->
+                    writeResponse(
+                        socket.getOutputStream(), 200, "application/json",
+                        JSONObject()
+                            .put("running", running.get())
+                            .put("httpPort", boundHttpPort)
+                            .put("httpsPort", boundHttpsPort)
+                            .put("status", statusMessage)
+                            .toString()
+                    )
                 path == "/api/today" && method == "GET" ->
                     writeResponse(socket.getOutputStream(), 200, "application/json", apiToday())
                 path == "/api/habits" && method == "GET" ->
@@ -197,7 +406,8 @@ object LocalWebServer {
                     writeResponse(socket.getOutputStream(), 200, "application/json", apiPomodoroPost(body))
                 else -> writeResponse(socket.getOutputStream(), 404, "text/plain", "Not found")
             }
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            Log.w(TAG, "client error: ${e.message}")
         } finally {
             try {
                 socket.close()
@@ -529,11 +739,12 @@ object LocalWebServer {
   input, textarea { width:100%; box-sizing:border-box; background:#0f1419; border:1px solid #243044; color:#e7ecf1; border-radius:8px; padding:8px; margin:4px 0 8px; }
   .row { display:flex; gap:8px; flex-wrap:wrap; }
   .tag { font-size:10px; color:#8b9aab; }
+  a { color:#3dcea8; }
 </style>
 </head>
 <body>
   <h1>Steady</h1>
-  <p class="sub">Local LAN · <a href="/" style="color:#3dcea8">Today</a> · <a href="/habits" style="color:#3dcea8">Habits</a> · Capture · Pomodoro</p>
+  <p class="sub">Local LAN · <a href="/">Today</a> · <a href="/habits">Habits</a> · Capture · Pomodoro</p>
   <p class="quote">"${quote.text.replace("\"", "&quot;")}" — ${quote.attribution}</p>
   <card>
     <strong>Pomodoro</strong>

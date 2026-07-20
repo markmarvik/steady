@@ -105,9 +105,11 @@ Four focused sub-tabs:
 - Special extension blocks receive tailored status lines on Today
 
 ### Local web UI (LAN)
-- Opt-in lightweight server on the phone (`Manage → Blocks`)
-- Desktop browser on the same Wi‑Fi: **Today** (log/undo), **Habits** catalog (create/archive), capture, Pomodoro, 14-day history API
-- Fully local — no cloud
+- Opt-in server on the phone (`Manage → Blocks`) — runs as a **foreground service** (notification while on)
+- **HTTP** on port 8787 (default): open `http://PHONE_IP:8787` — do **not** type `https://` on this port
+- **HTTPS** (optional, default on) on port **8788** with a bundled self-signed cert; accept the browser warning once
+- Same Wi‑Fi as your PC; phone firewall / VPN can block LAN access
+- **Today** (log/undo), **Habits** catalog, capture, Pomodoro, history API — fully local, no cloud
 
 ### Appearance
 - **Theme packs** inspired by Linux rice palettes: Nord, Catppuccin, Tokyo Night, Gruvbox, Dracula, Rosé Pine, Everforest, One Dark, OLED, Latte
