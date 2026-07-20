@@ -56,6 +56,39 @@ class ExtensionAndQuotesTest {
         assertTrue(CaptureTags.IDEAS in CaptureTags.PRESETS)
         assertTrue(CaptureTags.NOTES in CaptureTags.PRESETS)
         assertTrue(CaptureTags.REMINDERS in CaptureTags.PRESETS)
+        assertTrue(CaptureTags.TODO in CaptureTags.DEFAULT_INBOX_TAGS)
+    }
+
+    @Test
+    fun inboxVsJournalRouting() {
+        val prefs = CapturePrefs()
+        assertTrue(prefs.goesToInbox(listOf(CaptureTags.IDEAS)))
+        assertTrue(prefs.goesToInbox(listOf(CaptureTags.TODO)))
+        assertTrue(prefs.goesToInbox(listOf(CaptureTags.REMINDERS)))
+        assertFalse(prefs.goesToInbox(listOf(CaptureTags.MEMORIES)))
+        assertFalse(prefs.goesToInbox(listOf(CaptureTags.GRATITUDE)))
+        assertFalse(prefs.goesToInbox(listOf(CaptureTags.THOUGHTS)))
+        // Mixed: any inbox tag keeps it in inbox
+        assertTrue(prefs.goesToInbox(listOf(CaptureTags.GRATITUDE, CaptureTags.IDEAS)))
+        assertTrue(prefs.goesToInbox(emptyList()))
+    }
+
+    @Test
+    fun journalArchiveMigration() {
+        val data = AppData(
+            groups = listOf(Group("g1", "M", order = 0)),
+            tags = listOf(Tag("t1", "T")),
+            captures = listOf(
+                CaptureItem("c1", "idea", tags = listOf(CaptureTags.IDEAS), processed = false),
+                CaptureItem("c2", "thanks", tags = listOf(CaptureTags.GRATITUDE), processed = false)
+            ),
+            schemaVersion = 13
+        )
+        val migrated = data.withJournalCapturesArchived()
+        assertFalse(migrated.captures.first { it.id == "c1" }.processed)
+        assertTrue(migrated.captures.first { it.id == "c2" }.processed)
+        assertEquals(1, migrated.inboxCaptures().size)
+        assertTrue(migrated.reflectionCaptures().any { it.id == "c2" })
     }
 
     @Test

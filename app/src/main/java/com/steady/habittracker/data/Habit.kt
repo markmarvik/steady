@@ -189,6 +189,7 @@ data class PomodoroPrefs(
 /** Preset tags for quick capture / ESM (#30, #36). */
 object CaptureTags {
     const val IDEAS = "Ideas"
+    const val TODO = "Todo"
     const val NOTES = "Notes"
     const val REMINDERS = "Reminders"
     const val MEMORIES = "Memories"
@@ -196,12 +197,26 @@ object CaptureTags {
     const val GRATITUDE = "Gratitude"
     const val DISTRACTIONS = "Distractions"
     const val ENERGY = "Energy"
+
     val PRESETS: List<String> = listOf(
-        IDEAS, NOTES, REMINDERS, MEMORIES, THOUGHTS, GRATITUDE, DISTRACTIONS, ENERGY
+        IDEAS, TODO, REMINDERS, NOTES, MEMORIES, THOUGHTS, GRATITUDE, DISTRACTIONS, ENERGY
     )
+
+    /**
+     * Action inbox — items that need a later check.
+     * Journal tags (memories, thoughts, gratitude, …) skip the inbox and go to archive.
+     */
+    val DEFAULT_INBOX_TAGS: List<String> = listOf(IDEAS, TODO, REMINDERS)
+
+    /** Reflection / log-only tags (never open inbox by themselves). */
+    val DEFAULT_JOURNAL_TAGS: List<String> = listOf(
+        NOTES, MEMORIES, THOUGHTS, GRATITUDE, DISTRACTIONS, ENERGY
+    )
+
     /** Short glyph for polished capture chips. */
     fun glyph(tag: String): String = when (tag) {
         IDEAS -> "💡"
+        TODO -> "✅"
         NOTES -> "📝"
         REMINDERS -> "⏰"
         MEMORIES -> "✨"
@@ -211,11 +226,14 @@ object CaptureTags {
         ENERGY -> "⚡"
         else -> "·"
     }
+
+    fun isDefaultInboxTag(tag: String): Boolean =
+        tag in DEFAULT_INBOX_TAGS
 }
 
 /**
  * Quick Capture configuration (Manage → Blocks / Capture).
- * Controls dialog tags, defaults, and optional energy scale.
+ * Controls dialog tags, defaults, inbox vs journal routing, and energy scale.
  */
 @Serializable
 data class CapturePrefs(
@@ -225,6 +243,11 @@ data class CapturePrefs(
     val defaultTags: List<String> = listOf(CaptureTags.IDEAS),
     /** User-defined extra tags (merged into the chip list). */
     val customTags: List<String> = emptyList(),
+    /**
+     * Tags that land in the action Inbox (need follow-up).
+     * Everything else is auto-archived to Journal.
+     */
+    val inboxTags: List<String> = CaptureTags.DEFAULT_INBOX_TAGS,
     val showNoteField: Boolean = true,
     /** Allow selecting more than one tag. */
     val multiTag: Boolean = true,
@@ -240,6 +263,55 @@ data class CapturePrefs(
         val custom = customTags.map { it.trim() }.filter { it.isNotEmpty() }
         return (base + custom).distinct()
     }
+
+    fun resolvedInboxTags(): Set<String> =
+        (if (inboxTags.isEmpty()) CaptureTags.DEFAULT_INBOX_TAGS else inboxTags)
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+            .toSet()
+
+    /**
+     * True if this capture should appear in the action Inbox.
+     * Rule: at least one tag is an inbox tag (or no tags → treat as Ideas/inbox).
+     */
+    fun goesToInbox(tags: List<String>): Boolean {
+        val inbox = resolvedInboxTags()
+        val cleaned = tags.map { it.trim() }.filter { it.isNotEmpty() }
+        if (cleaned.isEmpty()) return true
+        return cleaned.any { it in inbox }
+    }
+}
+
+/** Pending (open) inbox captures — Ideas / Todo / Reminders etc. */
+fun AppData.inboxCaptures(): List<CaptureItem> {
+    val prefs = capturePrefs
+    return captures
+        .filter { !it.processed && prefs.goesToInbox(it.tags) }
+        .sortedByDescending { it.createdAt }
+}
+
+/**
+ * Journal / archive — reflections and completed inbox items.
+ * Includes auto-archived non-inbox tags (memories, gratitude, …) and manually done inbox items.
+ */
+fun AppData.journalCaptures(): List<CaptureItem> {
+    val prefs = capturePrefs
+    return captures
+        .filter { cap ->
+            // Auto-archived journal entries (never were open inbox)
+            (!prefs.goesToInbox(cap.tags)) ||
+                // Or closed inbox items
+                (cap.processed && prefs.goesToInbox(cap.tags))
+        }
+        .sortedByDescending { it.createdAt }
+}
+
+/** Pure journal (non-inbox tags only) — for filters. */
+fun AppData.reflectionCaptures(): List<CaptureItem> {
+    val prefs = capturePrefs
+    return captures
+        .filter { !prefs.goesToInbox(it.tags) }
+        .sortedByDescending { it.createdAt }
 }
 
 /** Pending or last sensor proposal for a habit on a date. */
@@ -335,6 +407,11 @@ data class CaptureItem(
     val note: String = "",
     val createdAt: Long = System.currentTimeMillis(),
     val tags: List<String> = emptyList(),
+    /**
+     * Inbox items: false until the user marks done.
+     * Journal / archive tags (memories, gratitude, …) are saved with processed=true
+     * so they never enter the action inbox.
+     */
     val processed: Boolean = false,
     val linkedHabitId: String? = null
 )
@@ -857,6 +934,24 @@ fun AppData.withUpdatedCapture(updated: CaptureItem): AppData =
     copy(captures = captures.map { if (it.id == updated.id) updated else it })
 fun AppData.withoutCapture(id: String): AppData = copy(captures = captures.filter { it.id != id })
 fun AppData.withCapturePrefs(prefs: CapturePrefs): AppData = copy(capturePrefs = prefs)
+
+/**
+ * Auto-archive open captures that are not inbox-worthy (memories, gratitude, …)
+ * so they leave the action Inbox after a prefs/schema update.
+ */
+fun AppData.withJournalCapturesArchived(): AppData {
+    val prefs = capturePrefs
+    var changed = false
+    val next = captures.map { cap ->
+        if (!cap.processed && cap.tags.isNotEmpty() && !prefs.goesToInbox(cap.tags)) {
+            changed = true
+            cap.copy(processed = true)
+        } else {
+            cap
+        }
+    }
+    return if (changed) copy(captures = next) else this
+}
 
 // Exercise routine helpers (#21)
 fun AppData.withAddedRoutine(routine: ExerciseRoutine): AppData = copy(routines = routines + routine)

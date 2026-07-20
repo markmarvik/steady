@@ -743,6 +743,7 @@ fun SteadyApp(
                         onQuickCapture = viewModel::addCapture,
                         onProcessCapture = viewModel::markCaptureProcessed,
                         onDeleteCapture = viewModel::deleteCapture,
+                        onReopenCapture = viewModel::reopenCaptureToInbox,
                         onCreateMetric = { name -> viewModel.addMetricHabit(name) },
                         onLogMetric = viewModel::logEntry,
                         onStartRoutine = { rt -> activeWorkoutRoutine = rt },

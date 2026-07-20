@@ -145,8 +145,8 @@ fun CaptureDialog(
                             color = MaterialTheme.colorScheme.onSurface
                         )
                         Text(
-                            "Tag it. Save it. Stay in flow.",
-                            fontSize = 12.sp,
+                            "Ideas · Todo · Reminders → Inbox. Memories · Gratitude · Thoughts → Journal.",
+                            fontSize = 11.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }

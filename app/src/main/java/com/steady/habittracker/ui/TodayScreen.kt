@@ -33,6 +33,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.steady.habittracker.data.AppData
 import com.steady.habittracker.data.AutoSuggestion
+import com.steady.habittracker.data.CaptureTags
 import com.steady.habittracker.data.Habit
 import com.steady.habittracker.data.HabitDomain
 import com.steady.habittracker.data.HabitEntry
@@ -40,6 +41,8 @@ import com.steady.habittracker.data.HabitType
 import com.steady.habittracker.data.TimelineSection
 import com.steady.habittracker.data.displayGlyph
 import com.steady.habittracker.data.displayLabel
+import com.steady.habittracker.data.inboxCaptures
+import com.steady.habittracker.data.journalCaptures
 import com.steady.habittracker.sensors.AutoLogEngine
 import com.steady.habittracker.sensors.AutoLogMapper
 import java.text.SimpleDateFormat
@@ -58,6 +61,7 @@ fun TodayScreen(
     onQuickCapture: (title: String, note: String, tags: List<String>) -> Unit = { _, _, _ -> },  // #10 quick capture
     onProcessCapture: (id: String) -> Unit = {},
     onDeleteCapture: (id: String) -> Unit = {},
+    onReopenCapture: (id: String) -> Unit = {},
     // manual metric logging support (#19)
     onCreateMetric: (name: String) -> Unit = {},
     onLogMetric: (habitId: String, value: Double, note: String, date: String) -> Unit = { _, _, _, _ -> },
@@ -84,6 +88,7 @@ fun TodayScreen(
     // Dialog states (must declare before use)
     var showCaptureDialog by remember { mutableStateOf(false) }
     var showMetricDialog by remember { mutableStateOf(false) }
+    var showJournalDialog by remember { mutableStateOf(false) }
 
     LaunchedEffect(openCaptureRequest) {
         if (openCaptureRequest) {
@@ -120,6 +125,14 @@ fun TodayScreen(
             }
         )
     }
+    if (showJournalDialog) {
+        CaptureJournalDialog(
+            appData = appData,
+            onDismiss = { showJournalDialog = false },
+            onDelete = onDeleteCapture,
+            onReopenToInbox = onReopenCapture
+        )
+    }
 
     // Stable keys for domain work — avoid full AppData identity thrash when possible
     val dateKey = remember { LocalDate.now().toString() }
@@ -137,7 +150,13 @@ fun TodayScreen(
     val cue = remember(sections) { HabitDomain.dayProgressionCueFromSections(sections) }
     val nameById = remember(appData.habits) { appData.habits.associate { it.id to it.name } }
     val tagLabels = remember(appData.habits, appData.tags) { HabitDomain.tagLabelByHabitId(appData) }
-    val pendingCaptures = remember(appData.captures) { appData.captures.filter { !it.processed } }
+    // Action inbox only (Ideas / Todo / Reminders) — journal tags never appear here
+    val pendingCaptures = remember(appData.captures, appData.capturePrefs) {
+        appData.inboxCaptures()
+    }
+    val journalCount = remember(appData.captures, appData.capturePrefs) {
+        appData.journalCaptures().size
+    }
     val autoSuggestions = remember(appData.autoSuggestions, dateKey) {
         AutoLogEngine.pendingSuggestions(appData, dateKey)
     }
@@ -240,6 +259,19 @@ fun TodayScreen(
             Spacer(Modifier.weight(1f))
             // Compact pill actions
             Surface(
+                onClick = { showJournalDialog = true },
+                shape = RoundedCornerShape(20.dp),
+                color = colors.surfaceVariant
+            ) {
+                Text(
+                    if (journalCount > 0) "Journal · $journalCount" else "Journal",
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                    color = colors.onSurface,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Medium
+                )
+            }
+            Surface(
                 onClick = { showCaptureDialog = true },
                 shape = RoundedCornerShape(20.dp),
                 color = colors.primary.copy(alpha = 0.14f)
@@ -252,7 +284,7 @@ fun TodayScreen(
                     Text("✦", fontSize = 12.sp, color = colors.primary)
                     Text(
                         if (pendingCaptures.isEmpty()) "Capture"
-                        else "Capture · ${pendingCaptures.size}",
+                        else "Inbox · ${pendingCaptures.size}",
                         color = colors.primary,
                         fontSize = 13.sp,
                         fontWeight = FontWeight.SemiBold
@@ -330,16 +362,29 @@ fun TodayScreen(
 
             if (pendingCaptures.isNotEmpty()) {
                 item(key = "inbox_header", contentType = "hdr") {
-                    Text(
-                        "Quick Captures / Inbox",
-                        color = colors.primary,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        modifier = Modifier.padding(start = 4.dp)
-                    )
+                    Row(
+                        Modifier.fillMaxWidth().padding(horizontal = 4.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            "Inbox · ideas & todos",
+                            color = colors.primary,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Text(
+                            "Journal →",
+                            color = colors.onSurfaceVariant,
+                            fontSize = 11.sp,
+                            modifier = Modifier
+                                .clickable { showJournalDialog = true }
+                                .padding(4.dp)
+                        )
+                    }
                 }
                 items(
-                    pendingCaptures.take(5),
+                    pendingCaptures.take(8),
                     key = { "cap_${it.id}" },
                     contentType = { "cap" }
                 ) { cap ->
@@ -348,14 +393,24 @@ fun TodayScreen(
                         color = colors.surfaceVariant,
                         shape = RoundedCornerShape(10.dp)
                     ) {
-                        Column(Modifier.padding(8.dp)) {
+                        Column(Modifier.padding(10.dp)) {
                             Text(cap.title, color = colors.onSurface, fontSize = 13.sp, fontWeight = FontWeight.Medium)
                             if (cap.note.isNotBlank()) {
                                 Text(cap.note, color = colors.onSurfaceVariant, fontSize = 11.sp)
                             }
+                            if (cap.tags.isNotEmpty()) {
+                                Text(
+                                    cap.tags.joinToString(" · ") { t ->
+                                        "${CaptureTags.glyph(t)} $t"
+                                    },
+                                    color = colors.onSurfaceVariant,
+                                    fontSize = 10.sp,
+                                    modifier = Modifier.padding(top = 2.dp)
+                                )
+                            }
                             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 4.dp)) {
                                 Text(
-                                    "Mark Done",
+                                    "Done",
                                     color = colors.primary,
                                     fontSize = 11.sp,
                                     modifier = Modifier

@@ -1899,10 +1899,47 @@ private fun CapturePrefsCard(
                 fontSize = 14.sp
             )
             Text(
-                "Configure the Today capture sheet: tags, defaults, note field, energy scale.",
+                "Inbox is only for follow-ups (Ideas / Todo / Reminders). " +
+                    "Memories, Thoughts, Gratitude, etc. go straight to Journal.",
                 fontSize = 11.sp,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
+
+            Text("Inbox tags (need follow-up)", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+            Text(
+                "Selected tags open the Today Inbox. Others auto-archive to Journal.",
+                fontSize = 10.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            val inboxSet = prefs.resolvedInboxTags()
+            com.steady.habittracker.data.CaptureTags.PRESETS.chunked(3).forEach { row ->
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth()) {
+                    row.forEach { tag ->
+                        val on = tag in inboxSet
+                        FilterChip(
+                            selected = on,
+                            onClick = {
+                                val next = if (on) {
+                                    (inboxSet - tag).toList().ifEmpty {
+                                        com.steady.habittracker.data.CaptureTags.DEFAULT_INBOX_TAGS
+                                    }
+                                } else {
+                                    (inboxSet + tag).toList()
+                                }
+                                onUpdate(prefs.copy(inboxTags = next))
+                            },
+                            label = {
+                                Text(
+                                    "${com.steady.habittracker.data.CaptureTags.glyph(tag)} $tag",
+                                    fontSize = 10.sp
+                                )
+                            },
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                    repeat(3 - row.size) { Spacer(Modifier.weight(1f)) }
+                }
+            }
 
             Row(
                 Modifier.fillMaxWidth(),

@@ -104,24 +104,34 @@ class AndroidHabitRepository(private val context: Context) : HabitRepository {
     fun migrateIfNeeded(data: AppData): AppData {
         // Empty habits are valid (clean slate / first-run builder). Only require groups + tags structure.
         if (data.schemaVersion >= 13 && data.groups.isNotEmpty() && data.tags.isNotEmpty()) {
-            return HabitDomain.withFinalizedScoreHistory(data)
+            return HabitDomain.withFinalizedScoreHistory(data.withJournalCapturesArchived())
         }
         if (data.schemaVersion >= 12 && data.groups.isNotEmpty() && data.tags.isNotEmpty()) {
-            return HabitDomain.withFinalizedScoreHistory(data.copy(schemaVersion = 13))
+            return HabitDomain.withFinalizedScoreHistory(
+                data.copy(schemaVersion = 13).withJournalCapturesArchived()
+            )
         }
         if (data.schemaVersion >= 11 && data.groups.isNotEmpty() && data.tags.isNotEmpty()) {
-            return HabitDomain.withFinalizedScoreHistory(data.copy(schemaVersion = 13))
+            return HabitDomain.withFinalizedScoreHistory(
+                data.copy(schemaVersion = 13).withJournalCapturesArchived()
+            )
         }
         if (data.schemaVersion >= 10 && data.groups.isNotEmpty() && data.tags.isNotEmpty()) {
-            return HabitDomain.withFinalizedScoreHistory(data.copy(schemaVersion = 13))
+            return HabitDomain.withFinalizedScoreHistory(
+                data.copy(schemaVersion = 13).withJournalCapturesArchived()
+            )
         }
         if (data.schemaVersion >= 8 && data.groups.isNotEmpty() && data.tags.isNotEmpty()) {
             // Soft bump: score + notificationPrefs + auto-log already defaulted on decode
-            return HabitDomain.withFinalizedScoreHistory(data.copy(schemaVersion = 13))
+            return HabitDomain.withFinalizedScoreHistory(
+                data.copy(schemaVersion = 13).withJournalCapturesArchived()
+            )
         }
         if (data.schemaVersion >= 6 && data.groups.isNotEmpty() && data.tags.isNotEmpty()) {
             // Soft bump: ensure routines/goals lists exist (already defaulted on decode)
-            return HabitDomain.withFinalizedScoreHistory(data.copy(schemaVersion = 13))
+            return HabitDomain.withFinalizedScoreHistory(
+                data.copy(schemaVersion = 13).withJournalCapturesArchived()
+            )
         }
         // Start from current or fresh skeleton (do not re-seed habits when user has none)
         var d = if (data.groups.isNotEmpty()) data else getDefaultData()

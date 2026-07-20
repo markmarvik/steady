@@ -1002,11 +1002,18 @@ class SteadyViewModel(
         if (title.isBlank()) return
         viewModelScope.launch {
             val current = appData.value
+            val cleanedTags = tags.map { it.trim() }.filter { it.isNotEmpty() }.distinct()
+            // Inbox only for Ideas / Todo / Reminders (configurable).
+            // Memories, Thoughts, Gratitude, etc. are auto-archived to Journal.
+            val toInbox = current.capturePrefs.goesToInbox(cleanedTags)
             val cap = com.steady.habittracker.data.CaptureItem(
                 id = "c_${UUID.randomUUID().toString().take(8)}",
                 title = title.trim(),
                 note = note.trim(),
-                tags = tags
+                tags = cleanedTags.ifEmpty {
+                    if (toInbox) listOf(com.steady.habittracker.data.CaptureTags.IDEAS) else cleanedTags
+                },
+                processed = !toInbox
             )
             repository.saveData(current.withAddedCapture(cap))
         }
@@ -1018,6 +1025,18 @@ class SteadyViewModel(
             val existing = current.captures.find { it.id == id } ?: return@launch
             val updated = existing.copy(processed = true, linkedHabitId = linkedHabitId)
             repository.saveData(current.withUpdatedCapture(updated))
+        }
+    }
+
+    /** Move a closed inbox item back into the open Inbox. */
+    fun reopenCaptureToInbox(id: String) {
+        viewModelScope.launch {
+            val current = appData.value
+            val existing = current.captures.find { it.id == id } ?: return@launch
+            if (!current.capturePrefs.goesToInbox(existing.tags)) return@launch
+            repository.saveData(
+                current.withUpdatedCapture(existing.copy(processed = false))
+            )
         }
     }
 

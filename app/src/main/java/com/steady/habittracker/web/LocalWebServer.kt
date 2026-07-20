@@ -461,8 +461,11 @@ object LocalWebServer {
                         .put("habits", habits)
                 )
             }
+            val inbox = data.captures.filter {
+                !it.processed && data.capturePrefs.goesToInbox(it.tags)
+            }
             val caps = JSONArray()
-            data.captures.filter { !it.processed }.take(20).forEach { c ->
+            inbox.take(20).forEach { c ->
                 caps.put(
                     JSONObject()
                         .put("id", c.id)
@@ -473,7 +476,7 @@ object LocalWebServer {
             JSONObject()
                 .put("date", today)
                 .put("sections", arr)
-                .put("pendingCaptures", data.captures.count { !it.processed })
+                .put("pendingCaptures", inbox.size)
                 .put("captures", caps)
                 .put("momentum", HabitDomain.computeDayPoints(data, today))
                 .toString()
