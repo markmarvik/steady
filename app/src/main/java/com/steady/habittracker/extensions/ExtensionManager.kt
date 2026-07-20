@@ -10,6 +10,7 @@ import com.steady.habittracker.data.SensorSnapshot
 import com.steady.habittracker.data.withAddedSensorSnapshot
 import com.steady.habittracker.data.withSleepAudioPrefs
 import com.steady.habittracker.data.withUpdatedEntry
+import com.steady.habittracker.sensors.InstalledApps
 import com.steady.habittracker.sensors.LocationReader
 import com.steady.habittracker.sensors.ScreenTimeReader
 import com.steady.habittracker.sensors.StepCounterReader
@@ -165,11 +166,19 @@ object ExtensionManager {
             parts += "Usage access not granted"
         }
         if (habit.extensionConfig.includeAppBreakdown) {
-            val top = ScreenTimeReader.topAppsMinutes(context, limit = 5)
+            val pkgs = habit.extensionConfig.packages
+            val top = ScreenTimeReader.topAppsMinutes(
+                context,
+                limit = if (pkgs.isEmpty()) 5 else pkgs.size.coerceAtMost(12),
+                packages = pkgs
+            )
             if (top.isNotEmpty()) {
-                parts += "Top: " + top.joinToString(", ") { (pkg, min) ->
-                    "${pkg.substringAfterLast('.')}=${min}m"
-                }
+                parts += (if (pkgs.isEmpty()) "Top: " else "Tracked: ") +
+                    top.joinToString(", ") { (pkg, min) ->
+                        "${InstalledApps.labelFor(context, pkg).take(16)}=${min}m"
+                    }
+            } else if (pkgs.isNotEmpty()) {
+                parts += "No usage for selected apps today"
             }
         }
         val summary = parts.joinToString(" · ")

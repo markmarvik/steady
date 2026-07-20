@@ -106,7 +106,7 @@ Four focused sub-tabs:
 
 ### Local web UI (LAN)
 - Opt-in lightweight server on the phone (`Manage → Blocks`)
-- Desktop browser on the same Wi‑Fi: Today mirror + Pomodoro timer
+- Desktop browser on the same Wi‑Fi: **Today** (log/undo), **Habits** catalog (create/archive), capture, Pomodoro, 14-day history API
 - Fully local — no cloud
 
 ### Appearance

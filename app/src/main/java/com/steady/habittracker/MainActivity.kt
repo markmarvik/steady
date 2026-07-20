@@ -53,6 +53,7 @@ import com.steady.habittracker.data.AppData
 import com.steady.habittracker.data.Habit
 import com.steady.habittracker.reminders.NotificationHelper
 import com.steady.habittracker.data.SleepNightSession
+import com.steady.habittracker.ui.AccentHuePicker
 import com.steady.habittracker.ui.HistoryScreen
 import com.steady.habittracker.ui.LogEntryDialog
 import com.steady.habittracker.ui.ManageScreen
@@ -987,6 +988,14 @@ fun SteadyApp(
                     Spacer(Modifier.height(16.dp))
                     Text("Accent Color (foreground / highlights)", fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurface, fontSize = 13.sp)
                     Spacer(Modifier.height(6.dp))
+
+                    AccentHuePicker(
+                        currentSchemeId = appData.colorScheme,
+                        currentArgb = com.steady.habittracker.data.accentColorArgb(appData.colorScheme),
+                        onCustomColor = { viewModel.setColorScheme(it) }
+                    )
+                    Spacer(Modifier.height(12.dp))
+                    Text("Presets", fontSize = 11.sp, fontWeight = FontWeight.Medium, color = MaterialTheme.colorScheme.onSurfaceVariant)
 
                     val schemes = com.steady.habittracker.data.accentSchemes()
                     val familyLabels = mapOf(

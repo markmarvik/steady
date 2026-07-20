@@ -71,4 +71,12 @@ class ExtensionAndQuotesTest {
         assertNotNull(AppData().localWebPrefs)
         assertNotNull(AppData().pomodoroPrefs)
     }
+
+    @Test
+    fun customAccentSchemeRoundTrip() {
+        val id = customAccentSchemeId(0xFF3B82F6.toInt())
+        assertTrue(isCustomAccentScheme(id))
+        assertEquals(0xFF3B82F6.toInt(), accentColorArgb(id))
+        assertEquals(0xFF22C55E.toInt(), accentColorArgb("unknown_preset"))
+    }
 }

@@ -1779,6 +1779,42 @@ fun accentSchemes(): List<AccentSchemeOption> = listOf(
     AccentSchemeOption("violet", "Violet", 0xFF7C3AED.toInt(), "bold")
 )
 
-/** Resolve stored [AppData.colorScheme] id → ARGB accent. Unknown ids fall back to green. */
-fun accentColorArgb(schemeId: String): Int =
-    accentSchemes().firstOrNull { it.id == schemeId }?.colorArgb ?: 0xFF22C55E.toInt()
+/**
+ * Resolve stored [AppData.colorScheme] id → ARGB accent.
+ * Supports catalog ids and custom accents: `custom:#RRGGBB` or `custom_RRGGBB` (#30 color picker).
+ * Unknown ids fall back to green.
+ */
+fun accentColorArgb(schemeId: String): Int {
+    val id = schemeId.trim()
+    if (id.startsWith("custom:", ignoreCase = true)) {
+        return parseCustomAccentHex(id.removePrefix("custom:").removePrefix("CUSTOM:"))
+            ?: 0xFF22C55E.toInt()
+    }
+    if (id.startsWith("custom_", ignoreCase = true)) {
+        return parseCustomAccentHex(id.removePrefix("custom_").removePrefix("CUSTOM_"))
+            ?: 0xFF22C55E.toInt()
+    }
+    return accentSchemes().firstOrNull { it.id == id }?.colorArgb ?: 0xFF22C55E.toInt()
+}
+
+/** Build a stable custom scheme id from an ARGB color (always stores RGB hex). */
+fun customAccentSchemeId(argb: Int): String {
+    val rgb = argb and 0x00FFFFFF
+    return "custom:#%06X".format(rgb)
+}
+
+fun isCustomAccentScheme(schemeId: String): Boolean {
+    val id = schemeId.trim()
+    return id.startsWith("custom:", ignoreCase = true) || id.startsWith("custom_", ignoreCase = true)
+}
+
+private fun parseCustomAccentHex(raw: String): Int? {
+    val hex = raw.trim().removePrefix("#")
+    if (hex.length != 6 && hex.length != 8) return null
+    return try {
+        val v = hex.toLong(16)
+        if (hex.length == 6) (0xFF000000L or v).toInt() else v.toInt()
+    } catch (_: Exception) {
+        null
+    }
+}

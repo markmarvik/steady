@@ -1400,6 +1400,10 @@ private fun EditHabitDialog(
     var extIncludeApps by remember {
         mutableStateOf(habit.extensionConfig.includeAppBreakdown)
     }
+    var extPackages by remember {
+        mutableStateOf(habit.extensionConfig.packages)
+    }
+    var showAppPicker by remember { mutableStateOf(false) }
 
     val tagIds = remember(tags) { tags.map { it.id }.toSet() }
     LaunchedEffect(tagIds) {
@@ -1555,8 +1559,31 @@ private fun EditHabitDialog(
                     )
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         ThemedCheckbox(checked = extIncludeApps, onCheckedChange = { extIncludeApps = it })
-                        Text("Include top apps breakdown", fontSize = 12.sp)
+                        Text("Include apps breakdown", fontSize = 12.sp)
                     }
+                    if (extIncludeApps) {
+                        Text(
+                            if (extPackages.isEmpty()) "Tracking: top apps overall"
+                            else "Tracking ${extPackages.size} app(s)",
+                            fontSize = 11.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        TextButton(onClick = { showAppPicker = true }) {
+                            Text("Pick apps…", fontSize = 12.sp)
+                        }
+                        if (extPackages.isNotEmpty()) {
+                            TextButton(onClick = { extPackages = emptyList() }) {
+                                Text("Clear app filter", fontSize = 11.sp, color = MaterialTheme.colorScheme.error)
+                            }
+                        }
+                    }
+                }
+                if (showAppPicker) {
+                    AppPackagePickerDialog(
+                        selectedPackages = extPackages,
+                        onDismiss = { showAppPicker = false },
+                        onConfirm = { extPackages = it; showAppPicker = false }
+                    )
                 }
                 if (extType == com.steady.habittracker.data.ExtensionType.POMODORO) {
                     Spacer(Modifier.height(6.dp))
@@ -1673,6 +1700,9 @@ private fun EditHabitDialog(
                                 chainAfterHabitId = extChainAfter.trim().ifBlank { null },
                                 dailyLimitMinutes = extLimitMin.toIntOrNull(),
                                 includeAppBreakdown = extIncludeApps,
+                                packages = if (extType == com.steady.habittracker.data.ExtensionType.SCREEN_USAGE) {
+                                    extPackages
+                                } else habit.extensionConfig.packages,
                                 pomodoroWorkMin = extPomodoroWork
                             ),
                             habitReminder = com.steady.habittracker.data.HabitReminderPrefs(

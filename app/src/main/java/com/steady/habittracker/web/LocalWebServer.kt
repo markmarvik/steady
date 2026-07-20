@@ -6,12 +6,17 @@ import android.text.format.Formatter
 import com.steady.habittracker.data.AndroidHabitRepository
 import com.steady.habittracker.data.AppData
 import com.steady.habittracker.data.CaptureItem
+import com.steady.habittracker.data.Habit
 import com.steady.habittracker.data.HabitDomain
 import com.steady.habittracker.data.HabitEntry
+import com.steady.habittracker.data.HabitType
 import com.steady.habittracker.data.LocalWebPrefs
 import com.steady.habittracker.data.MotivationalQuotes
 import com.steady.habittracker.data.withAddedCapture
+import com.steady.habittracker.data.withAddedHabit
+import com.steady.habittracker.data.withArchivedHabit
 import com.steady.habittracker.data.withPomodoroPrefs
+import com.steady.habittracker.data.withRemovedEntry
 import com.steady.habittracker.data.withUpdatedEntry
 import com.steady.habittracker.extensions.ExtensionManager
 import com.steady.habittracker.widget.WidgetRenderer
@@ -25,6 +30,7 @@ import java.io.OutputStream
 import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.net.Socket
+import java.time.LocalDate
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
@@ -36,10 +42,17 @@ import kotlin.concurrent.thread
  *
  * Endpoints:
  *  GET  /              HTML dashboard + Pomodoro
+ *  GET  /habits        HTML habit catalog + create
  *  GET  /api/today     sections + habits + captures
+ *  GET  /api/habits    catalog
+ *  GET  /api/groups
+ *  GET  /api/history   streak / recent days summary
  *  GET  /api/pomodoro
  *  GET  /api/quote
  *  POST /api/log       {habitId, value?, note?}
+ *  POST /api/unlog     {habitId}
+ *  POST /api/habit     {name, groupId, type?} create
+ *  POST /api/archive   {habitId}
  *  POST /api/capture   {title, note?, tags?}
  *  POST /api/pomodoro  {action: start|stop|break, workMin?, breakMin?}
  */
@@ -151,8 +164,16 @@ object LocalWebServer {
             when {
                 path == "/" || path == "/index.html" ->
                     writeResponse(socket.getOutputStream(), 200, "text/html; charset=utf-8", htmlDashboard())
+                path == "/habits" ->
+                    writeResponse(socket.getOutputStream(), 200, "text/html; charset=utf-8", htmlHabits())
                 path == "/api/today" && method == "GET" ->
                     writeResponse(socket.getOutputStream(), 200, "application/json", apiToday())
+                path == "/api/habits" && method == "GET" ->
+                    writeResponse(socket.getOutputStream(), 200, "application/json", apiHabits())
+                path == "/api/groups" && method == "GET" ->
+                    writeResponse(socket.getOutputStream(), 200, "application/json", apiGroups())
+                path == "/api/history" && method == "GET" ->
+                    writeResponse(socket.getOutputStream(), 200, "application/json", apiHistory())
                 path == "/api/pomodoro" && method == "GET" ->
                     writeResponse(socket.getOutputStream(), 200, "application/json", apiPomodoro())
                 path == "/api/quote" && method == "GET" -> {
@@ -164,6 +185,12 @@ object LocalWebServer {
                 }
                 path == "/api/log" && method == "POST" ->
                     writeResponse(socket.getOutputStream(), 200, "application/json", apiLog(body))
+                path == "/api/unlog" && method == "POST" ->
+                    writeResponse(socket.getOutputStream(), 200, "application/json", apiUnlog(body))
+                path == "/api/habit" && method == "POST" ->
+                    writeResponse(socket.getOutputStream(), 200, "application/json", apiCreateHabit(body))
+                path == "/api/archive" && method == "POST" ->
+                    writeResponse(socket.getOutputStream(), 200, "application/json", apiArchiveHabit(body))
                 path == "/api/capture" && method == "POST" ->
                     writeResponse(socket.getOutputStream(), 200, "application/json", apiCapture(body))
                 path == "/api/pomodoro" && method == "POST" ->
@@ -254,6 +281,131 @@ object LocalWebServer {
             .put("sessionStartedAt", p.sessionStartedAt)
             .put("sessionIsBreak", p.sessionIsBreak)
             .toString()
+    }
+
+    private fun apiHabits(): String {
+        val data = loadData() ?: return """{"error":"load failed"}"""
+        val today = HabitDomain.getToday()
+        val arr = JSONArray()
+        data.habits.filter { !it.archived }.sortedBy { it.name.lowercase() }.forEach { h ->
+            val entry = data.entries[today]?.get(h.id)
+            arr.put(
+                JSONObject()
+                    .put("id", h.id)
+                    .put("name", h.name)
+                    .put("groupId", h.groupId)
+                    .put("type", h.type.name)
+                    .put("extension", h.extensionType.name)
+                    .put("icon", h.icon)
+                    .put("doneToday", (entry?.value ?: 0.0) >= 0.5)
+            )
+        }
+        return JSONObject().put("habits", arr).toString()
+    }
+
+    private fun apiGroups(): String {
+        val data = loadData() ?: return """{"error":"load failed"}"""
+        val arr = JSONArray()
+        data.groups.filter { !it.archived }.sortedBy { it.order }.forEach { g ->
+            arr.put(
+                JSONObject()
+                    .put("id", g.id)
+                    .put("name", g.name)
+                    .put("timeHint", g.timeHint)
+                    .put("order", g.order)
+                    .put("icon", g.icon)
+            )
+        }
+        return JSONObject().put("groups", arr).toString()
+    }
+
+    private fun apiHistory(): String {
+        val data = loadData() ?: return """{"error":"load failed"}"""
+        val today = LocalDate.now()
+        val days = JSONArray()
+        for (i in 0 until 14) {
+            val d = today.minusDays(i.toLong())
+            val ds = d.toString()
+            val pts = HabitDomain.computeDayPoints(data, ds)
+            val due = HabitDomain.habitsDueOn(data, d)
+            val entries = data.entries[ds] ?: emptyMap()
+            val done = due.count { h -> (entries[h.id]?.value ?: 0.0) >= 0.5 }
+            days.put(
+                JSONObject()
+                    .put("date", ds)
+                    .put("points", pts)
+                    .put("done", done)
+                    .put("due", due.size)
+            )
+        }
+        return JSONObject()
+            .put("streak", HabitDomain.computeStreak(data))
+            .put("lifetimePoints", data.score.lifetimePoints)
+            .put("days", days)
+            .toString()
+    }
+
+    private fun apiUnlog(body: String): String {
+        return try {
+            val json = JSONObject(body.ifBlank { "{}" })
+            val habitId = json.optString("habitId", "")
+            if (habitId.isBlank()) return """{"error":"habitId required"}"""
+            var data = loadData() ?: return """{"error":"load failed"}"""
+            val today = HabitDomain.getToday()
+            data = data.withRemovedEntry(today, habitId)
+            saveData(data)
+            JSONObject().put("ok", true).put("habitId", habitId).toString()
+        } catch (e: Exception) {
+            JSONObject().put("error", e.message ?: "unlog failed").toString()
+        }
+    }
+
+    private fun apiCreateHabit(body: String): String {
+        return try {
+            val json = JSONObject(body.ifBlank { "{}" })
+            val name = json.optString("name", "").trim()
+            val groupId = json.optString("groupId", "").trim()
+            if (name.isBlank() || groupId.isBlank()) {
+                return """{"error":"name and groupId required"}"""
+            }
+            var data = loadData() ?: return """{"error":"load failed"}"""
+            if (data.groups.none { it.id == groupId && !it.archived }) {
+                return """{"error":"group not found"}"""
+            }
+            val type = try {
+                HabitType.valueOf(json.optString("type", "CHECKBOX").uppercase())
+            } catch (_: Exception) {
+                HabitType.CHECKBOX
+            }
+            val id = "h_${UUID.randomUUID().toString().take(8)}"
+            val habit = Habit(
+                id = id,
+                name = name,
+                groupId = groupId,
+                type = type,
+                order = data.habits.count { it.groupId == groupId },
+                icon = json.optString("icon", "")
+            )
+            data = data.withAddedHabit(habit)
+            saveData(data)
+            JSONObject().put("ok", true).put("id", id).put("name", name).toString()
+        } catch (e: Exception) {
+            JSONObject().put("error", e.message ?: "create failed").toString()
+        }
+    }
+
+    private fun apiArchiveHabit(body: String): String {
+        return try {
+            val json = JSONObject(body.ifBlank { "{}" })
+            val habitId = json.optString("habitId", "")
+            if (habitId.isBlank()) return """{"error":"habitId required"}"""
+            var data = loadData() ?: return """{"error":"load failed"}"""
+            data = data.withArchivedHabit(habitId)
+            saveData(data)
+            JSONObject().put("ok", true).put("habitId", habitId).toString()
+        } catch (e: Exception) {
+            JSONObject().put("error", e.message ?: "archive failed").toString()
+        }
     }
 
     private fun apiLog(body: String): String {
@@ -381,7 +533,7 @@ object LocalWebServer {
 </head>
 <body>
   <h1>Steady</h1>
-  <p class="sub">Local LAN · Today · Capture · Pomodoro</p>
+  <p class="sub">Local LAN · <a href="/" style="color:#3dcea8">Today</a> · <a href="/habits" style="color:#3dcea8">Habits</a> · Capture · Pomodoro</p>
   <p class="quote">"${quote.text.replace("\"", "&quot;")}" — ${quote.attribution}</p>
   <card>
     <strong>Pomodoro</strong>
@@ -440,6 +592,13 @@ async function logHabit(id) {
     loadToday();
   } catch(e) { alert('Log failed'); }
 }
+async function unlogHabit(id) {
+  try {
+    await fetch('/api/unlog', { method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({habitId:id}) });
+    loadToday();
+  } catch(e) { alert('Undo failed'); }
+}
 async function sendCapture(tag) {
   const title = document.getElementById('capTitle').value.trim();
   if (!title) { alert('Title required'); return; }
@@ -464,7 +623,7 @@ async function loadToday() {
         html += '<div class="habit"><span>'+esc(h.name)+
           (h.extension&&h.extension!=='NONE'?' <span class="tag">'+h.extension+'</span>':'')+
           '</span>';
-        if (h.done) html += '<span class="done">✓</span>';
+        if (h.done) html += '<button class="ghost" onclick="unlogHabit(\''+h.id+'\')">Undo</button>';
         else html += '<button onclick="logHabit(\''+h.id+'\')">Log</button>';
         html += '</div>';
       });
@@ -481,6 +640,105 @@ function esc(s) {
 }
 loadToday();
 setInterval(loadToday, 12000);
+</script>
+</body>
+</html>
+        """.trimIndent()
+    }
+
+    private fun htmlHabits(): String {
+        return """
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Steady · Habits</title>
+<style>
+  body { font-family: system-ui, sans-serif; background:#0f1419; color:#e7ecf1; margin:0; padding:24px; max-width:720px; }
+  h1 { font-size:1.4rem; }
+  a { color:#3dcea8; }
+  card { display:block; background:#1a2332; border-radius:12px; padding:14px; margin-bottom:10px; }
+  .row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+  input, select { background:#0f1419; border:1px solid #243044; color:#e7ecf1; border-radius:8px; padding:8px; }
+  button { background:#3dcea8; color:#0f1419; border:0; border-radius:8px; padding:8px 12px; font-weight:600; cursor:pointer; }
+  button.ghost { background:#243044; color:#e7ecf1; }
+  button.danger { background:#7f1d1d; color:#fecaca; }
+  .habit { display:flex; justify-content:space-between; gap:8px; padding:8px 0; border-bottom:1px solid #243044; }
+  .tag { font-size:10px; color:#8b9aab; }
+</style>
+</head>
+<body>
+  <h1>Habits</h1>
+  <p class="tag"><a href="/">← Today</a> · create & archive · desktop CRUD</p>
+  <card>
+    <strong>New habit</strong>
+    <div class="row" style="margin-top:8px">
+      <input id="name" placeholder="Name" style="flex:1;min-width:140px"/>
+      <select id="group"></select>
+      <button onclick="createHabit()">Add</button>
+    </div>
+  </card>
+  <card>
+    <strong>14-day history</strong>
+    <div id="hist" class="tag">Loading…</div>
+  </card>
+  <div id="list">Loading…</div>
+<script>
+async function loadGroups() {
+  const r = await fetch('/api/groups');
+  const j = await r.json();
+  const sel = document.getElementById('group');
+  sel.innerHTML = '';
+  (j.groups||[]).forEach(g => {
+    const o = document.createElement('option');
+    o.value = g.id; o.textContent = g.name;
+    sel.appendChild(o);
+  });
+}
+async function loadHabits() {
+  const r = await fetch('/api/habits');
+  const j = await r.json();
+  let html = '<card><strong>Catalog ('+((j.habits||[]).length)+')</strong>';
+  (j.habits||[]).forEach(h => {
+    html += '<div class="habit"><span>'+esc(h.name)+
+      (h.extension&&h.extension!=='NONE'?' <span class="tag">'+h.extension+'</span>':'')+
+      (h.doneToday?' <span class="tag">done today</span>':'')+
+      '</span><button class="danger" onclick="archive(\''+h.id+'\')">Archive</button></div>';
+  });
+  html += '</card>';
+  document.getElementById('list').innerHTML = html;
+}
+async function loadHistory() {
+  try {
+    const r = await fetch('/api/history');
+    const j = await r.json();
+    let s = 'Streak '+ (j.streak||0) +' · lifetime '+ (j.lifetimePoints||0) +'<br/>';
+    (j.days||[]).slice(0,7).forEach(d => {
+      s += d.date +': '+d.done+'/'+d.due+' · '+d.points+' pts<br/>';
+    });
+    document.getElementById('hist').innerHTML = s;
+  } catch(e) { document.getElementById('hist').textContent = 'Failed'; }
+}
+async function createHabit() {
+  const name = document.getElementById('name').value.trim();
+  const groupId = document.getElementById('group').value;
+  if (!name || !groupId) { alert('Name + group required'); return; }
+  await fetch('/api/habit', { method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({name, groupId}) });
+  document.getElementById('name').value = '';
+  loadHabits();
+}
+async function archive(id) {
+  if (!confirm('Archive this habit?')) return;
+  await fetch('/api/archive', { method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({habitId:id}) });
+  loadHabits();
+}
+function esc(s) {
+  return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');
+}
+loadGroups(); loadHabits(); loadHistory();
 </script>
 </body>
 </html>
