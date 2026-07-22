@@ -8,6 +8,7 @@ import kotlinx.serialization.Serializable
  * - Tags = category identity for History (what it is: Supplements, Movement…).
  * - SleepSettings anchors Morning + Bedtime routines to bed/wake times.
  * - Habit.additionalGroupIds: same habit can appear in multiple timeline groups (#24).
+ *   Multi-group habits log **per group** (entry key habitId@groupId) so AM ≠ PM.
  * - Exercise routines + workout sessions for structured training (#20–#22).
  * - Habit.icon / Group.icon: optional emoji for lists, Today, widget (#29).
  * - ScoreState / NotificationPrefs: Steady Momentum + smart gentle reminders (v10).
@@ -127,7 +128,12 @@ enum class ExtensionType {
      * Universal oral hygiene steps (brush, floss, tongue scrape, water flush, …).
      * Placed in morning + evening routines when the block is enabled.
      */
-    ORAL_HYGIENE
+    ORAL_HYGIENE,
+    /**
+     * Minimal phone-use guard in morning and/or bedtime routines
+     * (track / park phone before sleep & delay first use in the morning).
+     */
+    SLEEP_PHONE
 }
 
 /** Notification / habit reminder intensity (#30). */
@@ -179,7 +185,48 @@ data class ExtensionConfig(
      * Oral hygiene step key for [ExtensionType.ORAL_HYGIENE]:
      * brush | floss | tongue | water | mouthwash
      */
-    val oralStepKey: String = ""
+    val oralStepKey: String = "",
+    /**
+     * Slot for [ExtensionType.SLEEP_PHONE]: [SleepPhoneSlots.MORNING] or
+     * [SleepPhoneSlots.EVENING].
+     */
+    val sleepPhoneSlot: String = ""
+)
+
+/** Stable keys for sleep phone-guard habits. */
+object SleepPhoneSlots {
+    const val MORNING = "morning"
+    const val EVENING = "evening"
+
+    fun stableHabitId(slot: String): String = "sleep_phone_$slot"
+}
+
+/**
+ * Manage → Blocks: minimal AM/PM phone-use habits with optional screen tracking.
+ */
+@Serializable
+data class SleepPhonePrefs(
+    val enabled: Boolean = false,
+    /** Evening routine: park phone / no doomscroll before bed. */
+    val eveningEnabled: Boolean = true,
+    /** Morning routine: delay first phone use. */
+    val morningEnabled: Boolean = true,
+    val eveningName: String = "Phone parked",
+    val morningName: String = "Phone later",
+    /**
+     * Local hour (0–23) when evening screen-use window starts
+     * (minutes after this hour shown on the habit).
+     */
+    val eveningTrackFromHour: Int = 21,
+    /**
+     * Local hour (0–23) when morning screen-use window ends
+     * (minutes from day-start / midnight until this hour).
+     */
+    val morningTrackUntilHour: Int = 9,
+    /** Attach measured screen minutes into the log note when completing. */
+    val attachScreenMinutes: Boolean = true,
+    val pointValue: Int = 5,
+    val essential: Boolean = false
 )
 
 /**
@@ -688,6 +735,40 @@ data class HabitEntry(
     val skipped: Boolean = false   // set for Skip button (value often 0)
 )
 
+/**
+ * Entry map keys for a day: bare [habitId] for single-group habits;
+ * [habitId]@[groupId] for multi-group habits so each routine slot is independent.
+ */
+object HabitEntryKeys {
+    const val SEP = "@"
+
+    fun isMultiSlot(habit: Habit): Boolean =
+        (listOf(habit.groupId) + habit.additionalGroupIds)
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+            .distinct()
+            .size > 1
+
+    fun key(habitId: String, groupId: String?): String {
+        val g = groupId?.trim().orEmpty()
+        return if (g.isEmpty()) habitId else "$habitId$SEP$g"
+    }
+
+    fun key(habit: Habit, groupId: String?): String {
+        if (!isMultiSlot(habit)) return habit.id
+        val g = groupId?.trim().orEmpty()
+        if (g.isEmpty()) return habit.id
+        return key(habit.id, g)
+    }
+
+    fun habitId(entryKey: String): String = entryKey.substringBefore(SEP)
+
+    fun groupId(entryKey: String): String? {
+        val i = entryKey.indexOf(SEP)
+        return if (i < 0) null else entryKey.substring(i + 1).takeIf { it.isNotEmpty() }
+    }
+}
+
 /** Basic capture item for quick ideas/todos (#8, #9). Stored alongside for MVP. */
 @Serializable
 data class CaptureItem(
@@ -1171,6 +1252,8 @@ data class AppData(
      * Default 4 = “Steady day” runs from 04:00 → next 04:00 (not midnight).
      */
     val dayStartHour: Int = 4,
+    /** Sleep phone-guard (AM/PM) prefs. */
+    val sleepPhonePrefs: SleepPhonePrefs = SleepPhonePrefs(),
     /** Gadgetbridge export poll + event thresholds (v15). */
     val gadgetbridgePrefs: GadgetbridgePrefs = GadgetbridgePrefs(),
     /**
@@ -1199,17 +1282,46 @@ data class ThemeColors(
  * All return new AppData instances; never mutate in place.
  * These keep business logic clean and easy to test / reason about.
  */
-fun AppData.withUpdatedEntry(date: String, habitId: String, entry: HabitEntry): AppData {
-    val dayMap = (entries[date] ?: emptyMap()).toMutableMap() // local temp only for building new
-    dayMap[habitId] = entry
+/**
+ * Upsert a day entry. For multi-group habits pass [groupId] so morning/evening
+ * completions stay independent (`habitId@groupId`).
+ */
+fun AppData.withUpdatedEntry(
+    date: String,
+    habitId: String,
+    entry: HabitEntry,
+    groupId: String? = null
+): AppData {
+    val habit = habits.find { it.id == habitId }
+    val key = if (habit != null) HabitEntryKeys.key(habit, groupId) else habitId
+    val dayMap = (entries[date] ?: emptyMap()).toMutableMap()
+    dayMap[key] = entry
+    // Prefer slot keys: drop legacy bare id once a multi-slot write lands on primary
+    if (habit != null && HabitEntryKeys.isMultiSlot(habit) && key != habitId) {
+        dayMap.remove(habitId)
+    }
     val newEntries = entries.toMutableMap()
     newEntries[date] = dayMap
     return copy(entries = newEntries)
 }
 
-fun AppData.withRemovedEntry(date: String, habitId: String): AppData {
+fun AppData.withRemovedEntry(
+    date: String,
+    habitId: String,
+    groupId: String? = null
+): AppData {
+    val habit = habits.find { it.id == habitId }
+    val key = if (habit != null) HabitEntryKeys.key(habit, groupId) else habitId
     val dayMap = entries[date]?.toMutableMap() ?: return this
-    dayMap.remove(habitId)
+    dayMap.remove(key)
+    if (habit != null && HabitEntryKeys.isMultiSlot(habit) && groupId == null) {
+        // Clear every slot + bare legacy key
+        dayMap.keys.filter {
+            it == habitId || HabitEntryKeys.habitId(it) == habitId
+        }.forEach { dayMap.remove(it) }
+    } else if (habit != null && HabitEntryKeys.isMultiSlot(habit) && key != habitId) {
+        // no-op bare cleanup already handled
+    }
     val newEntries = entries.toMutableMap()
     if (dayMap.isEmpty()) {
         newEntries.remove(date)
@@ -1218,6 +1330,35 @@ fun AppData.withRemovedEntry(date: String, habitId: String): AppData {
     }
     return copy(entries = newEntries)
 }
+
+/**
+ * Resolve the entry for a habit on [date], optionally scoped to a timeline [groupId].
+ * Legacy bare keys on multi-group habits only apply to the primary group.
+ */
+fun AppData.entryFor(
+    date: String,
+    habit: Habit,
+    groupId: String? = null
+): HabitEntry? {
+    val day = entries[date] ?: return null
+    if (HabitEntryKeys.isMultiSlot(habit)) {
+        val g = groupId?.trim().orEmpty()
+        if (g.isNotEmpty()) {
+            day[HabitEntryKeys.key(habit.id, g)]?.let { return it }
+            // Legacy single entry: only counts for primary membership
+            if (g == habit.groupId) return day[habit.id]
+            return null
+        }
+        // No group context: prefer bare, else any completed slot
+        day[habit.id]?.let { return it }
+        return HabitDomain.membershipGroupIds(habit)
+            .mapNotNull { day[HabitEntryKeys.key(habit.id, it)] }
+            .firstOrNull()
+    }
+    return day[habit.id]
+}
+
+fun AppData.withSleepPhonePrefs(prefs: SleepPhonePrefs): AppData = copy(sleepPhonePrefs = prefs)
 
 fun AppData.withArchivedHabit(habitId: String): AppData {
     val newHabits = habits.map { if (it.id == habitId) it.copy(archived = true) else it }

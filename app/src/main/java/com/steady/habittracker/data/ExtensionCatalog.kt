@@ -102,11 +102,21 @@ object ExtensionCatalog {
             type = ExtensionType.ORAL_HYGIENE,
             title = "Oral Hygiene",
             description = "Universal dental care — brush, floss, tongue scrape, water flush & more. " +
-                "Always placed in morning and evening routines.",
+                "Always placed in morning and evening routines (each slot independent).",
             defaultName = "Oral Hygiene",
             defaultIcon = "🪥",
             category = "Hygiene",
             suggestTimeHint = "MORNING"
+        ),
+        Template(
+            type = ExtensionType.SLEEP_PHONE,
+            title = "Sleep · Phone guard",
+            description = "Minimal phone-use checks in morning and bedtime: park the phone " +
+                "before sleep and delay first use after wake. Optionally logs screen minutes.",
+            defaultName = "Phone parked",
+            defaultIcon = "📵",
+            category = "Sleep",
+            suggestTimeHint = "BEDTIME"
         )
     )
 
@@ -124,6 +134,7 @@ object ExtensionCatalog {
         ExtensionType.POMODORO -> "Pomodoro"
         ExtensionType.GADGETBRIDGE_SYNC -> "Gadgetbridge"
         ExtensionType.ORAL_HYGIENE -> "Oral hygiene"
+        ExtensionType.SLEEP_PHONE -> "Phone guard"
     }
 
     fun isSpecial(habit: Habit): Boolean = habit.extensionType != ExtensionType.NONE
@@ -135,6 +146,7 @@ object ExtensionCatalog {
     fun livesOnDayTimeline(habit: Habit): Boolean = when (habit.extensionType) {
         ExtensionType.NONE -> true
         ExtensionType.ORAL_HYGIENE -> true
+        ExtensionType.SLEEP_PHONE -> true
         // Everything else is an “enabled block” strip under Today’s habits
         else -> false
     }

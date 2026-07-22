@@ -114,8 +114,35 @@ object HabitDomain {
                 isDueOn(it, date)
         }
 
+    /**
+     * Due habits expanded by timeline group. Multi-group habits contribute one
+     * [DueSlot] per membership so AM/PM can be completed independently.
+     */
+    fun dueSlotsOn(data: AppData, date: LocalDate = LocalDate.now()): List<DueSlot> =
+        habitsDueOn(data, date).flatMap { h ->
+            membershipGroupIds(h).map { gid -> DueSlot(habit = h, groupId = gid) }
+        }
+
     fun isPendingEntry(entry: HabitEntry?): Boolean =
         (entry?.value ?: 0.0) < 0.5 && entry?.skipped != true
+
+    fun isSlotPending(data: AppData, dateStr: String, slot: DueSlot): Boolean =
+        isPendingEntry(data.entryFor(dateStr, slot.habit, slot.groupId))
+
+    fun isSlotCompleted(data: AppData, dateStr: String, slot: DueSlot): Boolean =
+        isEntryCompleted(data.entryFor(dateStr, slot.habit, slot.groupId))
+
+    /**
+     * Multi-group: day counts for streak only when **every** slot is done.
+     * Single-group: standard completion.
+     */
+    fun isHabitFullyDoneOn(data: AppData, dateStr: String, habit: Habit): Boolean {
+        val gids = membershipGroupIds(habit)
+        if (gids.size <= 1) {
+            return isEntryCompleted(data.entryFor(dateStr, habit, gids.firstOrNull()))
+        }
+        return gids.all { gid -> isEntryCompleted(data.entryFor(dateStr, habit, gid)) }
+    }
 
     /**
      * Pending (due + not done/skipped) habits for a date, sorted by group → stack → order.
@@ -127,13 +154,10 @@ object HabitDomain {
         date: LocalDate = LocalDate.now()
     ): List<Pair<Group, List<Habit>>> {
         val dateStr = date.toString()
-        val entries = data.entries[dateStr] ?: emptyMap()
-        val due = habitsDueOn(data, date).filter { isPendingEntry(entries[it.id]) }
-        // Expand multi-group membership so one habit can appear in several sections (#24)
         val byGroup = mutableMapOf<String, MutableList<Habit>>()
-        due.forEach { h ->
-            membershipGroupIds(h).forEach { gid ->
-                byGroup.getOrPut(gid) { mutableListOf() }.add(h)
+        dueSlotsOn(data, date).forEach { slot ->
+            if (isSlotPending(data, dateStr, slot)) {
+                byGroup.getOrPut(slot.groupId) { mutableListOf() }.add(slot.habit)
             }
         }
         return getActiveGroups(data).mapNotNull { g ->
@@ -155,35 +179,35 @@ object HabitDomain {
         includeCompleted: Boolean = false
     ): List<TimelineSection> {
         val dateStr = date.toString()
-        val entries = data.entries[dateStr] ?: emptyMap()
-        val due = habitsDueOn(data, date)
-        val shown = if (includeCompleted) {
-            // Pending + completed; keep skipped out of the grid (they already left the day).
-            due.filter { h ->
-                val e = entries[h.id]
-                isPendingEntry(e) || ((e?.value ?: 0.0) >= 0.5 && e?.skipped != true)
+        val slots = dueSlotsOn(data, date)
+        val shownSlots = if (includeCompleted) {
+            slots.filter { slot ->
+                val e = data.entryFor(dateStr, slot.habit, slot.groupId)
+                isPendingEntry(e) || isEntryCompleted(e)
             }
         } else {
-            due.filter { isPendingEntry(entries[it.id]) }
+            slots.filter { isSlotPending(data, dateStr, it) }
         }
-        if (shown.isEmpty()) return emptyList()
+        if (shownSlots.isEmpty()) return emptyList()
 
-        // Multi-group expansion (#24): habit appears under every membership group
+        // One appearance per (habit, group) — multi-group slots stay independent
         val byGroup = mutableMapOf<String, MutableList<Habit>>()
-        shown.forEach { h ->
-            membershipGroupIds(h).forEach { gid ->
-                byGroup.getOrPut(gid) { mutableListOf() }.add(h)
-            }
+        shownSlots.forEach { slot ->
+            byGroup.getOrPut(slot.groupId) { mutableListOf() }.add(slot.habit)
         }
         val orderedIds = orderedGroupIdsForDay(data, now)
         val currentId = resolveCurrentGroup(data, now)?.id
         val currentIndex = orderedIds.indexOf(currentId).takeIf { it >= 0 }
 
-        fun orderForSection(habits: List<Habit>): List<Habit> {
+        fun orderForSection(gid: String, habits: List<Habit>): List<Habit> {
             val stacked = sortByStack(habits, data.habits)
             if (!includeCompleted) return stacked
-            val pending = stacked.filter { isPendingEntry(entries[it.id]) }
-            val done = stacked.filter { !isPendingEntry(entries[it.id]) }
+            val pending = stacked.filter {
+                isPendingEntry(data.entryFor(dateStr, it, gid))
+            }
+            val done = stacked.filter {
+                !isPendingEntry(data.entryFor(dateStr, it, gid))
+            }
             return pending + done
         }
 
@@ -198,14 +222,13 @@ object HabitDomain {
             sections.add(
                 TimelineSection(
                     group = group,
-                    habits = orderForSection(habits),
+                    habits = orderForSection(gid, habits),
                     isNow = isNow,
                     isPast = isPast && !isNow,
                     isFuture = isFuture && !isNow
                 )
             )
         }
-        // Pending in groups missing from spine (shouldn't happen often)
         val seen = sections.map { it.group.id }.toSet()
         byGroup.forEach { (gid, habits) ->
             if (gid in seen || habits.isEmpty()) return@forEach
@@ -213,7 +236,7 @@ object HabitDomain {
             sections.add(
                 TimelineSection(
                     group = group,
-                    habits = orderForSection(habits),
+                    habits = orderForSection(gid, habits),
                     isNow = gid == currentId,
                     isPast = false,
                     isFuture = true
@@ -373,19 +396,18 @@ object HabitDomain {
         var checkDate = logicalTodayDate(data)
 
         while (true) {
-            val due = habitsDueOn(data, checkDate)
+            val slots = dueSlotsOn(data, checkDate)
             val key = checkDate.toString()
-            val dayEntries = data.entries[key] ?: emptyMap()
-            val completedCount = due.count { h -> (dayEntries[h.id]?.value ?: 0.0) >= 0.5 }
+            val completedCount = slots.count { isSlotCompleted(data, key, it) }
             val ok = when {
-                due.isEmpty() -> true // nothing due — skip day without breaking
-                completedCount == due.size -> true
+                slots.isEmpty() -> true // nothing due — skip day without breaking
+                completedCount == slots.size -> true
                 completedCount >= 3 -> true
-                completedCount.toFloat() / due.size >= 0.6f -> true
+                completedCount.toFloat() / slots.size >= 0.6f -> true
                 else -> false
             }
             if (!ok) break
-            if (due.isNotEmpty()) streak++ // only count days that had something to do
+            if (slots.isNotEmpty()) streak++ // only count days that had something to do
             checkDate = checkDate.minusDays(1)
             if (streak > 365) break
         }
@@ -394,6 +416,7 @@ object HabitDomain {
 
     /**
      * Consecutive due-days this habit was completed (value ≥ 0.5, not skipped).
+     * Multi-group: every membership slot must be done that day.
      * Days the habit was not due are skipped without breaking the chain.
      * If today is still pending, the streak starts from yesterday (streak not lost mid-day).
      */
@@ -406,8 +429,7 @@ object HabitDomain {
         repeat(400) {
             val dueToday = isDueOn(habit, checkDate)
             val key = checkDate.toString()
-            val entry = data.entries[key]?.get(habitId)
-            val done = entry != null && !entry.skipped && entry.value >= 0.5
+            val done = isHabitFullyDoneOn(data, key, habit)
             if (dueToday) {
                 if (done) {
                     streak++
@@ -434,18 +456,17 @@ object HabitDomain {
         else -> "🔥"
     }
 
-    /** Completion among habits *due* that day (not full catalog). */
+    /** Completion among due **slots** that day (multi-group AM/PM count separately). */
     fun computeDayCompletion(data: AppData, dateStr: String): Float {
         val date = try {
             LocalDate.parse(dateStr)
         } catch (_: Exception) {
             return 0f
         }
-        val due = habitsDueOn(data, date)
-        if (due.isEmpty()) return 1f // nothing due = fully "done"
-        val dayMap = data.entries[dateStr] ?: emptyMap()
-        val done = due.count { h -> (dayMap[h.id]?.value ?: 0.0) >= 0.5 }
-        return done.toFloat() / due.size
+        val slots = dueSlotsOn(data, date)
+        if (slots.isEmpty()) return 1f // nothing due = fully "done"
+        val done = slots.count { isSlotCompleted(data, dateStr, it) }
+        return done.toFloat() / slots.size
     }
 
     /** Last N days of overall rates, oldest first. Returns list of (date, rate). */
@@ -1168,25 +1189,24 @@ object HabitDomain {
 
     /** Same thresholds as [computeStreak] for a single day. */
     fun isSolidDay(data: AppData, date: LocalDate): Boolean {
-        val due = habitsDueOn(data, date)
-        if (due.isEmpty()) return true
+        val slots = dueSlotsOn(data, date)
+        if (slots.isEmpty()) return true
         val key = date.toString()
-        val dayEntries = data.entries[key] ?: emptyMap()
-        val completedCount = due.count { h -> isEntryCompleted(dayEntries[h.id]) }
+        val completedCount = slots.count { isSlotCompleted(data, key, it) }
         return when {
-            completedCount == due.size -> true
+            completedCount == slots.size -> true
             completedCount >= 3 -> true
-            completedCount.toFloat() / due.size >= 0.6f -> true
+            completedCount.toFloat() / slots.size >= 0.6f -> true
             else -> false
         }
     }
 
-    /** All due habits completed (not skipped). Empty due day counts as clear. */
+    /** All due slots completed (not skipped). Empty due day counts as clear. */
     fun isFullClear(data: AppData, date: LocalDate): Boolean {
-        val due = habitsDueOn(data, date)
-        if (due.isEmpty()) return true
-        val dayEntries = data.entries[date.toString()] ?: emptyMap()
-        return due.all { h -> isEntryCompleted(dayEntries[h.id]) }
+        val slots = dueSlotsOn(data, date)
+        if (slots.isEmpty()) return true
+        val key = date.toString()
+        return slots.all { isSlotCompleted(data, key, it) }
     }
 
     fun hasPathCheckOn(data: AppData, dateStr: String): Boolean =
@@ -1198,13 +1218,13 @@ object HabitDomain {
         } catch (_: Exception) {
             return DayPointsBreakdown(0, 0, 0, 0, 0, 0, 0, 0, 0)
         }
-        val due = habitsDueOn(data, date)
-        val dayMap = data.entries[dateStr] ?: emptyMap()
+        val slots = dueSlotsOn(data, date)
         var habitPoints = 0
         var targetBonuses = 0
         var qualityBonuses = 0
-        for (h in due) {
-            val e = dayMap[h.id]
+        for (slot in slots) {
+            val h = slot.habit
+            val e = data.entryFor(dateStr, h, slot.groupId)
             if (!isEntryCompleted(e)) continue
             habitPoints += h.effectivePointValue()
             val value = e!!.value
@@ -1221,8 +1241,8 @@ object HabitDomain {
                 else -> Unit
             }
         }
-        val fullClear = if (due.isNotEmpty() && isFullClear(data, date)) FULL_CLEAR_BONUS else 0
-        val solid = if (due.isNotEmpty() && isSolidDay(data, date)) SOLID_DAY_BONUS else 0
+        val fullClear = if (slots.isNotEmpty() && isFullClear(data, date)) FULL_CLEAR_BONUS else 0
+        val solid = if (slots.isNotEmpty() && isSolidDay(data, date)) SOLID_DAY_BONUS else 0
         val path = if (hasPathCheckOn(data, dateStr)) PATH_CHECK_BONUS else 0
         val screenPen = screenOveragePenalty(data, dateStr)
         val raw = habitPoints + targetBonuses + qualityBonuses + fullClear + solid + path - screenPen
@@ -1295,11 +1315,11 @@ object HabitDomain {
             return 0
         }
         val current = computeDayPoints(data, dateStr)
-        val due = habitsDueOn(data, date)
-        val dayMap = data.entries[dateStr] ?: emptyMap()
+        val slots = dueSlotsOn(data, date)
         var ifDone = 0
-        for (h in due) {
-            val e = dayMap[h.id]
+        for (slot in slots) {
+            val h = slot.habit
+            val e = data.entryFor(dateStr, h, slot.groupId)
             val base = h.effectivePointValue()
             if (isEntryCompleted(e)) {
                 ifDone += base
@@ -1323,7 +1343,7 @@ object HabitDomain {
                 }
             }
         }
-        if (due.isNotEmpty()) {
+        if (slots.isNotEmpty()) {
             ifDone += FULL_CLEAR_BONUS + SOLID_DAY_BONUS
         }
         // Path check may still be logged today
@@ -1785,6 +1805,17 @@ fun timelineSectionsForToday(
 fun computeHabitStreak(data: AppData, habitId: String): Int =
     HabitDomain.computeHabitStreak(data, habitId)
 fun showRuleLabel(habit: Habit): String = HabitDomain.showRuleLabel(habit)
+
+/**
+ * One due occurrence of a habit in a timeline group.
+ * Multi-group habits produce one slot per membership (independent logs).
+ */
+data class DueSlot(
+    val habit: Habit,
+    val groupId: String
+) {
+    val entryKey: String get() = HabitEntryKeys.key(habit, groupId)
+}
 
 /** One spine section on Today / widget (pure visual day order). */
 data class TimelineSection(

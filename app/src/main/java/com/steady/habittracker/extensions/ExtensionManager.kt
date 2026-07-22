@@ -9,6 +9,7 @@ import com.steady.habittracker.data.HabitEntry
 import com.steady.habittracker.data.OralHygieneSteps
 import com.steady.habittracker.data.SensorKind
 import com.steady.habittracker.data.SensorSnapshot
+import com.steady.habittracker.data.SleepPhoneSlots
 import com.steady.habittracker.data.withAddedSensorSnapshot
 import com.steady.habittracker.data.withSleepAudioPrefs
 import com.steady.habittracker.data.withUpdatedEntry
@@ -19,6 +20,7 @@ import com.steady.habittracker.sensors.StepCounterReader
 import com.steady.habittracker.sleepaudio.SleepAudioScheduler
 import com.steady.habittracker.sleepaudio.SleepAudioService
 import java.time.LocalDate
+import java.time.LocalTime
 import java.util.UUID
 
 /**
@@ -46,7 +48,9 @@ object ExtensionManager {
         data: AppData,
         habit: Habit,
         entry: HabitEntry,
-        date: String = LocalDate.now().toString()
+        date: String = LocalDate.now().toString(),
+        /** Timeline group for multi-group habits (AM/PM independent). */
+        groupId: String? = null
     ): LogResult {
         if (entry.skipped || entry.value < 0.5) return LogResult(data)
         return when (habit.extensionType) {
@@ -63,7 +67,8 @@ object ExtensionManager {
             )
             ExtensionType.POMODORO -> handlePomodoro(data, habit, entry, date)
             ExtensionType.GADGETBRIDGE_SYNC -> LogResult(data)
-            ExtensionType.ORAL_HYGIENE -> handleOralHygiene(data, habit, entry, date)
+            ExtensionType.ORAL_HYGIENE -> handleOralHygiene(data, habit, entry, date, groupId)
+            ExtensionType.SLEEP_PHONE -> handleSleepPhone(context, data, habit, entry, date)
         }.let { result ->
             // Chain: trigger child SENSOR_AUTO_READ / others with chainAfterHabitId
             val chained = triggerChained(context, result.data, habit.id, date)
@@ -286,6 +291,7 @@ object ExtensionManager {
                 }
             }
             ExtensionType.ORAL_HYGIENE -> oralHygieneStatus(habit, data)
+            ExtensionType.SLEEP_PHONE -> sleepPhoneStatus(habit, data, context)
         }
     }
 
@@ -293,7 +299,8 @@ object ExtensionManager {
         data: AppData,
         habit: Habit,
         entry: HabitEntry,
-        date: String
+        date: String,
+        groupId: String?
     ): LogResult {
         val step = habit.extensionConfig.oralStepKey.ifBlank { "care" }
         val prefs = data.oralHygienePrefs
@@ -307,7 +314,12 @@ object ExtensionManager {
         }
         val note = listOfNotNull(entry.note.takeIf { it.isNotBlank() }, noteExtra)
             .joinToString(" · ")
-        val next = data.withUpdatedEntry(date, habit.id, entry.copy(note = note.take(500)))
+        val next = data.withUpdatedEntry(
+            date,
+            habit.id,
+            entry.copy(note = note.take(500)),
+            groupId
+        )
         return LogResult(next, summaryNote = noteExtra)
     }
 
@@ -321,6 +333,95 @@ object ExtensionManager {
             OralHygieneSteps.WATER -> "${prefs.waterFlushLabel.ifBlank { "Water" }} · AM & PM"
             OralHygieneSteps.MOUTHWASH -> "Mouthwash · AM & PM"
             else -> "Oral hygiene · AM & PM"
+        }
+    }
+
+    private fun handleSleepPhone(
+        context: Context,
+        data: AppData,
+        habit: Habit,
+        entry: HabitEntry,
+        date: String
+    ): LogResult {
+        val prefs = data.sleepPhonePrefs
+        val slot = habit.extensionConfig.sleepPhoneSlot
+        val screenNote = if (prefs.attachScreenMinutes) {
+            sleepPhoneScreenNote(context, prefs, slot, date)
+        } else {
+            null
+        }
+        val label = when (slot) {
+            SleepPhoneSlots.MORNING -> "Morning phone delay"
+            SleepPhoneSlots.EVENING -> "Evening phone parked"
+            else -> "Phone guard"
+        }
+        val note = listOfNotNull(
+            entry.note.takeIf { it.isNotBlank() },
+            label,
+            screenNote
+        ).joinToString(" · ")
+        val next = data.withUpdatedEntry(date, habit.id, entry.copy(note = note.take(500)))
+        return LogResult(next, summaryNote = listOfNotNull(label, screenNote).joinToString(" · "))
+    }
+
+    private fun sleepPhoneStatus(
+        habit: Habit,
+        data: AppData,
+        context: Context?
+    ): String {
+        val prefs = data.sleepPhonePrefs
+        val slot = habit.extensionConfig.sleepPhoneSlot
+        val base = when (slot) {
+            SleepPhoneSlots.MORNING -> "Delay first use · until ${prefs.morningTrackUntilHour}:00"
+            SleepPhoneSlots.EVENING -> "Park phone · after ${prefs.eveningTrackFromHour}:00"
+            else -> "Phone guard"
+        }
+        if (context == null || !prefs.attachScreenMinutes) return base
+        val mins = sleepPhoneScreenMinutes(context, prefs, slot)
+        return if (mins != null) {
+            "$base · ${ScreenTimeReader.formatMinutes(mins)} so far"
+        } else {
+            base
+        }
+    }
+
+    private fun sleepPhoneScreenNote(
+        context: Context,
+        prefs: com.steady.habittracker.data.SleepPhonePrefs,
+        slot: String,
+        date: String
+    ): String? {
+        val mins = sleepPhoneScreenMinutes(context, prefs, slot, date) ?: return null
+        return "screen ${ScreenTimeReader.formatMinutes(mins)}"
+    }
+
+    private fun sleepPhoneScreenMinutes(
+        context: Context,
+        prefs: com.steady.habittracker.data.SleepPhonePrefs,
+        slot: String,
+        dateStr: String? = null
+    ): Long? {
+        val date = try {
+            if (dateStr != null) LocalDate.parse(dateStr) else LocalDate.now()
+        } catch (_: Exception) {
+            LocalDate.now()
+        }
+        return when (slot) {
+            SleepPhoneSlots.EVENING -> {
+                val hour = prefs.eveningTrackFromHour.coerceIn(0, 23)
+                ScreenTimeReader.screenOnMinutesAfter(context, date, LocalTime.of(hour, 0))
+            }
+            SleepPhoneSlots.MORNING -> {
+                val endHour = prefs.morningTrackUntilHour.coerceIn(1, 23)
+                val full = ScreenTimeReader.screenOnMinutes(context, date) ?: return null
+                val after = ScreenTimeReader.screenOnMinutesAfter(
+                    context,
+                    date,
+                    LocalTime.of(endHour, 0)
+                ) ?: 0L
+                (full - after).coerceAtLeast(0L)
+            }
+            else -> null
         }
     }
 }

@@ -60,6 +60,7 @@ import com.steady.habittracker.data.displayGlyph
 import com.steady.habittracker.data.defaultLogNote
 import com.steady.habittracker.data.displayLabel
 import com.steady.habittracker.data.effectiveDescription
+import com.steady.habittracker.data.entryFor
 import com.steady.habittracker.data.inboxCaptures
 import com.steady.habittracker.data.journalCaptures
 import com.steady.habittracker.data.openTodoCaptures
@@ -82,12 +83,13 @@ import androidx.compose.ui.platform.LocalContext
 fun TodayScreen(
     appData: AppData,
     todayEntries: Map<String, HabitEntry>,
-    onToggle: (String) -> Unit,
-    onLogEntry: (habitId: String, value: Double, note: String, date: String) -> Unit,  // support backfill date for metrics
+    /** habitId, optional groupId for multi-group (AM/PM independent). */
+    onToggle: (habitId: String, groupId: String?) -> Unit,
+    onLogEntry: (habitId: String, value: Double, note: String, date: String, groupId: String?) -> Unit,
     onRequestLog: (Habit) -> Unit = { h ->
-        onLogEntry(h.id, 1.0, "", HabitDomain.logicalToday(appData))
+        onLogEntry(h.id, 1.0, "", HabitDomain.logicalToday(appData), null)
     },
-    onSkip: (String) -> Unit,
+    onSkip: (habitId: String, groupId: String?) -> Unit,
     onShowSkipPrompt: (habitId: String) -> Unit = {},
     onQuickCapture: (title: String, note: String, tags: List<String>) -> Unit = { _, _, _ -> },
     onUpdateCapture: (id: String, title: String, note: String, tags: List<String>) -> Unit = { _, _, _, _ -> },
@@ -224,12 +226,11 @@ fun TodayScreen(
             if (HabitDomain.isRoutineCompletedOn(appData, rt.id, dateKey)) rt.id else null
         }.toSet()
     }
-    // Done count for the toggle label (due today and finished)
+    // Done count for the toggle label (due slots finished — multi-group AM/PM separate)
     val doneTodayCount = remember(appData.habits, effectiveEntriesForDay, dateKey, logicalDate) {
-        val due = HabitDomain.habitsDueOn(appData, logicalDate)
-        due.count { h ->
-            val e = effectiveEntriesForDay[h.id]
-            e != null && !e.skipped && e.value >= 0.5
+        val data = appData.copy(entries = appData.entries + (dateKey to effectiveEntriesForDay))
+        HabitDomain.dueSlotsOn(data, logicalDate).count {
+            HabitDomain.isSlotCompleted(data, dateKey, it)
         }
     }
     val androidContext = LocalContext.current
@@ -247,11 +248,13 @@ fun TodayScreen(
         tagLabels,
         appData,
         androidContext,
-        showDoneHabits
+        showDoneHabits,
+        dateKey
     ) {
         sections.map { section ->
+            val gid = section.group.id
             val rows = section.habits.map { habit ->
-                val entry = effectiveEntriesForDay[habit.id] ?: todayEntries[habit.id]
+                val entry = dataForTimeline.entryFor(dateKey, habit, gid)
                 val isSimpleTapAdd = habit.type == HabitType.COUNTER &&
                     (
                         (habit.target ?: 0.0) <= 2.0 ||
@@ -278,8 +281,9 @@ fun TodayScreen(
                     entry?.loggedAt?.takeIf { it > 0 }?.let { add(formatLoggedTime(it)) }
                 }.joinToString(" · ")
                 TodayHabitRowModel(
-                    listKey = "${section.group.id}_${habit.id}",
+                    listKey = "${gid}_${habit.id}",
                     habit = habit,
+                    groupId = gid,
                     entry = entry,
                     isDone = isDone,
                     isSkipped = isSkipped,
@@ -817,7 +821,7 @@ fun TodayScreen(
                         colors = colors,
                         statusContext = androidContext,
                         onOpen = { onRequestLog(habit) },
-                        onToggle = { onToggle(habit.id) }
+                        onToggle = { onToggle(habit.id, habit.groupId) }
                     )
                 }
             }
@@ -867,6 +871,8 @@ private data class TodayListColors(
 private data class TodayHabitRowModel(
     val listKey: String,
     val habit: Habit,
+    /** Timeline section group — scopes multi-group completion. */
+    val groupId: String,
     val entry: HabitEntry?,
     val isDone: Boolean,
     val isSkipped: Boolean,
@@ -1261,10 +1267,10 @@ private fun EnabledBlockRow(
 private fun HabitSquare(
     model: TodayHabitRowModel,
     colors: TodayListColors,
-    onToggle: (String) -> Unit,
-    onLogEntry: (habitId: String, value: Double, note: String, date: String) -> Unit,
+    onToggle: (habitId: String, groupId: String?) -> Unit,
+    onLogEntry: (habitId: String, value: Double, note: String, date: String, groupId: String?) -> Unit,
     onRequestLog: (Habit) -> Unit,
-    onSkip: (String) -> Unit,
+    onSkip: (habitId: String, groupId: String?) -> Unit,
     onShowSkipPrompt: (habitId: String) -> Unit,
     /** Logical Steady day (yyyy-MM-dd) — must match log keys / dayStartHour. */
     logicalToday: String,
@@ -1334,14 +1340,15 @@ private fun HabitSquare(
                         } else {
                             haptics(SteadyHaptics.Kind.TICK)
                         }
-                        onToggle(habit.id)
+                        onToggle(habit.id, model.groupId)
                     } else if (model.isSimpleTapAdd) {
                         haptics(SteadyHaptics.Kind.SUCCESS)
                         onLogEntry(
                             habit.id,
                             habit.target ?: 1.0,
                             habit.defaultLogNote(),
-                            logicalToday
+                            logicalToday,
+                            model.groupId
                         )
                     } else {
                         haptics(SteadyHaptics.Kind.TICK)
@@ -1350,7 +1357,7 @@ private fun HabitSquare(
                 },
                 onLongClick = {
                     haptics(SteadyHaptics.Kind.WARN)
-                    onSkip(habit.id)
+                    onSkip(habit.id, model.groupId)
                     if (habit.canSkip) onShowSkipPrompt(habit.id)
                 }
             )

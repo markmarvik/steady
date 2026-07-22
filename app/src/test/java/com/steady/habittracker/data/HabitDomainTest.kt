@@ -437,19 +437,45 @@ class HabitDomainTest {
             "h_nac", "NAC", groupId = "g_morn",
             additionalGroupIds = listOf("g_even"), order = 0
         )
-        val data = AppData(groups = groups, habits = listOf(nac))
+        val data = AppData(groups = groups, habits = listOf(nac), dayStartHour = 0)
         val sections = HabitDomain.timelineSectionsForToday(data, LocalDate.now(), LocalTime.of(8, 0))
         val groupIds = sections.map { it.group.id }
         assertTrue(groupIds.contains("g_morn"))
         assertTrue(groupIds.contains("g_even"))
         assertEquals(1, sections.find { it.group.id == "g_morn" }?.habits?.size)
         assertEquals(1, sections.find { it.group.id == "g_even" }?.habits?.size)
-        // Single entry still: logging once clears both appearances
-        val withEntry = data.withUpdatedEntry(
-            LocalDate.now().toString(), "h_nac", HabitEntry(value = 1.0)
+        // Completing morning only — evening stays pending
+        val mornDone = data.withUpdatedEntry(
+            LocalDate.now().toString(), "h_nac", HabitEntry(value = 1.0), groupId = "g_morn"
         )
-        val after = HabitDomain.timelineSectionsForToday(withEntry, LocalDate.now(), LocalTime.of(8, 0))
-        assertTrue(after.none { sec -> sec.habits.any { it.id == "h_nac" } })
+        val afterMorn = HabitDomain.timelineSectionsForToday(
+            mornDone, LocalDate.now(), LocalTime.of(8, 0)
+        )
+        assertTrue(afterMorn.none { sec ->
+            sec.group.id == "g_morn" && sec.habits.any { it.id == "h_nac" }
+        })
+        assertTrue(afterMorn.any { sec ->
+            sec.group.id == "g_even" && sec.habits.any { it.id == "h_nac" }
+        })
+        // Completing evening clears the other slot
+        val both = mornDone.withUpdatedEntry(
+            LocalDate.now().toString(), "h_nac", HabitEntry(value = 1.0), groupId = "g_even"
+        )
+        val afterBoth = HabitDomain.timelineSectionsForToday(
+            both, LocalDate.now(), LocalTime.of(8, 0)
+        )
+        assertTrue(afterBoth.none { sec -> sec.habits.any { it.id == "h_nac" } })
+    }
+
+    @Test
+    fun `multi-group entry keys are independent`() {
+        val h = Habit("h1", "X", groupId = "g1", additionalGroupIds = listOf("g2"))
+        val data = AppData(habits = listOf(h), dayStartHour = 0)
+        val d = LocalDate.now().toString()
+        val am = data.withUpdatedEntry(d, "h1", HabitEntry(value = 1.0), "g1")
+        assertTrue(HabitDomain.isEntryCompleted(am.entryFor(d, h, "g1")))
+        assertFalse(HabitDomain.isEntryCompleted(am.entryFor(d, h, "g2")))
+        assertEquals("h1@g1", HabitEntryKeys.key(h, "g1"))
     }
 
     @Test

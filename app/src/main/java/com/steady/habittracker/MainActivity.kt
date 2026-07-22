@@ -948,9 +948,11 @@ fun SteadyApp(
                         appData = appData,
                         todayEntries = todayEntries,
                         onToggle = viewModel::toggleCheckbox,
-                        onLogEntry = viewModel::logEntry,  // kept for compatibility in some paths
+                        onLogEntry = { hid, v, n, d, gid ->
+                            viewModel.logEntry(hid, v, n, d, gid)
+                        },
                         onRequestLog = { h -> logHabit = h },
-                        onSkip = viewModel::skipHabit,
+                        onSkip = { hid, gid -> viewModel.skipHabit(hid, groupId = gid) },
                         onShowSkipPrompt = { id -> promptHabitId = id },
                         onQuickCapture = viewModel::addCapture,
                         onUpdateCapture = { id, title, note, tags ->
@@ -1046,6 +1048,9 @@ fun SteadyApp(
                         onUpdateOralHygienePrefs = viewModel::updateOralHygienePrefs,
                         onEnableOralHygieneBlock = viewModel::enableOralHygieneBlock,
                         onDisableOralHygieneBlock = viewModel::disableOralHygieneBlock,
+                        onUpdateSleepPhonePrefs = viewModel::updateSleepPhonePrefs,
+                        onEnableSleepPhoneBlock = viewModel::enableSleepPhoneBlock,
+                        onDisableSleepPhoneBlock = viewModel::disableSleepPhoneBlock,
                         onAlignRemindersToSchedule = viewModel::alignRemindersToSchedule,
                         onArchiveGroup = { viewModel.deleteGroup(it) },
                         onExportCsv = { exportLauncher.launch("steady_backup_${java.time.LocalDate.now()}.json") },

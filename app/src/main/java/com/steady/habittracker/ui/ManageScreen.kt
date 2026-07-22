@@ -103,6 +103,9 @@ fun ManageScreen(
     onUpdateOralHygienePrefs: (com.steady.habittracker.data.OralHygienePrefs) -> Unit = {},
     onEnableOralHygieneBlock: () -> Unit = {},
     onDisableOralHygieneBlock: () -> Unit = {},
+    onUpdateSleepPhonePrefs: (com.steady.habittracker.data.SleepPhonePrefs) -> Unit = {},
+    onEnableSleepPhoneBlock: () -> Unit = {},
+    onDisableSleepPhoneBlock: () -> Unit = {},
     onAlignRemindersToSchedule: () -> Unit = {},
     onArchiveGroup: (String) -> Unit = {},
     onExportCsv: () -> Unit = {},
@@ -662,6 +665,9 @@ fun ManageScreen(
                     onUpdateOralHygienePrefs = onUpdateOralHygienePrefs,
                     onEnableOralHygieneBlock = onEnableOralHygieneBlock,
                     onDisableOralHygieneBlock = onDisableOralHygieneBlock,
+                    onUpdateSleepPhonePrefs = onUpdateSleepPhonePrefs,
+                    onEnableSleepPhoneBlock = onEnableSleepPhoneBlock,
+                    onDisableSleepPhoneBlock = onDisableSleepPhoneBlock,
                     onLoadBlueprintRoutines = onLoadBlueprintRoutines,
                     onSaveRoutine = onSaveRoutine,
                     onStartRoutine = onStartRoutine
@@ -2210,6 +2216,9 @@ private fun BlocksConfigSection(
     onUpdateOralHygienePrefs: (com.steady.habittracker.data.OralHygienePrefs) -> Unit = {},
     onEnableOralHygieneBlock: () -> Unit = {},
     onDisableOralHygieneBlock: () -> Unit = {},
+    onUpdateSleepPhonePrefs: (com.steady.habittracker.data.SleepPhonePrefs) -> Unit = {},
+    onEnableSleepPhoneBlock: () -> Unit = {},
+    onDisableSleepPhoneBlock: () -> Unit = {},
     onLoadBlueprintRoutines: () -> Unit = {},
     onSaveRoutine: (com.steady.habittracker.data.ExerciseRoutine) -> Unit = {},
     onStartRoutine: (com.steady.habittracker.data.ExerciseRoutine) -> Unit = {}
@@ -2260,6 +2269,8 @@ private fun BlocksConfigSection(
                     }
             com.steady.habittracker.data.ExtensionType.ORAL_HYGIENE ->
                 com.steady.habittracker.data.OralHygieneBlock.isEnabled(appData)
+            com.steady.habittracker.data.ExtensionType.SLEEP_PHONE ->
+                com.steady.habittracker.data.SleepPhoneBlock.isEnabled(appData)
             else -> appData.habits.any { !it.archived && it.extensionType == type }
         }
 
@@ -2273,6 +2284,16 @@ private fun BlocksConfigSection(
                 expandedKey = type.name
             } else {
                 onDisableOralHygieneBlock()
+                if (expandedKey == type.name) expandedKey = null
+            }
+            return
+        }
+        if (type == com.steady.habittracker.data.ExtensionType.SLEEP_PHONE) {
+            if (enabled) {
+                onEnableSleepPhoneBlock()
+                expandedKey = type.name
+            } else {
+                onDisableSleepPhoneBlock()
                 if (expandedKey == type.name) expandedKey = null
             }
             return
@@ -2508,13 +2529,22 @@ private fun BlocksConfigSection(
                                 onUpdate = onUpdateOralHygienePrefs
                             )
                         }
+                        com.steady.habittracker.data.ExtensionType.SLEEP_PHONE -> {
+                            SleepPhoneBlockPanel(
+                                prefs = appData.sleepPhonePrefs,
+                                activeHabits = active,
+                                groups = groups,
+                                onUpdate = onUpdateSleepPhonePrefs
+                            )
+                        }
                         else -> Unit
                     }
 
-                    // Oral hygiene / Gadgetbridge manage their own planner rows
+                    // Blocks that manage their own planner rows
                     val managedBlock =
                         type == com.steady.habittracker.data.ExtensionType.ORAL_HYGIENE ||
-                            type == com.steady.habittracker.data.ExtensionType.GADGETBRIDGE_SYNC
+                            type == com.steady.habittracker.data.ExtensionType.GADGETBRIDGE_SYNC ||
+                            type == com.steady.habittracker.data.ExtensionType.SLEEP_PHONE
                     if (!managedBlock) {
                         if (active.isNotEmpty()) {
                             Text(
@@ -2747,6 +2777,7 @@ private fun BlockPermissionPanel(type: com.steady.habittracker.data.ExtensionTyp
         com.steady.habittracker.data.ExtensionType.POMODORO -> emptyList()
         com.steady.habittracker.data.ExtensionType.WORKOUT_SESSION -> emptyList()
         com.steady.habittracker.data.ExtensionType.ORAL_HYGIENE -> emptyList()
+        com.steady.habittracker.data.ExtensionType.SLEEP_PHONE -> emptyList()
         com.steady.habittracker.data.ExtensionType.GADGETBRIDGE_SYNC -> listOf(
             Need("Notifications (special wearable events)", notifOk) {
                 if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
@@ -4113,5 +4144,93 @@ private fun OralStepSwitch(
     ) {
         Text(label, fontSize = 13.sp)
         Switch(checked = checked, onCheckedChange = onCheckedChange)
+    }
+}
+
+@Composable
+private fun SleepPhoneBlockPanel(
+    prefs: com.steady.habittracker.data.SleepPhonePrefs,
+    activeHabits: List<Habit>,
+    groups: List<Group>,
+    onUpdate: (com.steady.habittracker.data.SleepPhonePrefs) -> Unit
+) {
+    val groupNames = groups.associate { it.id to it.name }
+    fun set(p: com.steady.habittracker.data.SleepPhonePrefs) {
+        onUpdate(p.copy(enabled = true))
+    }
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        shape = RoundedCornerShape(12.dp)
+    ) {
+        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(
+                "Phone guard · sleep",
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.primary,
+                fontSize = 13.sp
+            )
+            Text(
+                "Two small checkboxes: park the phone in the evening, delay first use in the morning. " +
+                    "Optional: attach screen minutes when you complete them.",
+                fontSize = 11.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            OralStepSwitch("🌙  Evening · phone parked", prefs.eveningEnabled) {
+                set(prefs.copy(eveningEnabled = it))
+            }
+            OralStepSwitch("📵  Morning · phone later", prefs.morningEnabled) {
+                set(prefs.copy(morningEnabled = it))
+            }
+            OralStepSwitch("Attach screen minutes on log", prefs.attachScreenMinutes) {
+                set(prefs.copy(attachScreenMinutes = it))
+            }
+            Text("Evening track from", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                listOf(20, 21, 22, 23).forEach { h ->
+                    FilterChip(
+                        selected = prefs.eveningTrackFromHour == h,
+                        onClick = { set(prefs.copy(eveningTrackFromHour = h)) },
+                        label = { Text("${h}:00", fontSize = 11.sp) }
+                    )
+                }
+            }
+            Text("Morning track until", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                listOf(7, 8, 9, 10).forEach { h ->
+                    FilterChip(
+                        selected = prefs.morningTrackUntilHour == h,
+                        onClick = { set(prefs.copy(morningTrackUntilHour = h)) },
+                        label = { Text("${h}:00", fontSize = 11.sp) }
+                    )
+                }
+            }
+            Text("Points", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                listOf(3, 5, 8, 10).forEach { pts ->
+                    FilterChip(
+                        selected = prefs.pointValue == pts,
+                        onClick = { set(prefs.copy(pointValue = pts)) },
+                        label = { Text("$pts", fontSize = 11.sp) }
+                    )
+                }
+            }
+            if (activeHabits.isNotEmpty()) {
+                Text(
+                    "On planner (${activeHabits.size})",
+                    fontWeight = FontWeight.SemiBold,
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.primary
+                )
+                activeHabits.forEach { h ->
+                    val place = groupNames[h.groupId] ?: h.groupId
+                    Text(
+                        "${h.icon.ifBlank { "◆" }} ${h.name} · $place",
+                        fontSize = 11.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        }
     }
 }

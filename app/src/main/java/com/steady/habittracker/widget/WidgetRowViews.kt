@@ -26,6 +26,7 @@ fun buildRowRemoteViews(context: Context, row: WidgetRow): RemoteViews {
             val textColor = WidgetRenderer.readTextColor(context)
             val rowBg = WidgetRenderer.readRowBg(context)
             val habitId = row.habitId.orEmpty()
+            val groupId = row.groupId.orEmpty()
             val isNote = row.habitType == HabitType.NOTE.name
 
             // Pending list only — never show filled checkmarks here
@@ -48,12 +49,15 @@ fun buildRowRemoteViews(context: Context, row: WidgetRow): RemoteViews {
             val fillIn = Intent().apply {
                 action = if (isNote) ToggleReceiver.ACTION_OPEN_LOG else ToggleReceiver.ACTION_TOGGLE
                 putExtra(ToggleReceiver.EXTRA_HABIT_ID, habitId)
+                if (groupId.isNotBlank()) {
+                    putExtra(ToggleReceiver.EXTRA_GROUP_ID, groupId)
+                }
                 putExtra(
                     ToggleReceiver.EXTRA_ACTION,
                     if (isNote) ToggleReceiver.ACTION_OPEN_LOG else ToggleReceiver.ACTION_TOGGLE
                 )
                 // Unique data so each row's PendingIntent fill-in is distinct across launchers
-                data = Uri.parse("steady://widget/habit/$habitId")
+                data = Uri.parse("steady://widget/habit/$habitId/$groupId")
             }
             // Entire row is one big hit target (root + children for OEM quirks)
             rv.setOnClickFillInIntent(R.id.habit_row_root, fillIn)

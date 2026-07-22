@@ -22,6 +22,8 @@ data class WidgetRow(
     val kind: WidgetRowKind,
     val title: String = "",
     val habitId: String? = null,
+    /** Timeline group for multi-group habits (independent AM/PM toggles). */
+    val groupId: String? = null,
     val isCheckbox: Boolean = true,
     /** HabitType name for pending icon (CHECKBOX, COUNTER, …). Empty for sections. */
     val habitType: String = "",
@@ -86,12 +88,18 @@ fun buildWidgetRows(data: AppData, now: LocalTime = LocalTime.now()): List<Widge
                     OralHygieneSteps.MOUTHWASH -> "rinse"
                     else -> "oral"
                 }
+                ExtensionType.SLEEP_PHONE -> when (h.extensionConfig.sleepPhoneSlot) {
+                    "morning" -> "am phone"
+                    "evening" -> "pm phone"
+                    else -> "phone"
+                }
             }
             rows.add(
                 WidgetRow(
                     kind = WidgetRowKind.HABIT,
                     title = stack + h.displayLabel() + extLabel,
                     habitId = h.id,
+                    groupId = section.group.id,
                     isCheckbox = h.type == HabitType.CHECKBOX || ext != ExtensionType.NONE,
                     habitType = h.type.name,
                     isCurrentGroup = section.isNow,

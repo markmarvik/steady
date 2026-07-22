@@ -9,6 +9,7 @@ import com.steady.habittracker.data.AndroidHabitRepository
 import com.steady.habittracker.data.HabitDomain
 import com.steady.habittracker.data.HabitEntry
 import com.steady.habittracker.data.HabitType
+import com.steady.habittracker.data.entryFor
 import com.steady.habittracker.data.withUpdatedEntry
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -82,7 +83,8 @@ class ToggleReceiver : BroadcastReceiver() {
                 }
 
                 val today = HabitDomain.logicalToday(data)
-                val currentEntry = data.entries[today]?.get(habitId)
+                val groupId = intent.getStringExtra(EXTRA_GROUP_ID)?.takeIf { it.isNotBlank() }
+                val currentEntry = data.entryFor(today, habit, groupId)
                 val alreadyDone =
                     (currentEntry?.value ?: 0.0) >= 0.5 && currentEntry?.skipped != true
 
@@ -103,7 +105,7 @@ class ToggleReceiver : BroadcastReceiver() {
                     note = currentEntry?.note ?: "",
                     loggedAt = System.currentTimeMillis()
                 )
-                val updatedData = data.withUpdatedEntry(today, habitId, entry)
+                val updatedData = data.withUpdatedEntry(today, habitId, entry, groupId)
 
                 // Persist first so a concurrent APPWIDGET_UPDATE cannot reload stale data
                 repo.saveData(updatedData)
@@ -129,6 +131,7 @@ class ToggleReceiver : BroadcastReceiver() {
         const val ACTION_OPEN_CAPTURE = "com.steady.habittracker.widget.ACTION_OPEN_CAPTURE"
         const val ACTION_OPEN_METRIC_LOG = "com.steady.habittracker.widget.ACTION_OPEN_METRIC_LOG"
         const val EXTRA_HABIT_ID = "habitId"
+        const val EXTRA_GROUP_ID = "groupId"
         const val EXTRA_ACTION = "action"
 
         fun openApp(context: Context, vararg extras: Pair<String, String>) {

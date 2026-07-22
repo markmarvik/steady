@@ -90,6 +90,16 @@ class OralHygieneBlockTest {
         assertTrue(out.groups.any { it.timeHint == "BEDTIME" || it.id == "g_oral_even" })
         val brush = out.habits.first { it.extensionConfig.oralStepKey == OralHygieneSteps.BRUSH }
         assertTrue(brush.additionalGroupIds.isNotEmpty())
+        // Multi-group: morning completion must not close evening
+        val day = java.time.LocalDate.now().toString()
+        val mornOnly = out.withUpdatedEntry(day, brush.id, HabitEntry(value = 1.0), brush.groupId)
+        assertTrue(
+            HabitDomain.isEntryCompleted(mornOnly.entryFor(day, brush, brush.groupId))
+        )
+        val evenGid = brush.additionalGroupIds.first()
+        assertFalse(
+            HabitDomain.isEntryCompleted(mornOnly.entryFor(day, brush, evenGid))
+        )
     }
 
     @Test

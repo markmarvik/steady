@@ -84,6 +84,9 @@ import com.steady.habittracker.data.ExtensionType
 import com.steady.habittracker.data.GadgetbridgePrefs
 import com.steady.habittracker.data.OralHygieneBlock
 import com.steady.habittracker.data.OralHygienePrefs
+import com.steady.habittracker.data.SleepPhoneBlock
+import com.steady.habittracker.data.SleepPhonePrefs
+import com.steady.habittracker.data.entryFor
 import com.steady.habittracker.reminders.NotificationHelper
 import com.steady.habittracker.sensors.AutoLogEngine
 import com.steady.habittracker.sensors.AutoLogWorker
@@ -228,7 +231,14 @@ class SteadyViewModel(
 
     // --- Logging (core action) - now uses immutable helpers (#16) ---
     // date param supports backfill for manual metrics (issue #19)
-    fun logEntry(habitId: String, value: Double, note: String = "", date: String = today) {
+    // groupId scopes multi-group habits (morning ≠ evening for the same habit id)
+    fun logEntry(
+        habitId: String,
+        value: Double,
+        note: String = "",
+        date: String = today,
+        groupId: String? = null
+    ) {
         viewModelScope.launch {
             val current = appData.value
             val habit = current.habits.find { it.id == habitId }
@@ -237,13 +247,13 @@ class SteadyViewModel(
                 note = note.trim(),
                 loggedAt = System.currentTimeMillis()
             )
-            var updated = current.withUpdatedEntry(date, habitId, entry)
+            var updated = current.withUpdatedEntry(date, habitId, entry, groupId)
             // Special habit block side-effects + chainAfter children (#33+)
             if (habit != null && value >= 0.5) {
                 val ctx = appContext
                 if (ctx != null) {
                     val result = com.steady.habittracker.extensions.ExtensionManager.onHabitLogged(
-                        ctx, updated, habit, entry, date
+                        ctx, updated, habit, entry, date, groupId
                     )
                     updated = result.data
                     if (result.summaryNote.isNotBlank()) lastExtensionSummary.value = result.summaryNote
@@ -266,23 +276,27 @@ class SteadyViewModel(
         }
     }
 
-    fun toggleCheckbox(habitId: String) {
+    fun toggleCheckbox(habitId: String, groupId: String? = null) {
         val current = appData.value
         val habit = current.habits.find { it.id == habitId }
-        val currentEntry = current.entries[today]?.get(habitId)
+        val currentEntry = if (habit != null) {
+            current.entryFor(today, habit, groupId)
+        } else {
+            current.entries[today]?.get(habitId)
+        }
         val newVal = if ((currentEntry?.value ?: 0.0) >= 0.5) 0.0 else 1.0
         val note = when {
             newVal < 0.5 -> currentEntry?.note.orEmpty()
             !currentEntry?.note.isNullOrBlank() -> currentEntry!!.note
             else -> habit?.defaultLogNote().orEmpty()
         }
-        logEntry(habitId, newVal, note)
+        logEntry(habitId, newVal, note, today, groupId)
     }
 
-    fun clearEntry(habitId: String) {
+    fun clearEntry(habitId: String, groupId: String? = null) {
         viewModelScope.launch {
             val current = appData.value
-            val updated = current.withRemovedEntry(today, habitId)
+            val updated = current.withRemovedEntry(today, habitId, groupId)
             repository.saveData(updated)
             refreshWidget(updated)
         }
@@ -651,7 +665,7 @@ class SteadyViewModel(
         }
     }
 
-    fun skipHabit(habitId: String, reasonNote: String = "Skipped") {
+    fun skipHabit(habitId: String, reasonNote: String = "Skipped", groupId: String? = null) {
         viewModelScope.launch {
             val current = appData.value
             val entry = HabitEntry(
@@ -660,7 +674,7 @@ class SteadyViewModel(
                 loggedAt = System.currentTimeMillis(),
                 skipped = true
             )
-            val updated = current.withUpdatedEntry(today, habitId, entry)
+            val updated = current.withUpdatedEntry(today, habitId, entry, groupId)
             repository.saveData(updated)
             refreshWidget(updated)
         }
@@ -876,6 +890,40 @@ class SteadyViewModel(
             val applied = OralHygieneBlock.apply(
                 current,
                 current.oralHygienePrefs.copy(enabled = false)
+            )
+            repository.saveData(applied)
+            refreshWidget(applied)
+        }
+    }
+
+    fun updateSleepPhonePrefs(prefs: SleepPhonePrefs) {
+        viewModelScope.launch {
+            val applied = SleepPhoneBlock.apply(appData.value, prefs)
+            repository.saveData(applied)
+            refreshWidget(applied)
+        }
+    }
+
+    fun enableSleepPhoneBlock() {
+        viewModelScope.launch {
+            val current = appData.value
+            val p = current.sleepPhonePrefs.copy(
+                enabled = true,
+                morningEnabled = true,
+                eveningEnabled = true
+            )
+            val applied = SleepPhoneBlock.apply(current, p)
+            repository.saveData(applied)
+            refreshWidget(applied)
+        }
+    }
+
+    fun disableSleepPhoneBlock() {
+        viewModelScope.launch {
+            val current = appData.value
+            val applied = SleepPhoneBlock.apply(
+                current,
+                current.sleepPhonePrefs.copy(enabled = false)
             )
             repository.saveData(applied)
             refreshWidget(applied)
