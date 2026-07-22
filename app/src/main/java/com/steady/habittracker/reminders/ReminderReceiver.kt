@@ -62,7 +62,8 @@ class ReminderReceiver : BroadcastReceiver() {
                                 groupId = null,
                                 notificationId = SpecialAlarmIds.RANDOM_CHECKIN.hashCode(),
                                 strength = strength,
-                                openCapture = true
+                                openCapture = true,
+                                capturePresetTags = com.steady.habittracker.data.CaptureTags.CHECKIN
                             )
                             data = data.withNotificationPrefs(
                                 data.notificationPrefs.copy(lastRandomCheckInAt = System.currentTimeMillis())

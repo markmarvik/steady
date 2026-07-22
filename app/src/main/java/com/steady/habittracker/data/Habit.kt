@@ -166,14 +166,58 @@ data class LocalWebPrefs(
     val enabled: Boolean = false,
     /** HTTP port (binds 0.0.0.0). HTTPS uses port+1 when [httpsEnabled]. */
     val port: Int = 8787,
-    /** Optional PIN; empty = open on LAN. */
+    /**
+     * Access PIN for the LAN UI / API.
+     * Required (min 4 chars) when [autoStartOnTrustedWifi] is on.
+     * Empty = open on LAN (manual mode only).
+     */
     val pin: String = "",
     /**
      * Self-signed TLS on port+1 (default on). Browsers will warn once —
      * use “Advanced → proceed” or stick to http:// on the HTTP port.
      */
-    val httpsEnabled: Boolean = true
-)
+    val httpsEnabled: Boolean = true,
+    /**
+     * Auto turn-off after this many minutes when started manually
+     * (0 = leave on until toggled off). Default 60.
+     */
+    val autoOffMinutes: Int = 60,
+    /** Epoch ms when the server should auto-disable; 0 = no deadline. */
+    val autoOffAtEpochMs: Long = 0L,
+    /**
+     * Wi‑Fi SSIDs that are trusted for auto-start (exact match, no quotes).
+     * Requires location / nearby-Wi‑Fi permission to read the current SSID.
+     */
+    val trustedSsids: List<String> = emptyList(),
+    /**
+     * When on a [trustedSsids] network, auto-enable the server (needs a secure PIN).
+     */
+    val autoStartOnTrustedWifi: Boolean = false,
+    /**
+     * Auto-off minutes while on a trusted SSID (0 = stay on while connected).
+     * Default 8 hours — longer than manual sessions.
+     */
+    val trustedWifiAutoOffMinutes: Int = 480,
+    /**
+     * When leaving a trusted network, stop the server if it was auto-started.
+     */
+    val stopWhenLeavingTrustedWifi: Boolean = true,
+    /** True when the current session was started by trusted-Wi‑Fi auto-start. */
+    val autoStartedByWifi: Boolean = false
+) {
+    fun pinIsSecure(): Boolean = pin.trim().length >= 4
+
+    fun effectiveAutoOffMinutes(onTrustedWifi: Boolean): Int {
+        return if (onTrustedWifi && (autoStartOnTrustedWifi || trustedSsids.isNotEmpty())) {
+            trustedWifiAutoOffMinutes
+        } else {
+            autoOffMinutes
+        }
+    }
+
+    fun canAutoStartOnWifi(): Boolean =
+        autoStartOnTrustedWifi && pinIsSecure() && trustedSsids.any { it.isNotBlank() }
+}
 
 /** Global Pomodoro defaults (#38). */
 @Serializable
@@ -197,9 +241,11 @@ object CaptureTags {
     const val GRATITUDE = "Gratitude"
     const val DISTRACTIONS = "Distractions"
     const val ENERGY = "Energy"
+    /** Random ESM / awareness check-in (#36) — journal, not inbox. */
+    const val CHECKIN = "Check-in"
 
     val PRESETS: List<String> = listOf(
-        IDEAS, TODO, REMINDERS, NOTES, MEMORIES, THOUGHTS, GRATITUDE, DISTRACTIONS, ENERGY
+        IDEAS, TODO, REMINDERS, NOTES, MEMORIES, THOUGHTS, GRATITUDE, DISTRACTIONS, ENERGY, CHECKIN
     )
 
     /**
@@ -210,7 +256,7 @@ object CaptureTags {
 
     /** Reflection / log-only tags (never open inbox by themselves). */
     val DEFAULT_JOURNAL_TAGS: List<String> = listOf(
-        NOTES, MEMORIES, THOUGHTS, GRATITUDE, DISTRACTIONS, ENERGY
+        NOTES, MEMORIES, THOUGHTS, GRATITUDE, DISTRACTIONS, ENERGY, CHECKIN
     )
 
     /** Short glyph for polished capture chips. */
@@ -224,6 +270,7 @@ object CaptureTags {
         GRATITUDE -> "🙏"
         DISTRACTIONS -> "🚫"
         ENERGY -> "⚡"
+        CHECKIN -> "🎯"
         else -> "·"
     }
 
@@ -460,7 +507,13 @@ data class Schedule(
 data class Habit(
     val id: String,
     val name: String,
-    val why: String = "", // kept for export/back-compat; not shown in UI
+    val why: String = "", // legacy; prefer [description]
+    /**
+     * Optional detail under the name (dosage, form, context).
+     * Also used as the default log note when completing/logging this habit
+     * (e.g. supplements: "2000 IU with breakfast").
+     */
+    val description: String = "",
     val groupId: String,
     val type: HabitType = HabitType.CHECKBOX,
     val target: Double? = null,
@@ -856,6 +909,46 @@ fun AppData.withArchivedHabit(habitId: String): AppData {
 fun AppData.withUnarchivedHabit(habitId: String): AppData {
     val newHabits = habits.map { if (it.id == habitId) it.copy(archived = false) else it }
     return copy(habits = newHabits)
+}
+
+/**
+ * Hard-delete a habit and scrub references. Prefer only for [Habit.archived] items
+ * so active catalog mistakes still use archive first.
+ * Removes: habit row, daily entries, auto-suggestions, stack/chain links, routine links.
+ */
+fun AppData.withPermanentlyDeletedHabit(habitId: String): AppData {
+    if (habits.none { it.id == habitId }) return this
+    val newHabits = habits
+        .filter { it.id != habitId }
+        .map { h ->
+            var next = h
+            if (next.afterHabitId == habitId) next = next.copy(afterHabitId = null)
+            if (next.extensionConfig.chainAfterHabitId == habitId) {
+                next = next.copy(
+                    extensionConfig = next.extensionConfig.copy(chainAfterHabitId = null)
+                )
+            }
+            next
+        }
+    val newEntries = entries.mapValues { (_, day) ->
+        day - habitId
+    }.filterValues { it.isNotEmpty() }
+    val newSuggestions = autoSuggestions.filter { it.habitId != habitId }
+    val newRoutines = routines.map { r ->
+        if (r.linkedHabitId == habitId) r.copy(linkedHabitId = null) else r
+    }
+    return copy(
+        habits = newHabits,
+        entries = newEntries,
+        autoSuggestions = newSuggestions,
+        routines = newRoutines
+    )
+}
+
+/** Permanently remove every archived habit (and their history). Active habits unchanged. */
+fun AppData.withPermanentlyDeletedArchivedHabits(): AppData {
+    val ids = habits.filter { it.archived }.map { it.id }
+    return ids.fold(this) { acc, id -> acc.withPermanentlyDeletedHabit(id) }
 }
 
 fun AppData.withArchivedGroup(groupId: String): AppData {

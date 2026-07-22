@@ -16,9 +16,11 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -54,6 +56,7 @@ import com.steady.habittracker.data.Habit
 import com.steady.habittracker.reminders.NotificationHelper
 import com.steady.habittracker.data.SleepNightSession
 import com.steady.habittracker.ui.AccentHuePicker
+import com.steady.habittracker.ui.AskGrokScreen
 import com.steady.habittracker.ui.HistoryScreen
 import com.steady.habittracker.ui.LogEntryDialog
 import com.steady.habittracker.ui.ManageScreen
@@ -86,6 +89,9 @@ class MainActivity : ComponentActivity() {
     val deepLinkOpenGroup = mutableStateOf<String?>(null)
     /** Widget "+ Capture" — open Today capture dialog. */
     val deepLinkOpenCapture = mutableStateOf(false)
+    /** Tags pre-selected when capture opens (e.g. random check-in → Check-in). */
+    val deepLinkCapturePresetTags = mutableStateOf<List<String>>(emptyList())
+    val deepLinkCaptureDialogTitle = mutableStateOf<String?>(null)
     /** Widget "+ Log" — open Today metric log dialog. */
     val deepLinkOpenMetricLog = mutableStateOf(false)
 
@@ -102,6 +108,18 @@ class MainActivity : ComponentActivity() {
         if (intent.getStringExtra("open_capture") == "1" || intent.getBooleanExtra("open_capture", false)) {
             deepLinkOpenCapture.value = true
             intent.removeExtra("open_capture")
+            val raw = intent.getStringExtra("capture_preset_tags").orEmpty()
+            intent.removeExtra("capture_preset_tags")
+            deepLinkCapturePresetTags.value = raw
+                .split(',', '|', ';')
+                .map { it.trim() }
+                .filter { it.isNotEmpty() }
+            if (deepLinkCapturePresetTags.value.any {
+                    it.equals(com.steady.habittracker.data.CaptureTags.CHECKIN, ignoreCase = true)
+                }
+            ) {
+                deepLinkCaptureDialogTitle.value = "Awareness check-in"
+            }
         }
         if (intent.getStringExtra("open_log") == "1" || intent.getBooleanExtra("open_log", false)) {
             deepLinkOpenMetricLog.value = true
@@ -146,12 +164,16 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun SteadyApp(
     viewModel: SteadyViewModel,
     repository: AndroidHabitRepository
 ) {
-    val appData by viewModel.appData.collectAsState()
+    // Single collect: ready + data stay in sync (no welcome flash on cold start).
+    val loadSession by viewModel.loadSession.collectAsState()
+    val dataReady = loadSession.ready
+    val appData = loadSession.data
     var selectedTab by remember { mutableIntStateOf(0) }
     var promptHabitId by remember { mutableStateOf<String?>(null) }
     var progressExpanded by remember { mutableStateOf(false) }
@@ -189,23 +211,43 @@ fun SteadyApp(
         mutableStateOf<com.steady.habittracker.data.ExerciseRoutine?>(null)
     }
     var showDreamlineWizard by remember { mutableStateOf(false) }
+    var showAskGrok by remember { mutableStateOf(false) }
 
     val context = LocalContext.current
     val activity = context as? MainActivity
     val accent = getAccentColor(appData.colorScheme)
 
-    // Keep LAN web server in sync with prefs (#38)
-    LaunchedEffect(appData.localWebPrefs.enabled, appData.localWebPrefs.port, appData.localWebPrefs.pin) {
+    // Keep LAN web server in sync with prefs (#38). Skip re-start every composition;
+    // only when enable/port/pin/https/auto-off change.
+    LaunchedEffect(
+        appData.localWebPrefs.enabled,
+        appData.localWebPrefs.port,
+        appData.localWebPrefs.pin,
+        appData.localWebPrefs.httpsEnabled,
+        appData.localWebPrefs.autoOffMinutes,
+        appData.localWebPrefs.autoOffAtEpochMs,
+        appData.localWebPrefs.trustedWifiAutoOffMinutes
+    ) {
         com.steady.habittracker.web.LocalWebServer.setEnabled(context, appData)
+    }
+    // Trusted Wi‑Fi auto-start / stop monitor
+    LaunchedEffect(Unit) {
+        com.steady.habittracker.web.WifiWebMonitor.start(context)
     }
 
     val deepLogState = activity?.deepLinkLogHabit ?: remember { mutableStateOf<String?>(null) }
     val deepGroupState = activity?.deepLinkOpenGroup ?: remember { mutableStateOf<String?>(null) }
     val deepCaptureState = activity?.deepLinkOpenCapture ?: remember { mutableStateOf(false) }
+    val deepCapturePresetState = activity?.deepLinkCapturePresetTags
+        ?: remember { mutableStateOf<List<String>>(emptyList()) }
+    val deepCaptureTitleState = activity?.deepLinkCaptureDialogTitle
+        ?: remember { mutableStateOf<String?>(null) }
     val deepMetricLogState = activity?.deepLinkOpenMetricLog ?: remember { mutableStateOf(false) }
     val deepLog by deepLogState
     val deepGroup by deepGroupState
     val deepCapture by deepCaptureState
+    val deepCapturePreset by deepCapturePresetState
+    val deepCaptureTitle by deepCaptureTitleState
     val deepMetricLog by deepMetricLogState
 
     // Deep-links from widget (log_habit / capture / log) and notifications (open_group)
@@ -233,14 +275,28 @@ fun SteadyApp(
 
     // Extension log side-effects: open capture / workout / sleep review (#33)
     val pendingCapture by viewModel.pendingOpenCapture.collectAsState()
+    val pendingCaptureTags by viewModel.pendingCapturePresetTags.collectAsState()
     val pendingWorkout by viewModel.pendingOpenWorkout.collectAsState()
     val pendingSleep by viewModel.pendingOpenSleepReview.collectAsState()
     val extSummary by viewModel.lastExtensionSummary.collectAsState()
     LaunchedEffect(pendingCapture) {
         if (pendingCapture) {
             selectedTab = 0
+            val tags = pendingCaptureTags.ifEmpty {
+                listOf(com.steady.habittracker.data.CaptureTags.CHECKIN)
+            }
+            activity?.deepLinkCapturePresetTags?.value = tags
+            deepCapturePresetState.value = tags
+            if (tags.any {
+                    it.equals(com.steady.habittracker.data.CaptureTags.CHECKIN, ignoreCase = true)
+                }
+            ) {
+                activity?.deepLinkCaptureDialogTitle?.value = "Awareness check-in"
+                deepCaptureTitleState.value = "Awareness check-in"
+            }
             activity?.deepLinkOpenCapture?.value = true
             viewModel.pendingOpenCapture.value = false
+            viewModel.pendingCapturePresetTags.value = emptyList()
         }
     }
     LaunchedEffect(pendingWorkout) {
@@ -438,7 +494,15 @@ fun SteadyApp(
         controller.isAppearanceLightNavigationBars = lightIcons
     }
 
-    if (!appData.onboarded) {
+    // Wait for DataStore before deciding onboarding vs main — avoids welcome flash on launch.
+    if (!dataReady) {
+        MaterialTheme(colorScheme = colorScheme) {
+            Surface(
+                modifier = Modifier.fillMaxSize(),
+                color = bgColor
+            ) { /* solid theme splash while prefs load */ }
+        }
+    } else if (!appData.onboarded) {
         // Onboarding must use themed colors (was outside theme → dark text on dark bg)
         MaterialTheme(colorScheme = colorScheme) {
             Surface(
@@ -523,6 +587,23 @@ fun SteadyApp(
                 )
             }
         }
+        showAskGrok -> {
+            Surface(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .safeDrawingPadding(),
+                color = bgColor
+            ) {
+                AskGrokScreen(
+                    appData = appData,
+                    onBack = { showAskGrok = false },
+                    onSaveGrokReply = { title, note, tags ->
+                        viewModel.addCapture(title, note, tags)
+                        Toast.makeText(context, "Grok reply saved to notes", Toast.LENGTH_SHORT).show()
+                    }
+                )
+            }
+        }
         else -> {
     Scaffold(
         containerColor = bgColor,
@@ -536,110 +617,140 @@ fun SteadyApp(
                 .padding(padding)
                 .padding(16.dp)
         ) {
-            // Header with gear for Settings
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    "Steady",
-                    fontSize = 32.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.onSurface
-                )
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Column(horizontalAlignment = Alignment.End) {
-                        Text(
-                            SimpleDateFormat("EEE, MMM d", Locale.getDefault()).format(Date()),
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            fontSize = 13.sp
-                        )
-                        if (streak > 0) {
-                            Text("🔥 $streak day streak", color = accent, fontSize = 12.sp)
-                        }
-                        Text(
-                            "⚡ $todayPoints pts · Lv $momentumLevel",
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            fontSize = 11.sp
-                        )
-                    }
-                    Spacer(Modifier.width(8.dp))
-                    IconButton(onClick = { showSettings = true }) {
-                        Icon(Icons.Default.Settings, contentDescription = "Settings", tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                    // Info (i) button removed (#31) — tour/help lives in Settings
-                }
-            }
-
-            Spacer(Modifier.height(8.dp))
-
-            // Compact progress bar at top (always visible, works across all tabs, minimal screen space)
-            // Tap to expand details in a dialog (big circle no longer permanently occupies space)
+            // #40 Top bar: title + large date, progress tight under title (rice / professional)
+            // #41 Tap progress → History; long-press → progress details dialog
             val yesterdayRate = weeklyRates.getOrNull(5)?.second ?: 0f
             val trendDelta = ((completionRate - yesterdayRate) * 100).toInt()
             val trendPositive = completionRate >= yesterdayRate
+            val dateLabel = remember {
+                SimpleDateFormat("EEE, MMM d", Locale.getDefault()).format(Date())
+            }
 
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.Top
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        "Steady",
+                        fontSize = 28.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        letterSpacing = (-0.5).sp
+                    )
+                    Text(
+                        dateLabel,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        fontSize = 20.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.padding(top = 2.dp)
+                    )
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        modifier = Modifier.padding(top = 2.dp)
+                    ) {
+                        if (streak > 0) {
+                            Text("🔥 $streak", color = accent, fontSize = 12.sp, fontWeight = FontWeight.Medium)
+                        }
+                        Text(
+                            "⚡$todayPoints · Lv$momentumLevel",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            fontSize = 12.sp
+                        )
+                    }
+                }
+                IconButton(onClick = { showSettings = true }) {
+                    Icon(
+                        Icons.Default.Settings,
+                        contentDescription = "Settings",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+
+            Spacer(Modifier.height(6.dp))
+
+            // Progress bar under title — primary entry to History (#41)
             Card(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clickable { progressExpanded = !progressExpanded },
+                    .combinedClickable(
+                        onClick = { selectedTab = 2 },
+                        onLongClick = { progressExpanded = true }
+                    ),
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                shape = RoundedCornerShape(12.dp)
+                shape = RoundedCornerShape(10.dp),
+                border = BorderStroke(1.dp, accent.copy(alpha = 0.22f))
             ) {
-                Column(Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
+                Column(
+                    Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
+                ) {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
-                            "TODAY • ${period.lowercase().replaceFirstChar { it.uppercase() }}",
+                            "TODAY · ${period.lowercase().replaceFirstChar { it.uppercase() }}",
                             fontSize = 10.sp,
                             color = accent,
-                            letterSpacing = 1.sp
+                            letterSpacing = 1.2.sp,
+                            fontWeight = FontWeight.SemiBold
                         )
                         Spacer(Modifier.weight(1f))
-                        Text("${(completionRate * 100).toInt()}%  ${doneCount}/${total}", color = MaterialTheme.colorScheme.onSurface, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                        Text(
+                            "${(completionRate * 100).toInt()}%",
+                            color = MaterialTheme.colorScheme.onSurface,
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Spacer(Modifier.width(6.dp))
+                        Text(
+                            "$doneCount/$total",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            fontSize = 11.sp
+                        )
                         if (trendDelta != 0) {
                             Spacer(Modifier.width(6.dp))
                             Text(
-                                if (trendPositive) "▲${trendDelta}%" else "▼${trendDelta}%",
-                                color = if (trendPositive) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
-                                fontSize = 10.sp
+                                if (trendPositive) "▲$trendDelta" else "▼${-trendDelta}",
+                                color = if (trendPositive) accent else MaterialTheme.colorScheme.error,
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.SemiBold
                             )
                         }
-                        if (streak > 0) {
-                            Spacer(Modifier.width(8.dp))
-                            Text("🔥$streak", color = accent, fontSize = 11.sp)
-                        }
                         Spacer(Modifier.width(8.dp))
-                        Text("⚡$todayPoints", color = accent, fontSize = 11.sp)
-                        Spacer(Modifier.width(6.dp))
-                        Text("Lv$momentumLevel", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp)
+                        Text(
+                            "History ›",
+                            color = accent.copy(alpha = 0.9f),
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Medium
+                        )
                     }
-                    Spacer(Modifier.height(4.dp))
+                    Spacer(Modifier.height(6.dp))
                     LinearProgressIndicator(
                         progress = { completionRate },
-                        modifier = Modifier.fillMaxWidth().height(6.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(7.dp),
                         color = accent,
                         trackColor = MaterialTheme.colorScheme.surfaceVariant
                     )
-                    // Weekly dots (compact)
                     if (weeklyRates.isNotEmpty()) {
                         Spacer(Modifier.height(6.dp))
                         Row(
                             horizontalArrangement = Arrangement.spacedBy(4.dp),
                             modifier = Modifier.fillMaxWidth()
                         ) {
-                            weeklyRates.forEachIndexed { _, (date, rate) ->
+                            weeklyRates.forEach { (_, rate) ->
                                 val c = when {
                                     rate >= 0.85f -> accent
                                     rate >= 0.5f -> accent.copy(alpha = 0.7f)
                                     rate > 0f -> accent.copy(alpha = 0.4f)
                                     else -> MaterialTheme.colorScheme.surfaceVariant
                                 }
-                                Canvas(Modifier.size(8.dp)) {
-                                    drawCircle(color = c, radius = 4.dp.toPx())
+                                Canvas(Modifier.size(7.dp)) {
+                                    drawCircle(color = c, radius = 3.5.dp.toPx())
                                 }
                             }
                         }
@@ -748,9 +859,15 @@ fun SteadyApp(
                         onLogMetric = viewModel::logEntry,
                         onStartRoutine = { rt -> activeWorkoutRoutine = rt },
                         openCaptureRequest = deepCapture,
+                        openCapturePresetTags = deepCapturePreset,
+                        openCaptureDialogTitle = deepCaptureTitle,
                         onOpenCaptureConsumed = {
                             activity?.deepLinkOpenCapture?.value = false
                             deepCaptureState.value = false
+                            activity?.deepLinkCapturePresetTags?.value = emptyList()
+                            deepCapturePresetState.value = emptyList()
+                            activity?.deepLinkCaptureDialogTitle?.value = null
+                            deepCaptureTitleState.value = null
                         },
                         openLogRequest = deepMetricLog,
                         onOpenLogConsumed = {
@@ -770,12 +887,13 @@ fun SteadyApp(
                     )
                     2 -> HistoryScreen(
                         appData = appData,
-                        onOpenSleepNight = { openSleepNight = it }
+                        onOpenSleepNight = { openSleepNight = it },
+                        onAskGrok = { showAskGrok = true }
                     )
                     3 -> ManageScreen(
                         appData = appData,
                         onAddGroup = { n, h, p, icon -> viewModel.addGroup(n, h, p, icon) },
-                        onAddHabit = { name, gid, type, isSupp, tags, preset, weekdays, interval, dates, moreGroups, icon ->
+                        onAddHabit = { name, gid, type, isSupp, tags, preset, weekdays, interval, dates, moreGroups, icon, description ->
                             viewModel.addHabit(
                                 name = name,
                                 groupId = gid,
@@ -787,7 +905,8 @@ fun SteadyApp(
                                 intervalDays = interval,
                                 specificDates = dates,
                                 additionalGroupIds = moreGroups,
-                                icon = icon
+                                icon = icon,
+                                description = description
                             )
                         },
                         onAddExtensionBlock = { type, gid -> viewModel.addExtensionBlock(type, gid) },
@@ -818,6 +937,8 @@ fun SteadyApp(
                         onUpdateGroup = viewModel::updateGroup,
                         onUnarchiveGroup = { viewModel.unarchiveGroup(it) },
                         onUnarchiveHabit = { viewModel.unarchiveHabit(it) },
+                        onPermanentlyDeleteHabit = viewModel::permanentlyDeleteHabit,
+                        onPermanentlyDeleteAllArchivedHabits = viewModel::permanentlyDeleteAllArchivedHabits,
                         onReorderHabit = { id, dir, gid -> viewModel.reorderHabit(id, dir, gid) },
                         onAddHabitToGroup = viewModel::addHabitToGroup,
                         onRemoveHabitFromGroup = viewModel::removeHabitFromGroup,

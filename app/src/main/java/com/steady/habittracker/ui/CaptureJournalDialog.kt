@@ -29,6 +29,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+// clickable + remember used for expand/collapse of long notes (#44)
 import com.steady.habittracker.data.AppData
 import com.steady.habittracker.data.CaptureItem
 import com.steady.habittracker.data.CaptureTags
@@ -205,12 +206,33 @@ private fun JournalCaptureRow(
                 color = MaterialTheme.colorScheme.onSurface
             )
             if (cap.note.isNotBlank()) {
+                var expanded by remember { mutableStateOf(false) }
+                val long = cap.note.length > 120
                 Text(
-                    cap.note,
+                    text = when {
+                        expanded || !long -> cap.note
+                        else -> cap.note.take(120).trimEnd() + "…"
+                    },
                     fontSize = 12.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(top = 2.dp)
+                    modifier = Modifier
+                        .padding(top = 2.dp)
+                        .then(
+                            if (long) Modifier.clickable { expanded = !expanded }
+                            else Modifier
+                        ),
+                    maxLines = if (expanded) Int.MAX_VALUE else 3
                 )
+                if (long) {
+                    Text(
+                        if (expanded) "Show less" else "Show more",
+                        fontSize = 11.sp,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier
+                            .clickable { expanded = !expanded }
+                            .padding(top = 2.dp)
+                    )
+                }
             }
             Text(
                 buildString {

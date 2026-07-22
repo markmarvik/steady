@@ -41,12 +41,17 @@ object NotificationHelper {
         notificationId: Int = 4242,
         strength: ReminderStrength = ReminderStrength.GENTLE,
         openCapture: Boolean = false,
+        /** Comma-separated capture tags to pre-select (e.g. "Check-in"). */
+        capturePresetTags: String? = null,
         ongoing: Boolean = false
     ) {
         ensureChannel(context)
         val intent = Intent(context, MainActivity::class.java).apply {
             putExtra("open_group", groupId)
             if (openCapture) putExtra("open_capture", true)
+            if (!capturePresetTags.isNullOrBlank()) {
+                putExtra("capture_preset_tags", capturePresetTags)
+            }
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
         }
         val pi = PendingIntent.getActivity(

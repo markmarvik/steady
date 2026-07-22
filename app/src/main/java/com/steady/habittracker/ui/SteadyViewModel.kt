@@ -23,6 +23,8 @@ import com.steady.habittracker.data.withAddedTag
 import com.steady.habittracker.data.withArchivedGroup
 import com.steady.habittracker.data.withArchivedHabit
 import com.steady.habittracker.data.withArchivedTag
+import com.steady.habittracker.data.withPermanentlyDeletedArchivedHabits
+import com.steady.habittracker.data.withPermanentlyDeletedHabit
 import com.steady.habittracker.data.withBackgroundMode
 import com.steady.habittracker.data.withColorScheme
 import com.steady.habittracker.data.withGroup
@@ -65,6 +67,7 @@ import com.steady.habittracker.data.withSleepAudioPrefs
 import com.steady.habittracker.data.withLocalWebPrefs
 import com.steady.habittracker.data.withPomodoroPrefs
 import com.steady.habittracker.data.CapturePrefs
+import com.steady.habittracker.data.defaultLogNote
 import com.steady.habittracker.data.withCapturePrefs
 import com.steady.habittracker.sensors.AutoLogEngine
 import com.steady.habittracker.sensors.AutoLogWorker
@@ -89,21 +92,45 @@ class SteadyViewModel(
 
     private val appContext = application?.applicationContext
 
-    val appData: StateFlow<AppData> = repository.appDataFlow
-        .stateIn(
-            scope = viewModelScope,
-            started = SharingStarted.WhileSubscribed(5_000),
-            initialValue = AppData()
-        )
+    /**
+     * Cold-start session: [ready] is false until DataStore emits once.
+     * Collect this as a single state so UI never sees ready=true with the default
+     * onboarded=false placeholder (welcome flash on launch).
+     */
+    data class LoadSession(val ready: Boolean = false, val data: AppData = AppData())
+
+    private val _loadSession = MutableStateFlow(LoadSession())
+    val loadSession: StateFlow<LoadSession> = _loadSession.asStateFlow()
+
+    /** True once prefs have been read at least once. */
+    val dataReady: StateFlow<Boolean> = _loadSession
+        .map { it.ready }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
+
+    val appData: StateFlow<AppData> = _loadSession
+        .map { it.data }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, AppData())
+
+    init {
+        // Start reading prefs immediately (before first compose frame when possible).
+        viewModelScope.launch {
+            repository.appDataFlow.collect { data ->
+                _loadSession.value = LoadSession(ready = true, data = data)
+            }
+        }
+    }
 
     /** Last extension log summary for snackbar / UI (#33). */
     val lastExtensionSummary = MutableStateFlow("")
     val pendingOpenCapture = MutableStateFlow(false)
+    /** Tags to pre-select when [pendingOpenCapture] fires (e.g. Check-in). */
+    val pendingCapturePresetTags = MutableStateFlow<List<String>>(emptyList())
     val pendingOpenWorkout = MutableStateFlow(false)
     val pendingOpenSleepReview = MutableStateFlow(false)
 
     fun consumeExtensionUiHints() {
         pendingOpenCapture.value = false
+        pendingCapturePresetTags.value = emptyList()
         pendingOpenWorkout.value = false
         pendingOpenSleepReview.value = false
         lastExtensionSummary.value = ""
@@ -195,7 +222,13 @@ class SteadyViewModel(
                     )
                     updated = result.data
                     if (result.summaryNote.isNotBlank()) lastExtensionSummary.value = result.summaryNote
-                    if (result.openCapture) pendingOpenCapture.value = true
+                    if (result.openCapture) {
+                        pendingCapturePresetTags.value =
+                            result.capturePresetTags.ifEmpty {
+                                listOf(com.steady.habittracker.data.CaptureTags.CHECKIN)
+                            }
+                        pendingOpenCapture.value = true
+                    }
                     if (result.openWorkout) pendingOpenWorkout.value = true
                     if (result.openSleepReview) pendingOpenSleepReview.value = true
                 }
@@ -209,9 +242,16 @@ class SteadyViewModel(
     }
 
     fun toggleCheckbox(habitId: String) {
-        val currentEntry = appData.value.entries[today]?.get(habitId)
+        val current = appData.value
+        val habit = current.habits.find { it.id == habitId }
+        val currentEntry = current.entries[today]?.get(habitId)
         val newVal = if ((currentEntry?.value ?: 0.0) >= 0.5) 0.0 else 1.0
-        logEntry(habitId, newVal, currentEntry?.note ?: "")
+        val note = when {
+            newVal < 0.5 -> currentEntry?.note.orEmpty()
+            !currentEntry?.note.isNullOrBlank() -> currentEntry!!.note
+            else -> habit?.defaultLogNote().orEmpty()
+        }
+        logEntry(habitId, newVal, note)
     }
 
     fun clearEntry(habitId: String) {
@@ -247,6 +287,7 @@ class SteadyViewModel(
         intervalDays: Int = 2,
         specificDates: List<String> = emptyList(),
         why: String = "",
+        description: String = "",
         additionalGroupIds: List<String> = emptyList(),
         icon: String = "",
         extensionType: com.steady.habittracker.data.ExtensionType = com.steady.habittracker.data.ExtensionType.NONE,
@@ -260,10 +301,12 @@ class SteadyViewModel(
             val todayStr = today
             val tagList = tags.toMutableList()
             if (isSupplement && TagIds.SUPPLEMENTS !in tagList) tagList.add(TagIds.SUPPLEMENTS)
+            val desc = description.trim().ifBlank { why.trim() }
             val newHabit = Habit(
                 id = "h_${UUID.randomUUID().toString().take(8)}",
                 name = name.trim(),
                 why = why.trim(),
+                description = desc,
                 groupId = groupId,
                 type = type,
                 order = order,
@@ -311,12 +354,42 @@ class SteadyViewModel(
     fun updateLocalWebPrefs(prefs: com.steady.habittracker.data.LocalWebPrefs) {
         viewModelScope.launch {
             val current = appData.value
-            val updated = current.withLocalWebPrefs(prefs)
-            repository.saveData(updated)
+            val prev = current.localWebPrefs
+            // Trusted Wi‑Fi auto-start requires a secure PIN (min 4 chars)
+            var next = prefs
+            if (next.autoStartOnTrustedWifi && !next.pinIsSecure()) {
+                next = next.copy(autoStartOnTrustedWifi = false)
+            }
+            next = next.copy(
+                trustedSsids = next.trustedSsids.map { it.trim() }.filter { it.isNotEmpty() }.distinct()
+            )
             val ctx = appContext
+            val onTrusted = ctx != null &&
+                com.steady.habittracker.web.WifiWebMonitor.isOnTrustedWifi(ctx, next)
+            val mins = next.effectiveAutoOffMinutes(onTrusted)
+            // Stamp / clear auto-off deadline when enabling or changing duration
+            val stamped = when {
+                !next.enabled -> next.copy(autoOffAtEpochMs = 0L, autoStartedByWifi = false)
+                next.enabled && (
+                    !prev.enabled ||
+                        next.autoOffMinutes != prev.autoOffMinutes ||
+                        next.trustedWifiAutoOffMinutes != prev.trustedWifiAutoOffMinutes ||
+                        next.autoOffAtEpochMs <= 0L
+                    ) -> {
+                    val deadline = if (mins > 0) {
+                        System.currentTimeMillis() + mins * 60_000L
+                    } else {
+                        0L
+                    }
+                    next.copy(autoOffAtEpochMs = deadline)
+                }
+                else -> next
+            }
+            val updated = current.withLocalWebPrefs(stamped)
+            repository.saveData(updated)
             if (ctx != null) {
-                // Starts/stops foreground LocalWebService (binds HTTP 0.0.0.0 + optional HTTPS)
                 com.steady.habittracker.web.LocalWebServer.setEnabled(ctx, updated)
+                com.steady.habittracker.web.WifiWebMonitor.start(ctx)
             }
         }
     }
@@ -524,6 +597,34 @@ class SteadyViewModel(
     }
 
     fun archiveHabit(habitId: String) = deleteHabit(habitId) // alias for clarity
+
+    /**
+     * Hard-delete an archived habit (and its log history) to clean the data store.
+     * No-ops if the habit is still active — archive first.
+     */
+    fun permanentlyDeleteHabit(habitId: String) {
+        viewModelScope.launch {
+            val current = appData.value
+            val habit = current.habits.find { it.id == habitId } ?: return@launch
+            if (!habit.archived) return@launch
+            val newData = current.withPermanentlyDeletedHabit(habitId)
+            repository.saveData(newData)
+            refreshWidget(newData)
+            if (habit.habitReminder.enabled) rescheduleReminders(newData)
+        }
+    }
+
+    /** Hard-delete every archived habit (history included). */
+    fun permanentlyDeleteAllArchivedHabits() {
+        viewModelScope.launch {
+            val current = appData.value
+            if (current.habits.none { it.archived }) return@launch
+            val newData = current.withPermanentlyDeletedArchivedHabits()
+            repository.saveData(newData)
+            refreshWidget(newData)
+            rescheduleReminders(newData)
+        }
+    }
 
     fun skipHabit(habitId: String, reasonNote: String = "Skipped") {
         viewModelScope.launch {

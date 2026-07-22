@@ -30,11 +30,14 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.material3.TextButton
 import com.steady.habittracker.data.AppData
+import com.steady.habittracker.data.DisplayIcon
 import com.steady.habittracker.data.HabitDomain
 import com.steady.habittracker.data.HabitType
 import com.steady.habittracker.data.SleepNightSession
 import com.steady.habittracker.data.TagIds
 import com.steady.habittracker.data.WorkoutSession
+import com.steady.habittracker.util.GrokContextBuilder
+import com.steady.habittracker.util.HabitSquareMetric
 import java.text.SimpleDateFormat
 import java.time.LocalDate
 import java.util.Date
@@ -46,7 +49,8 @@ import java.util.Locale
 @Composable
 fun HistoryScreen(
     appData: AppData,
-    onOpenSleepNight: (SleepNightSession) -> Unit = {}
+    onOpenSleepNight: (SleepNightSession) -> Unit = {},
+    onAskGrok: () -> Unit = {}
 ) {
     val graphData = remember(appData) { HabitDomain.computeLastNDays(appData, 30) }
     val logCounts = remember(appData) { HabitDomain.computeLastNDaysLogCounts(appData, 30) }
@@ -64,8 +68,17 @@ fun HistoryScreen(
     val workoutDays7 = remember(appData) { HabitDomain.workoutDaysInWindow(appData, 7) }
     val accent = MaterialTheme.colorScheme.primary
     var expandedSessionId by remember { mutableStateOf<String?>(null) }
+    var screenUsageExpanded by remember { mutableStateOf(false) }
+    var habitsExpanded by remember { mutableStateOf(true) }
     val sleepNights = remember(appData.sleepNights) {
         appData.sleepNights.sortedByDescending { it.startedAt }.take(10)
+    }
+    val habitSquares = remember(appData) { GrokContextBuilder.habitSquareMetrics(appData) }
+    val hasScreenUsage = remember(appData) { GrokContextBuilder.hasScreenUsageBlock(appData) }
+    val screenDaily = remember(appData) { GrokContextBuilder.dailyScreenMinutes(appData, 28) }
+    val screenAvg = remember(screenDaily) {
+        val vals = screenDaily.mapNotNull { it.second }.filter { it >= 0 }
+        if (vals.isEmpty()) null else vals.average()
     }
 
     LazyColumn(
@@ -73,12 +86,21 @@ fun HistoryScreen(
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
         item {
-            Text(
-                "History & Stats",
-                color = accent,
-                fontSize = 16.sp,
-                fontWeight = FontWeight.SemiBold
-            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    "History & Stats",
+                    color = accent,
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.SemiBold
+                )
+                TextButton(onClick = onAskGrok) {
+                    Text("Chat with Grok", fontWeight = FontWeight.SemiBold, color = accent)
+                }
+            }
         }
 
         // Sleep audio nights
@@ -154,6 +176,110 @@ fun HistoryScreen(
                 StatCard("Active", "$daysActive", dayWord(daysActive), Modifier.weight(1f), accent)
                 StatCard("Done", "$totalDone", "logs", Modifier.weight(1f), accent)
                 StatCard("30d avg", "${(avg30 * 100).toInt()}%", "complete", Modifier.weight(1f), accent)
+            }
+        }
+
+        // —— #42 Habits as variable-size sorted squares ——
+        if (habitSquares.isNotEmpty()) {
+            item {
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .clickable { habitsExpanded = !habitsExpanded },
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    SectionTitle("Habits · by 30d completion")
+                    Text(
+                        if (habitsExpanded) "Hide" else "Show",
+                        color = accent,
+                        fontSize = 11.sp,
+                        modifier = Modifier.padding(end = 4.dp)
+                    )
+                }
+            }
+            if (habitsExpanded) {
+                item {
+                    Text(
+                        "Larger squares = higher 30-day due-day completion. Sorted strongest first.",
+                        fontSize = 10.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(bottom = 4.dp)
+                    )
+                    HabitSquareGrid(metrics = habitSquares, accent = accent)
+                }
+            }
+        }
+
+        // —— #43 Screen usage expandable ——
+        if (hasScreenUsage) {
+            item {
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { screenUsageExpanded = !screenUsageExpanded },
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Row(
+                            Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                "Screen usage",
+                                fontWeight = FontWeight.SemiBold,
+                                fontSize = 13.sp,
+                                color = accent
+                            )
+                            Text(
+                                if (screenUsageExpanded) "Collapse" else "Expand",
+                                fontSize = 11.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        val avgLabel = screenAvg?.let { avg ->
+                            val m = avg.toLong()
+                            "${m / 60}h ${m % 60}m avg"
+                        } ?: "No samples yet"
+                        Text(
+                            avgLabel,
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        // Mini heatmap of last 28 days
+                        ScreenUsageHeatstrip(
+                            daily = screenDaily,
+                            accent = accent,
+                            empty = MaterialTheme.colorScheme.surfaceVariant,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(28.dp)
+                        )
+                        if (screenUsageExpanded) {
+                            Text(
+                                "Daily totals (newest first)",
+                                fontSize = 11.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            screenDaily.asReversed().take(14).forEach { (date, min) ->
+                                val time = if (min == null) "—"
+                                else if (min < 0) "n/a"
+                                else "${min / 60}h ${min % 60}m"
+                                Row(
+                                    Modifier
+                                        .fillMaxWidth()
+                                        .padding(vertical = 2.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Text(date, fontSize = 12.sp)
+                                    Text(time, fontSize = 12.sp, fontWeight = FontWeight.Medium, color = accent)
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
 
@@ -732,6 +858,96 @@ private fun PointsChart(
                 color = barColor.copy(alpha = if (pts > 0) 0.9f else 0.25f),
                 topLeft = Offset(x, h - barH),
                 size = Size(barWidth, barH.coerceAtLeast(1f)),
+                cornerRadius = CornerRadius(2.dp.toPx())
+            )
+        }
+    }
+}
+
+/** #42 Variable-size habit squares sorted by 30d completion (larger = better). */
+@Composable
+private fun HabitSquareGrid(
+    metrics: List<HabitSquareMetric>,
+    accent: Color
+) {
+    val maxScore = metrics.maxOfOrNull { it.score }?.coerceAtLeast(0.01f) ?: 1f
+    // Flow-style wrap: 4 columns of equal base, scale 0.72–1.0 of cell
+    val columns = 4
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        metrics.chunked(columns).forEach { row ->
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.Bottom
+            ) {
+                row.forEach { m ->
+                    val scale = (0.62f + 0.38f * (m.score / maxScore)).coerceIn(0.62f, 1f)
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .aspectRatio(1f / scale)
+                            .background(
+                                accent.copy(alpha = 0.12f + m.score * 0.55f),
+                                RoundedCornerShape(12.dp)
+                            )
+                            .padding(6.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            val glyph = DisplayIcon.glyph(m.habit.icon, m.habit.name)
+                            Text(
+                                glyph.take(2),
+                                fontSize = if (scale > 0.85f) 18.sp else 14.sp
+                            )
+                            Text(
+                                m.habit.name,
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                maxLines = 2,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Text(
+                                "${(m.avg30 * 100).toInt()}%",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = accent
+                            )
+                        }
+                    }
+                }
+                repeat(columns - row.size) {
+                    Spacer(Modifier.weight(1f))
+                }
+            }
+        }
+    }
+}
+
+/** #43 Compact 28-day screen-time intensity strip. */
+@Composable
+private fun ScreenUsageHeatstrip(
+    daily: List<Pair<String, Long?>>,
+    accent: Color,
+    empty: Color,
+    modifier: Modifier = Modifier
+) {
+    val maxMin = daily.mapNotNull { it.second }.filter { it > 0 }.maxOrNull()?.toFloat() ?: 1f
+    Canvas(modifier = modifier) {
+        val n = daily.size.coerceAtLeast(1)
+        val gap = 2.dp.toPx()
+        val cellW = ((size.width - gap * (n - 1)) / n).coerceAtLeast(2f)
+        val cellH = size.height
+        daily.forEachIndexed { i, (_, min) ->
+            val x = i * (cellW + gap)
+            val color = when {
+                min == null || min < 0 -> empty.copy(alpha = 0.4f)
+                min == 0L -> empty.copy(alpha = 0.55f)
+                else -> accent.copy(alpha = (0.25f + (min / maxMin) * 0.75f).coerceIn(0.25f, 1f))
+            }
+            drawRoundRect(
+                color = color,
+                topLeft = Offset(x, 0f),
+                size = Size(cellW, cellH),
                 cornerRadius = CornerRadius(2.dp.toPx())
             )
         }

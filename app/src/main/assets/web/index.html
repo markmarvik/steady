@@ -1,0 +1,822 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"/>
+<meta name="color-scheme" content="dark"/>
+<title>Steady · Local</title>
+<style>
+:root {
+  --bg: #0b0f14;
+  --bg2: #121820;
+  --surface: #161d27;
+  --surface2: #1c2533;
+  --border: #2a3545;
+  --text: #e8eef5;
+  --muted: #8b9aab;
+  --accent: #3dcea8;
+  --accent2: #5b8def;
+  --warn: #e6b35a;
+  --danger: #e06c75;
+  --ok: #3dcea8;
+  --radius: 14px;
+  --shadow: 0 8px 28px rgba(0,0,0,.35);
+  --font: "Segoe UI", system-ui, -apple-system, sans-serif;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; min-height: 100%; }
+body {
+  font-family: var(--font);
+  background:
+    radial-gradient(1200px 600px at 10% -10%, #1a3a32 0%, transparent 55%),
+    radial-gradient(900px 500px at 100% 0%, #1a2740 0%, transparent 50%),
+    var(--bg);
+  color: var(--text);
+  line-height: 1.45;
+}
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+button, input, select, textarea { font: inherit; }
+button {
+  background: var(--accent);
+  color: #062018;
+  border: 0;
+  border-radius: 10px;
+  padding: 9px 14px;
+  font-weight: 650;
+  cursor: pointer;
+  transition: transform .08s ease, filter .15s ease, opacity .15s;
+}
+button:hover { filter: brightness(1.06); }
+button:active { transform: scale(.98); }
+button:disabled { opacity: .45; cursor: not-allowed; }
+button.sec { background: var(--accent2); color: #fff; }
+button.ghost { background: var(--surface2); color: var(--text); border: 1px solid var(--border); }
+button.danger { background: #5a2228; color: #ffc9cd; }
+button.sm { padding: 6px 10px; font-size: 12px; border-radius: 8px; }
+input, textarea, select {
+  width: 100%;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 10px;
+  padding: 10px 12px;
+}
+input:focus, textarea:focus, select:focus {
+  outline: 2px solid color-mix(in srgb, var(--accent) 50%, transparent);
+  border-color: var(--accent);
+}
+.shell { max-width: 980px; margin: 0 auto; padding: 16px 16px 96px; }
+.top {
+  display: flex; flex-wrap: wrap; gap: 12px; align-items: center;
+  justify-content: space-between; margin-bottom: 16px;
+}
+.brand { display: flex; gap: 12px; align-items: center; }
+.logo {
+  width: 42px; height: 42px; border-radius: 12px;
+  background: linear-gradient(145deg, var(--accent), #2a8f7a);
+  display: grid; place-items: center; font-weight: 800; color: #042017;
+  box-shadow: var(--shadow);
+}
+.brand h1 { margin: 0; font-size: 1.25rem; letter-spacing: -.02em; }
+.brand .sub { color: var(--muted); font-size: 12px; }
+.stats {
+  display: flex; gap: 8px; flex-wrap: wrap;
+}
+.pill {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 6px 12px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.pill b { color: var(--text); font-weight: 650; }
+.nav {
+  display: flex; gap: 6px; overflow-x: auto; padding-bottom: 4px;
+  margin-bottom: 16px; scrollbar-width: thin;
+}
+.nav button {
+  background: transparent; color: var(--muted); border: 1px solid transparent;
+  white-space: nowrap; font-weight: 600; font-size: 13px;
+}
+.nav button.active {
+  background: var(--surface);
+  color: var(--accent);
+  border-color: var(--border);
+}
+.card {
+  background: linear-gradient(180deg, var(--surface) 0%, var(--bg2) 100%);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px 16px;
+  margin-bottom: 12px;
+  box-shadow: var(--shadow);
+}
+.card h2, .card h3 { margin: 0 0 8px; font-size: 1rem; }
+.card .meta { color: var(--muted); font-size: 12px; margin-bottom: 10px; }
+.now { border-left: 4px solid var(--accent); }
+.row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.space { justify-content: space-between; }
+.habit {
+  display: flex; gap: 10px; align-items: center; justify-content: space-between;
+  padding: 10px 0; border-bottom: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
+}
+.habit:last-child { border-bottom: 0; }
+.habit .name { font-weight: 600; }
+.habit .tag {
+  display: inline-block; font-size: 10px; color: var(--muted);
+  background: var(--surface2); border-radius: 6px; padding: 2px 6px; margin-left: 6px;
+}
+.done .name { color: var(--ok); }
+.skip .name { color: var(--warn); text-decoration: line-through; opacity: .85; }
+.quote {
+  font-style: italic; color: #c5d0dc; margin: 0 0 14px;
+  padding: 12px 14px; border-radius: 12px;
+  background: color-mix(in srgb, var(--accent) 8%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--accent) 25%, var(--border));
+}
+.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+@media (max-width: 720px) { .grid2 { grid-template-columns: 1fr; } }
+.timer {
+  font-size: 2.6rem; font-variant-numeric: tabular-nums; font-weight: 700;
+  letter-spacing: -.03em; margin: 8px 0 12px;
+}
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip {
+  background: var(--surface2); border: 1px solid var(--border);
+  border-radius: 999px; padding: 6px 10px; font-size: 12px; cursor: pointer; color: var(--muted);
+}
+.chip.on { background: color-mix(in srgb, var(--accent) 22%, var(--surface2)); color: var(--accent); border-color: var(--accent); }
+.bar {
+  height: 8px; background: var(--surface2); border-radius: 999px; overflow: hidden; margin: 6px 0 2px;
+}
+.bar > i { display: block; height: 100%; background: linear-gradient(90deg, var(--accent), var(--accent2)); border-radius: 999px; }
+.heat { display: grid; grid-auto-flow: column; grid-template-rows: repeat(7, 12px); gap: 3px; overflow-x: auto; padding-bottom: 4px; }
+.heat span {
+  width: 12px; height: 12px; border-radius: 3px; background: var(--surface2);
+}
+.muted { color: var(--muted); font-size: 12px; }
+.err { color: var(--danger); font-size: 13px; }
+.ok { color: var(--ok); }
+.hidden { display: none !important; }
+#gate {
+  min-height: 100vh; display: grid; place-items: center; padding: 24px;
+}
+#gate .card { width: min(400px, 100%); }
+.toast {
+  position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%);
+  background: var(--surface2); border: 1px solid var(--border);
+  padding: 10px 16px; border-radius: 999px; box-shadow: var(--shadow);
+  font-size: 13px; z-index: 50; opacity: 0; pointer-events: none; transition: opacity .2s;
+}
+.toast.show { opacity: 1; }
+.empty { color: var(--muted); padding: 12px 0; font-size: 13px; }
+.progress-num { font-size: 1.4rem; font-weight: 700; }
+label.field { display: block; font-size: 12px; color: var(--muted); margin: 8px 0 4px; }
+.scale { display: flex; gap: 6px; }
+.scale button { min-width: 40px; }
+.scale button.on { outline: 2px solid var(--accent); }
+footer.note { text-align: center; color: var(--muted); font-size: 11px; margin-top: 24px; }
+</style>
+</head>
+<body>
+<div id="gate" class="hidden">
+  <div class="card">
+    <div class="brand" style="margin-bottom:14px">
+      <div class="logo">S</div>
+      <div>
+        <h1 style="margin:0;font-size:1.15rem">Steady is locked</h1>
+        <div class="sub">Enter the PIN from Manage → Blocks</div>
+      </div>
+    </div>
+    <label class="field">PIN</label>
+    <input id="pinInput" type="password" inputmode="numeric" autocomplete="one-time-code" placeholder="••••"/>
+    <div class="row" style="margin-top:12px">
+      <button id="pinBtn" style="flex:1">Unlock</button>
+    </div>
+    <p id="pinErr" class="err hidden" style="margin-top:10px"></p>
+  </div>
+</div>
+
+<div id="app" class="shell hidden">
+  <header class="top">
+    <div class="brand">
+      <div class="logo">S</div>
+      <div>
+        <h1>Steady</h1>
+        <div class="sub" id="hdrSub">Local LAN · loading…</div>
+      </div>
+    </div>
+    <div class="stats" id="hdrStats"></div>
+  </header>
+
+  <nav class="nav" id="nav">
+    <button data-tab="today" class="active">Today</button>
+    <button data-tab="inbox">Inbox</button>
+    <button data-tab="path">Path</button>
+    <button data-tab="history">History</button>
+    <button data-tab="habits">Habits</button>
+    <button data-tab="focus">Focus</button>
+    <button data-tab="more">More</button>
+  </nav>
+
+  <p class="quote" id="quote">…</p>
+
+  <main id="main"></main>
+  <footer class="note">Fully local · no cloud · phone is the source of truth</footer>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+const S = {
+  pin: sessionStorage.getItem('steady_pin') || '',
+  tab: 'today',
+  data: null,
+  pomodoroEnd: 0,
+  captureTags: [],
+};
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+
+function toast(msg) {
+  const t = $('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  clearTimeout(toast._t);
+  toast._t = setTimeout(() => t.classList.remove('show'), 2200);
+}
+
+async function api(path, opts = {}) {
+  const headers = Object.assign({ 'Content-Type': 'application/json' }, opts.headers || {});
+  if (S.pin) headers['X-Steady-Pin'] = S.pin;
+  const r = await fetch(path, Object.assign({}, opts, { headers }));
+  if (r.status === 401) {
+    S.pin = '';
+    sessionStorage.removeItem('steady_pin');
+    showGate('PIN required or incorrect');
+    throw new Error('auth');
+  }
+  const ct = r.headers.get('content-type') || '';
+  if (ct.includes('json')) return r.json();
+  return r.text();
+}
+
+function showGate(err) {
+  $('app').classList.add('hidden');
+  $('gate').classList.remove('hidden');
+  if (err) {
+    $('pinErr').textContent = err;
+    $('pinErr').classList.remove('hidden');
+  }
+}
+
+function showApp() {
+  $('gate').classList.add('hidden');
+  $('app').classList.remove('hidden');
+}
+
+async function unlock() {
+  const pin = $('pinInput').value.trim();
+  try {
+    const j = await fetch('/api/auth', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pin })
+    }).then(r => r.json());
+    if (!j.ok) {
+      $('pinErr').textContent = j.error || 'Wrong PIN';
+      $('pinErr').classList.remove('hidden');
+      return;
+    }
+    S.pin = pin;
+    sessionStorage.setItem('steady_pin', pin);
+    showApp();
+    await boot();
+  } catch (e) {
+    $('pinErr').textContent = 'Could not reach server';
+    $('pinErr').classList.remove('hidden');
+  }
+}
+
+async function boot() {
+  try {
+    const st = await api('/api/status');
+    if (st.pinRequired && !S.pin) {
+      showGate();
+      return;
+    }
+    showApp();
+    const q = await api('/api/quote');
+    $('quote').textContent = `“${q.text}” — ${q.attribution || 'Steady'}`;
+    await render();
+  } catch (e) {
+    if (e.message !== 'auth') toast('Load failed');
+  }
+}
+
+document.getElementById('nav').addEventListener('click', (e) => {
+  const b = e.target.closest('button[data-tab]');
+  if (!b) return;
+  S.tab = b.dataset.tab;
+  document.querySelectorAll('#nav button').forEach(x => x.classList.toggle('active', x === b));
+  render();
+});
+$('pinBtn').onclick = unlock;
+$('pinInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') unlock(); });
+
+function hdr(d) {
+  $('hdrSub').textContent = `${d.date || ''} · ${d.levelTitle || 'Steady'} · Lv ${d.level ?? '—'}`;
+  $('hdrStats').innerHTML = `
+    <span class="pill">pts <b>${d.momentum ?? 0}</b></span>
+    <span class="pill">streak <b>${d.streak ?? 0}</b></span>
+    <span class="pill">inbox <b>${d.pendingCaptures ?? 0}</b></span>
+    <span class="pill">${esc(d.completionLabel || '')}</span>`;
+}
+
+async function render() {
+  try {
+    if (S.tab === 'today') await renderToday();
+    else if (S.tab === 'inbox') await renderInbox();
+    else if (S.tab === 'path') await renderPath();
+    else if (S.tab === 'history') await renderHistory();
+    else if (S.tab === 'habits') await renderHabits();
+    else if (S.tab === 'focus') await renderFocus();
+    else if (S.tab === 'more') await renderMore();
+  } catch (e) {
+    if (e.message !== 'auth') {
+      $('main').innerHTML = `<div class="card err">Failed to load this tab.</div>`;
+    }
+  }
+}
+
+async function renderToday() {
+  const d = await api('/api/today');
+  S.data = d;
+  hdr(d);
+  let html = '';
+  (d.sections || []).forEach(sec => {
+    html += `<div class="card ${sec.isNow ? 'now' : ''}">
+      <h3>${esc(sec.groupIcon || '')} ${esc(sec.group)} ${sec.isNow ? '<span class="tag">now</span>' : ''}</h3>
+      <div class="meta">${esc(sec.hint || '')} · ${sec.doneCount || 0}/${sec.total || 0}</div>`;
+    if (!(sec.habits || []).length) html += `<div class="empty">Nothing due in this group.</div>`;
+    (sec.habits || []).forEach(h => {
+      const cls = h.skipped ? 'skip' : (h.done ? 'done' : '');
+      html += `<div class="habit ${cls}">
+        <div>
+          <div class="name">${esc(h.icon || '')} ${esc(h.name)}</div>
+          <div class="muted">${esc(h.type)}${h.extension && h.extension !== 'NONE' ? ' · ' + esc(h.extension) : ''}${h.valueLabel ? ' · ' + esc(h.valueLabel) : ''}</div>
+        </div>
+        <div class="row">`;
+      if (h.skipped) {
+        html += `<button class="ghost sm" onclick="unlog('${h.id}')">Undo skip</button>`;
+      } else if (h.done) {
+        html += `<button class="ghost sm" onclick="unlog('${h.id}')">Undo</button>`;
+      } else if (h.type === 'CHECKBOX') {
+        html += `<button class="sm" onclick="logHabit('${h.id}',1)">Log</button>`;
+        if (h.canSkip) html += `<button class="ghost sm" onclick="skipHabit('${h.id}')">Skip</button>`;
+      } else if (h.type === 'SCALE_1_5') {
+        html += `<div class="scale">` + [1,2,3,4,5].map(n =>
+          `<button class="sm ghost" onclick="logHabit('${h.id}',${n})">${n}</button>`).join('') + `</div>`;
+      } else if (h.type === 'NOTE') {
+        html += `<button class="sm" onclick="logNote('${h.id}')">Note</button>`;
+      } else {
+        html += `<button class="sm" onclick="logValue('${h.id}','${esc(h.type)}',${h.target || 1})">Log</button>`;
+        if (h.canSkip) html += `<button class="ghost sm" onclick="skipHabit('${h.id}')">Skip</button>`;
+      }
+      html += `</div></div>`;
+    });
+    html += `</div>`;
+  });
+  if (!(d.sections || []).length) html = `<div class="card"><div class="empty">No timeline sections — add groups in the app.</div></div>`;
+
+  html += `<div class="card">
+    <h3>Quick capture</h3>
+    <label class="field">Title</label>
+    <input id="capTitle" placeholder="${esc(d.capturePlaceholder || "What's on your mind?")}"/>
+    <label class="field">Note</label>
+    <textarea id="capNote" rows="2" placeholder="Optional details…"></textarea>
+    <div class="chips" id="capChips" style="margin:10px 0"></div>
+    <button onclick="sendCapture()">Save capture</button>
+  </div>`;
+  $('main').innerHTML = html;
+  S.captureTags = d.captureTags || ['Ideas','Todo','Reminders','Notes'];
+  S.selectedTags = new Set(d.defaultTags || ['Ideas']);
+  paintChips();
+}
+
+function paintChips() {
+  const el = $('capChips');
+  if (!el) return;
+  el.innerHTML = (S.captureTags || []).map(t =>
+    `<span class="chip ${(S.selectedTags && S.selectedTags.has(t)) ? 'on' : ''}" onclick="toggleTag('${esc(t)}')">${esc(t)}</span>`
+  ).join('');
+}
+function toggleTag(t) {
+  if (!S.selectedTags) S.selectedTags = new Set();
+  if (S.selectedTags.has(t)) S.selectedTags.delete(t); else S.selectedTags.add(t);
+  paintChips();
+}
+
+async function logHabit(id, value) {
+  await api('/api/log', { method:'POST', body: JSON.stringify({ habitId: id, value }) });
+  toast('Logged');
+  renderToday();
+}
+async function unlog(id) {
+  await api('/api/unlog', { method:'POST', body: JSON.stringify({ habitId: id }) });
+  toast('Undone');
+  renderToday();
+}
+async function skipHabit(id) {
+  await api('/api/skip', { method:'POST', body: JSON.stringify({ habitId: id }) });
+  toast('Skipped');
+  renderToday();
+}
+async function logValue(id, type, target) {
+  const unit = type === 'DURATION_MIN' ? 'minutes' : 'amount';
+  const v = prompt(`Enter ${unit}`, String(target || 1));
+  if (v == null) return;
+  const n = parseFloat(v);
+  if (isNaN(n)) return toast('Invalid number');
+  await logHabit(id, n);
+}
+async function logNote(id) {
+  const note = prompt('Note');
+  if (note == null || !note.trim()) return;
+  await api('/api/log', { method:'POST', body: JSON.stringify({ habitId: id, value: 1, note }) });
+  toast('Saved');
+  renderToday();
+}
+async function sendCapture() {
+  const title = $('capTitle').value.trim();
+  if (!title) return toast('Title required');
+  const note = $('capNote').value.trim();
+  const tags = [...(S.selectedTags || [])];
+  await api('/api/capture', { method:'POST', body: JSON.stringify({ title, note, tags }) });
+  toast('Captured');
+  renderToday();
+}
+
+async function renderInbox() {
+  const d = await api('/api/captures');
+  hdr(await api('/api/summary'));
+  let html = `<div class="card"><h3>Action inbox</h3><div class="meta">Ideas · Todo · Reminders — needs a look</div>`;
+  if (!(d.inbox || []).length) html += `<div class="empty">Inbox clear. Nice.</div>`;
+  (d.inbox || []).forEach(c => {
+    html += `<div class="habit">
+      <div><div class="name">${esc(c.title)}</div>
+      <div class="muted">${(c.tags||[]).map(esc).join(' · ')} · ${esc(c.when || '')}</div>
+      ${c.note ? `<div class="muted">${esc(c.note)}</div>` : ''}</div>
+      <div class="row">
+        <button class="sm" onclick="doneCap('${c.id}')">Done</button>
+        <button class="ghost sm danger" onclick="delCap('${c.id}')">Delete</button>
+      </div></div>`;
+  });
+  html += `</div><div class="card"><h3>Journal</h3><div class="meta">Memories, gratitude, thoughts…</div>`;
+  if (!(d.journal || []).length) html += `<div class="empty">No journal entries yet.</div>`;
+  (d.journal || []).slice(0, 40).forEach(c => {
+    html += `<div class="habit">
+      <div><div class="name">${esc(c.title)}</div>
+      <div class="muted">${(c.tags||[]).map(esc).join(' · ')} · ${esc(c.when || '')}</div>
+      ${c.note ? `<div class="muted">${esc(c.note)}</div>` : ''}</div>
+      <button class="ghost sm" onclick="delCap('${c.id}')">Delete</button>
+    </div>`;
+  });
+  html += `</div>`;
+  $('main').innerHTML = html;
+}
+async function doneCap(id) {
+  await api('/api/capture/done', { method:'POST', body: JSON.stringify({ id }) });
+  toast('Archived');
+  renderInbox();
+}
+async function delCap(id) {
+  if (!confirm('Delete capture?')) return;
+  await api('/api/capture/delete', { method:'POST', body: JSON.stringify({ id }) });
+  toast('Deleted');
+  renderInbox();
+}
+
+async function renderPath() {
+  const d = await api('/api/path');
+  hdr(await api('/api/summary'));
+  let html = `<div class="card">
+    <h3>Am I on path?</h3>
+    <div class="meta">Vision · Energy · Identity (1–5)</div>
+    <div class="row">
+      <label class="field" style="flex:1">Vision<br/><input id="pv" type="number" min="1" max="5" value="3"/></label>
+      <label class="field" style="flex:1">Energy<br/><input id="pe" type="number" min="1" max="5" value="3"/></label>
+      <label class="field" style="flex:1">Identity<br/><input id="pi" type="number" min="1" max="5" value="3"/></label>
+    </div>
+    <label class="field">Note</label>
+    <input id="pn" placeholder="Optional reflection"/>
+    <div class="row" style="margin-top:10px"><button onclick="pathCheck()">Save check-in</button></div>
+    ${d.lastCheck ? `<div class="muted" style="margin-top:10px">Last: V${d.lastCheck.vision} E${d.lastCheck.energy} I${d.lastCheck.identity} · ${esc(d.lastCheck.date)}</div>` : ''}
+  </div>`;
+  html += `<div class="card"><h3>Goals</h3><div class="meta">${(d.goals||[]).length} active</div>`;
+  if (!(d.goals||[]).length) html += `<div class="empty">No goals yet — run Dreamline in the app.</div>`;
+  (d.goals || []).forEach(g => {
+    const pct = Math.round((g.progress || 0) * 100);
+    html += `<div style="margin-bottom:14px">
+      <div class="row space"><div class="name">${esc(g.title)}</div><span class="muted">${esc(g.category)} · ${esc(g.horizon)}</span></div>
+      <div class="bar"><i style="width:${pct}%"></i></div>
+      <div class="row space"><span class="muted">${pct}% · confidence ${Math.round((g.confidence||0)*100)}%</span>
+        <span class="row">
+          <button class="ghost sm" onclick="goalProg('${g.id}', ${Math.max(0,(g.progress||0)-0.1)})">−</button>
+          <button class="sm" onclick="goalProg('${g.id}', ${Math.min(1,(g.progress||0)+0.1)})">+</button>
+        </span>
+      </div>
+      ${g.firstStepNow ? `<div class="muted">Next: ${esc(g.firstStepNow)}</div>` : ''}
+    </div>`;
+  });
+  html += `</div>`;
+  $('main').innerHTML = html;
+}
+async function pathCheck() {
+  const vision = +$('pv').value, energy = +$('pe').value, identity = +$('pi').value;
+  const note = $('pn').value.trim();
+  await api('/api/path/check', { method:'POST', body: JSON.stringify({ vision, energy, identity, note }) });
+  toast('Check-in saved');
+  renderPath();
+}
+async function goalProg(id, progress) {
+  await api('/api/path/goal', { method:'POST', body: JSON.stringify({ id, progress }) });
+  renderPath();
+}
+
+async function renderHistory() {
+  const d = await api('/api/history');
+  hdr(await api('/api/summary'));
+  let html = `<div class="grid2">
+    <div class="card">
+      <h3>Momentum</h3>
+      <div class="progress-num">${d.lifetimePoints || 0} <span class="muted" style="font-size:13px">lifetime</span></div>
+      <div class="muted">Level ${d.level || 1} · ${esc(d.levelTitle || '')}</div>
+      <div class="muted">Streak ${d.streak || 0} days · today ${d.todayPoints || 0} pts</div>
+    </div>
+    <div class="card">
+      <h3>This week</h3>
+      ${(d.days || []).slice(0,7).map(x => {
+        const pct = x.due ? Math.round(100 * x.done / x.due) : 0;
+        return `<div class="row space" style="margin:6px 0"><span class="muted">${esc(x.date)}</span>
+          <span>${x.done}/${x.due} · ${x.points} pts</span></div>
+          <div class="bar"><i style="width:${pct}%"></i></div>`;
+      }).join('')}
+    </div>
+  </div>
+  <div class="card">
+    <h3>Heatmap</h3>
+    <div class="heat" id="heat"></div>
+    <div class="meta" style="margin-top:8px">Last ${d.heatmapDays || 112} days</div>
+  </div>`;
+  if ((d.tags || []).length) {
+    html += `<div class="card"><h3>Tags (7-day)</h3>`;
+    d.tags.forEach(t => {
+      const pct = Math.round((t.avg || 0) * 100);
+      html += `<div class="row space"><span>${esc(t.name)}</span><span class="muted">${pct}%</span></div>
+        <div class="bar"><i style="width:${pct}%"></i></div>`;
+    });
+    html += `</div>`;
+  }
+  if ((d.sleepNights || []).length) {
+    html += `<div class="card"><h3>Sleep nights</h3>`;
+    d.sleepNights.forEach(n => {
+      html += `<div class="habit"><div>
+        <div class="name">${esc(n.wakeDate)}</div>
+        <div class="muted">quiet ${n.quietScore} · events ${n.eventCount} · snore-like ${n.snoreLikeCount}</div>
+      </div></div>`;
+    });
+    html += `</div>`;
+  }
+  $('main').innerHTML = html;
+  const heat = $('heat');
+  (d.heatmap || []).forEach(cell => {
+    const sp = document.createElement('span');
+    const v = cell.v;
+    if (v == null) sp.style.background = 'var(--surface2)';
+    else {
+      const a = Math.min(1, Math.max(0.15, v));
+      sp.style.background = `color-mix(in srgb, var(--accent) ${Math.round(a*100)}%, var(--surface2))`;
+      sp.title = `${cell.date}: ${Math.round((v||0)*100)}%`;
+    }
+    heat.appendChild(sp);
+  });
+}
+
+async function renderHabits() {
+  const [h, g] = await Promise.all([api('/api/habits'), api('/api/groups')]);
+  hdr(await api('/api/summary'));
+  let html = `<div class="card">
+    <h3>New habit</h3>
+    <div class="row">
+      <input id="hn" placeholder="Name" style="flex:1;min-width:140px"/>
+      <select id="hg" style="max-width:180px"></select>
+      <select id="ht" style="max-width:140px">
+        <option value="CHECKBOX">Checkbox</option>
+        <option value="COUNTER">Counter</option>
+        <option value="DURATION_MIN">Duration</option>
+        <option value="SCALE_1_5">Scale 1–5</option>
+        <option value="NOTE">Note</option>
+      </select>
+      <button onclick="createHabit()">Add</button>
+    </div>
+  </div>
+  <div class="card"><h3>Catalog (${(h.habits||[]).length})</h3>`;
+  (h.habits || []).forEach(x => {
+    html += `<div class="habit">
+      <div><div class="name">${esc(x.icon||'')} ${esc(x.name)}</div>
+      <div class="muted">${esc(x.type)} · ${esc(x.groupName||x.groupId)}${x.extension && x.extension!=='NONE' ? ' · '+esc(x.extension) : ''}${x.doneToday?' · done today':''}</div></div>
+      <button class="danger sm" onclick="archiveHabit('${x.id}')">Archive</button>
+    </div>`;
+  });
+  html += `</div><div class="card"><h3>Groups</h3>`;
+  (g.groups || []).forEach(gr => {
+    html += `<div class="habit"><div class="name">${esc(gr.icon||'')} ${esc(gr.name)}</div>
+      <span class="muted">${esc(gr.timeHint)} · order ${gr.order}</span></div>`;
+  });
+  html += `</div>`;
+  $('main').innerHTML = html;
+  const sel = $('hg');
+  (g.groups || []).forEach(gr => {
+    const o = document.createElement('option');
+    o.value = gr.id; o.textContent = gr.name;
+    sel.appendChild(o);
+  });
+}
+async function createHabit() {
+  const name = $('hn').value.trim();
+  const groupId = $('hg').value;
+  const type = $('ht').value;
+  if (!name || !groupId) return toast('Name + group required');
+  await api('/api/habit', { method:'POST', body: JSON.stringify({ name, groupId, type }) });
+  toast('Created');
+  renderHabits();
+}
+async function archiveHabit(id) {
+  if (!confirm('Archive this habit?')) return;
+  await api('/api/archive', { method:'POST', body: JSON.stringify({ habitId: id }) });
+  toast('Archived');
+  renderHabits();
+}
+
+async function renderFocus() {
+  const p = await api('/api/pomodoro');
+  hdr(await api('/api/summary'));
+  if (p.sessionStartedAt > 0) {
+    const mins = p.sessionIsBreak ? p.breakMin : p.workMin;
+    S.pomodoroEnd = p.sessionStartedAt + mins * 60 * 1000;
+  }
+  $('main').innerHTML = `<div class="card">
+    <h3>Pomodoro / focus</h3>
+    <div class="meta">${p.sessionIsBreak ? 'Break' : 'Work'} · defaults ${p.workMin}m / ${p.breakMin}m</div>
+    <div class="timer" id="timer">--:--</div>
+    <div class="row">
+      <button onclick="startPomo(${p.workMin||25}, false)">Start ${p.workMin||25}m</button>
+      <button class="sec" onclick="startPomo(${p.breakMin||5}, true)">Break ${p.breakMin||5}m</button>
+      <button class="ghost" onclick="stopPomo()">Stop</button>
+    </div>
+    <div class="row" style="margin-top:10px">
+      <button class="ghost sm" onclick="startPomo(15,false)">15m</button>
+      <button class="ghost sm" onclick="startPomo(25,false)">25m</button>
+      <button class="ghost sm" onclick="startPomo(45,false)">45m</button>
+      <button class="ghost sm" onclick="startPomo(50,false)">50m</button>
+    </div>
+  </div>
+  <div class="card">
+    <h3>Capture while focused</h3>
+    <input id="capTitle" placeholder="Distraction / idea"/>
+    <div class="chips" style="margin:8px 0">
+      <span class="chip on" data-t="Distractions" onclick="quickCap('Distractions')">Distractions</span>
+      <span class="chip" data-t="Ideas" onclick="quickCap('Ideas')">Ideas</span>
+      <span class="chip" data-t="Todo" onclick="quickCap('Todo')">Todo</span>
+    </div>
+  </div>`;
+  tickPomo();
+}
+function tickPomo() {
+  const el = $('timer');
+  if (!el) return;
+  if (!S.pomodoroEnd) { el.textContent = '—'; return; }
+  const left = Math.max(0, Math.floor((S.pomodoroEnd - Date.now())/1000));
+  const m = String(Math.floor(left/60)).padStart(2,'0');
+  const s = String(left%60).padStart(2,'0');
+  el.textContent = m + ':' + s;
+  if (left <= 0) { el.textContent = 'Done'; S.pomodoroEnd = 0; }
+}
+setInterval(tickPomo, 250);
+async function startPomo(mins, isBreak) {
+  S.pomodoroEnd = Date.now() + mins * 60 * 1000;
+  tickPomo();
+  await api('/api/pomodoro', {
+    method:'POST',
+    body: JSON.stringify(isBreak ? { action:'break', breakMin: mins } : { action:'start', workMin: mins })
+  });
+  toast(isBreak ? 'Break started' : 'Focus started');
+}
+async function stopPomo() {
+  S.pomodoroEnd = 0;
+  tickPomo();
+  await api('/api/pomodoro', { method:'POST', body: JSON.stringify({ action:'stop' }) });
+}
+async function quickCap(tag) {
+  const title = $('capTitle')?.value?.trim();
+  if (!title) return toast('Title required');
+  await api('/api/capture', { method:'POST', body: JSON.stringify({ title, tags: [tag] }) });
+  $('capTitle').value = '';
+  toast('Saved · ' + tag);
+}
+
+async function renderMore() {
+  const d = await api('/api/more');
+  hdr(await api('/api/summary'));
+  let html = `<div class="grid2">
+    <div class="card">
+      <h3>Sleep spine</h3>
+      <div class="muted">Wake ${esc(d.sleep?.wakeTime)} · Bed ${esc(d.sleep?.bedTime)}</div>
+      <div class="muted">Wind-down ${d.sleep?.windDownMinutes || 0}m</div>
+    </div>
+    <div class="card">
+      <h3>Server</h3>
+      <div class="muted">${esc(d.server?.status || '')}</div>
+      <div class="muted">HTTP :${d.server?.httpPort || '—'} · HTTPS :${d.server?.httpsPort || '—'}</div>
+      ${d.server?.autoOff ? `<div class="muted">Auto-off ${esc(d.server.autoOff)}</div>` : ''}
+      ${d.server?.ssid ? `<div class="muted">Wi‑Fi ${esc(d.server.ssid)}</div>` : ''}
+    </div>
+  </div>`;
+  if ((d.workouts || []).length) {
+    html += `<div class="card"><h3>Recent workouts</h3>`;
+    d.workouts.forEach(w => {
+      html += `<div class="habit"><div>
+        <div class="name">${esc(w.routineName || w.routineId)}</div>
+        <div class="muted">${esc(w.date)} · ${w.totalDurationMin || '—'} min ${w.completed ? '· done' : ''}</div>
+      </div></div>`;
+    });
+    html += `</div>`;
+  }
+  if ((d.routines || []).length) {
+    html += `<div class="card"><h3>Routines</h3>`;
+    d.routines.forEach(r => {
+      html += `<div class="habit"><div class="name">${esc(r.name)}</div>
+        <span class="muted">${(r.exercises||0)} exercises · ~${r.estimatedDurationMin||'?'}m</span></div>`;
+    });
+    html += `</div>`;
+  }
+  if ((d.reminders || []).length) {
+    html += `<div class="card"><h3>Reminders</h3>`;
+    d.reminders.forEach(r => {
+      html += `<div class="habit"><div class="name">${esc(r.label)}</div>
+        <span class="muted">${esc(r.time)} ${r.enabled ? '' : '· off'}</span></div>`;
+    });
+    html += `</div>`;
+  }
+  if ((d.snapshots || []).length) {
+    html += `<div class="card"><h3>Sensor snapshots</h3>`;
+    d.snapshots.forEach(s => {
+      html += `<div class="habit"><div>
+        <div class="name">${esc(s.habitName || s.habitId)}</div>
+        <div class="muted">${esc(s.date)} · ${esc(s.summary || '')}</div>
+      </div></div>`;
+    });
+    html += `</div>`;
+  }
+  html += `<div class="card"><h3>About</h3>
+    <div class="muted">Steady local web UI mirrors Today, Path, History, captures, habits, Pomodoro, sleep nights, workouts, and sensors — data stays on your phone.</div>
+    <div class="muted" style="margin-top:8px">Tip: use <b>http://</b> on the HTTP port. HTTPS is self-signed on port+1.</div>
+  </div>`;
+  $('main').innerHTML = html;
+}
+
+// Initial: probe auth
+(async function init() {
+  try {
+    const st = await fetch('/api/status').then(r => r.json());
+    if (st.pinRequired) {
+      if (S.pin) {
+        // verify
+        const ok = await fetch('/api/auth', {
+          method:'POST', headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({ pin: S.pin })
+        }).then(r => r.json());
+        if (!ok.ok) { S.pin = ''; sessionStorage.removeItem('steady_pin'); showGate(); return; }
+      } else {
+        showGate();
+        return;
+      }
+    }
+    showApp();
+    await boot();
+    setInterval(() => { if (S.tab === 'today' && !$('gate')?.classList.contains('hidden') === false) {} }, 15000);
+    setInterval(() => {
+      if (!$('app').classList.contains('hidden') && (S.tab === 'today' || S.tab === 'history')) {
+        // soft refresh header
+        api('/api/summary').then(hdr).catch(()=>{});
+      }
+    }, 20000);
+  } catch (e) {
+    showGate('Server unreachable');
+  }
+})();
+</script>
+</body>
+</html>

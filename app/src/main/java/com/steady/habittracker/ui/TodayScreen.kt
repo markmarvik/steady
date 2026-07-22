@@ -13,6 +13,11 @@ import androidx.compose.foundation.text.BasicText
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material3.*
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.LaunchedEffect
@@ -24,6 +29,7 @@ import java.time.LocalDate
 import java.time.LocalTime
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
@@ -31,6 +37,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.delay
 import com.steady.habittracker.data.AppData
 import com.steady.habittracker.data.AutoSuggestion
 import com.steady.habittracker.data.CaptureTags
@@ -40,7 +47,9 @@ import com.steady.habittracker.data.HabitEntry
 import com.steady.habittracker.data.HabitType
 import com.steady.habittracker.data.TimelineSection
 import com.steady.habittracker.data.displayGlyph
+import com.steady.habittracker.data.defaultLogNote
 import com.steady.habittracker.data.displayLabel
+import com.steady.habittracker.data.effectiveDescription
 import com.steady.habittracker.data.inboxCaptures
 import com.steady.habittracker.data.journalCaptures
 import com.steady.habittracker.sensors.AutoLogEngine
@@ -68,6 +77,9 @@ fun TodayScreen(
     onStartRoutine: (com.steady.habittracker.data.ExerciseRoutine) -> Unit = {},
     /** Widget / deep-link: open + Capture dialog once. */
     openCaptureRequest: Boolean = false,
+    /** Optional tags to pre-select (and force on save) when opened from check-in. */
+    openCapturePresetTags: List<String> = emptyList(),
+    openCaptureDialogTitle: String? = null,
     onOpenCaptureConsumed: () -> Unit = {},
     /** Widget / deep-link: open + Log dialog once. */
     openLogRequest: Boolean = false,
@@ -87,11 +99,32 @@ fun TodayScreen(
 
     // Dialog states (must declare before use)
     var showCaptureDialog by remember { mutableStateOf(false) }
+    var capturePresetTags by remember { mutableStateOf<List<String>>(emptyList()) }
+    var captureDialogTitle by remember { mutableStateOf<String?>(null) }
     var showMetricDialog by remember { mutableStateOf(false) }
     var showJournalDialog by remember { mutableStateOf(false) }
+    // #44: temporary 30s flash for newly created notes/ideas
+    var flashCaptureId by remember { mutableStateOf<String?>(null) }
+    var flashCreatedAt by remember { mutableStateOf(0L) }
+    var knownCaptureIds by remember { mutableStateOf(appData.captures.map { it.id }.toSet()) }
+    var editFlashCapture by remember { mutableStateOf<com.steady.habittracker.data.CaptureItem?>(null) }
+
+    LaunchedEffect(appData.captures) {
+        val ids = appData.captures.map { it.id }.toSet()
+        val newId = ids.firstOrNull { it !in knownCaptureIds }
+        knownCaptureIds = ids
+        if (newId != null) {
+            flashCaptureId = newId
+            flashCreatedAt = System.currentTimeMillis()
+            delay(30_000)
+            if (flashCaptureId == newId) flashCaptureId = null
+        }
+    }
 
     LaunchedEffect(openCaptureRequest) {
         if (openCaptureRequest) {
+            capturePresetTags = openCapturePresetTags
+            captureDialogTitle = openCaptureDialogTitle
             showCaptureDialog = true
             onOpenCaptureConsumed()
         }
@@ -116,12 +149,43 @@ fun TodayScreen(
     }
 
     if (showCaptureDialog) {
+        val isCheckIn = capturePresetTags.any {
+            it.equals(com.steady.habittracker.data.CaptureTags.CHECKIN, ignoreCase = true)
+        }
         CaptureDialog(
             prefs = appData.capturePrefs,
-            onDismiss = { showCaptureDialog = false },
+            presetTags = capturePresetTags.takeIf { it.isNotEmpty() },
+            dialogTitle = captureDialogTitle ?: if (isCheckIn) "Awareness check-in" else null,
+            forceTags = if (isCheckIn) {
+                listOf(com.steady.habittracker.data.CaptureTags.CHECKIN)
+            } else {
+                emptyList()
+            },
+            onDismiss = {
+                showCaptureDialog = false
+                capturePresetTags = emptyList()
+                captureDialogTitle = null
+            },
             onCapture = { title, note, tags ->
                 onQuickCapture(title, note, tags)
                 showCaptureDialog = false
+                capturePresetTags = emptyList()
+                captureDialogTitle = null
+            }
+        )
+    }
+    // Re-open Write to edit a just-created flash item (#44)
+    editFlashCapture?.let { cap ->
+        CaptureDialog(
+            prefs = appData.capturePrefs,
+            presetTags = cap.tags,
+            dialogTitle = "Edit note",
+            onDismiss = { editFlashCapture = null },
+            onCapture = { title, note, tags ->
+                onQuickCapture(title, note, tags)
+                onDeleteCapture(cap.id)
+                editFlashCapture = null
+                flashCaptureId = null
             }
         )
     }
@@ -185,7 +249,9 @@ fun TodayScreen(
                 val isDone = (entry?.value ?: 0.0) >= 0.5
                 val isSkipped = entry?.skipped == true
                 val title = if (!habit.canSkip) "${habit.name} (essential)" else habit.name
+                val desc = habit.effectiveDescription()
                 val meta = buildList {
+                    if (desc.isNotBlank()) add(desc)
                     if (habit.extensionType != com.steady.habittracker.data.ExtensionType.NONE) {
                         add(com.steady.habittracker.data.ExtensionCatalog.label(habit.extensionType))
                         com.steady.habittracker.extensions.ExtensionManager.statusLine(habit, appData)?.let { add(it) }
@@ -272,7 +338,11 @@ fun TodayScreen(
                 )
             }
             Surface(
-                onClick = { showCaptureDialog = true },
+                onClick = {
+                    capturePresetTags = emptyList()
+                    captureDialogTitle = null
+                    showCaptureDialog = true
+                },
                 shape = RoundedCornerShape(20.dp),
                 color = colors.primary.copy(alpha = 0.14f)
             ) {
@@ -281,10 +351,11 @@ fun TodayScreen(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
-                    Text("✦", fontSize = 12.sp, color = colors.primary)
+                    // #44 Write (pen) instead of Inbox
+                    Text("✎", fontSize = 13.sp, color = colors.primary)
                     Text(
-                        if (pendingCaptures.isEmpty()) "Capture"
-                        else "Inbox · ${pendingCaptures.size}",
+                        if (pendingCaptures.isEmpty()) "Write"
+                        else "Write · ${pendingCaptures.size}",
                         color = colors.primary,
                         fontSize = 13.sp,
                         fontWeight = FontWeight.SemiBold
@@ -311,6 +382,20 @@ fun TodayScreen(
             modifier = Modifier.weight(1f),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
+            // #44 ephemeral just-created note with edit + fade/flash
+            val flashId = flashCaptureId
+            val flashCap = flashId?.let { id -> appData.captures.find { it.id == id } }
+            if (flashCap != null) {
+                item(key = "flash_${flashCap.id}", contentType = "flash") {
+                    RecentWriteFlashCard(
+                        cap = flashCap,
+                        colors = colors,
+                        onEdit = { editFlashCapture = flashCap },
+                        onDismiss = { flashCaptureId = null }
+                    )
+                }
+            }
+
             if (autoSuggestions.isNotEmpty()) {
                 item(key = "auto_log_header", contentType = "hdr") {
                     Row(
@@ -368,7 +453,7 @@ fun TodayScreen(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
-                            "Inbox · ideas & todos",
+                            "Write · ideas & todos",
                             color = colors.primary,
                             fontSize = 11.sp,
                             fontWeight = FontWeight.SemiBold
@@ -396,7 +481,14 @@ fun TodayScreen(
                         Column(Modifier.padding(10.dp)) {
                             Text(cap.title, color = colors.onSurface, fontSize = 13.sp, fontWeight = FontWeight.Medium)
                             if (cap.note.isNotBlank()) {
-                                Text(cap.note, color = colors.onSurfaceVariant, fontSize = 11.sp)
+                                // #44 auto-shorten long notes in list
+                                Text(
+                                    text = if (cap.note.length > 90) cap.note.take(90).trimEnd() + "…" else cap.note,
+                                    color = colors.onSurfaceVariant,
+                                    fontSize = 11.sp,
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis
+                                )
                             }
                             if (cap.tags.isNotEmpty()) {
                                 Text(
@@ -513,20 +605,35 @@ fun TodayScreen(
                 item(key = "sec_${bundle.section.group.id}", contentType = "sec") {
                     TimelineSectionHeader(section = bundle.section, colors = colors)
                 }
+                // #46 Square habit grid (3 columns) so more fit on screen
+                val chunks = bundle.rows.chunked(3)
                 items(
-                    bundle.rows,
-                    key = { it.listKey },
-                    contentType = { "habit" }
-                ) { row ->
-                    HabitRow(
-                        model = row,
-                        colors = colors,
-                        onToggle = onToggle,
-                        onLogEntry = onLogEntry,
-                        onRequestLog = onRequestLog,
-                        onSkip = onSkip,
-                        onShowSkipPrompt = onShowSkipPrompt
-                    )
+                    chunks.size,
+                    key = { idx -> "grid_${bundle.section.group.id}_$idx" },
+                    contentType = { "habit_row" }
+                ) { idx ->
+                    val chunk = chunks[idx]
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        chunk.forEach { row ->
+                            HabitSquare(
+                                model = row,
+                                colors = colors,
+                                onToggle = onToggle,
+                                onLogEntry = onLogEntry,
+                                onRequestLog = onRequestLog,
+                                onSkip = onSkip,
+                                onShowSkipPrompt = onShowSkipPrompt,
+                                modifier = Modifier.weight(1f)
+                            )
+                        }
+                        // Pad incomplete last row so squares stay equal width
+                        repeat(3 - chunk.size) {
+                            Spacer(Modifier.weight(1f))
+                        }
+                    }
                 }
             }
         }
@@ -669,16 +776,88 @@ private fun TimelineSectionHeader(section: TimelineSection, colors: TodayListCol
     }
 }
 
+/** #44 Temporary confirmation after Write: edit button, fade + accelerating flash ~30s. */
+@Composable
+private fun RecentWriteFlashCard(
+    cap: com.steady.habittracker.data.CaptureItem,
+    colors: TodayListColors,
+    onEdit: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    val infinite = rememberInfiniteTransition(label = "writeFlash")
+    val pulse by infinite.animateFloat(
+        initialValue = 0.55f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 420),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "pulse"
+    )
+    val ageMs = (System.currentTimeMillis() - cap.createdAt).coerceAtLeast(0L)
+    val life = (ageMs / 30_000f).coerceIn(0f, 1f)
+    val fade = (1f - life * 0.85f).coerceIn(0.15f, 1f)
+    val alpha = fade * (0.65f + 0.35f * pulse)
+
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .alpha(alpha)
+            .padding(horizontal = 4.dp),
+        color = colors.primary.copy(alpha = 0.18f + 0.12f * pulse),
+        shape = RoundedCornerShape(12.dp)
+    ) {
+        Row(
+            Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text(
+                    "Just wrote",
+                    fontSize = 10.sp,
+                    color = colors.primary,
+                    fontWeight = FontWeight.SemiBold
+                )
+                Text(
+                    cap.title,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = colors.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                if (cap.note.isNotBlank()) {
+                    Text(
+                        if (cap.note.length > 80) cap.note.take(80) + "…" else cap.note,
+                        fontSize = 11.sp,
+                        color = colors.onSurfaceVariant,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
+            TextButton(onClick = onEdit) {
+                Text("Edit", fontSize = 12.sp, color = colors.primary)
+            }
+            TextButton(onClick = onDismiss) {
+                Text("OK", fontSize = 12.sp, color = colors.onSurfaceVariant)
+            }
+        }
+    }
+}
+
+/** #46 Square habit tile — denser Today layout (3-up grid). Tap = log; long-press = skip. */
 @Composable
 @OptIn(ExperimentalFoundationApi::class)
-private fun HabitRow(
+private fun HabitSquare(
     model: TodayHabitRowModel,
     colors: TodayListColors,
     onToggle: (String) -> Unit,
     onLogEntry: (habitId: String, value: Double, note: String, date: String) -> Unit,
     onRequestLog: (Habit) -> Unit,
     onSkip: (String) -> Unit,
-    onShowSkipPrompt: (habitId: String) -> Unit
+    onShowSkipPrompt: (habitId: String) -> Unit,
+    modifier: Modifier = Modifier
 ) {
     val habit = model.habit
     val isDone = model.isDone
@@ -686,138 +865,85 @@ private fun HabitRow(
 
     val container = when {
         isSkipped -> colors.surfaceVariant
-        isDone && habit.type == HabitType.CHECKBOX -> colors.primary.copy(alpha = 0.22f)
+        isDone && habit.type == HabitType.CHECKBOX -> colors.primary.copy(alpha = 0.28f)
+        isDone -> colors.primary.copy(alpha = 0.18f)
         else -> colors.surface
     }
-
     val showCheck = habit.type == HabitType.CHECKBOX && isDone && !isSkipped
-    val iconBg = when {
-        isSkipped -> colors.error.copy(alpha = 0.18f)
-        showCheck -> colors.primary
-        isDone -> colors.primary.copy(alpha = 0.32f)
-        else -> colors.primary.copy(alpha = 0.16f)
-    }
-    val iconFg = when {
-        isSkipped -> Color(0xFFF87171)
-        showCheck -> colors.onPrimary
-        else -> colors.primary
-    }
     val titleColor = if (isSkipped) Color(0xFFF87171) else colors.onSurface
-    val indent = if (model.metaLine.contains("after ")) 8.dp else 0.dp
+    val statusGlyph = when {
+        isSkipped -> "›"
+        showCheck -> "✓"
+        isDone -> "·"
+        else -> ""
+    }
 
-    // Box + background (not Material Surface/Card) — cheaper during fling
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .background(container, RoundedCornerShape(12.dp))
-            .padding(start = 12.dp + indent, end = 4.dp, top = 8.dp, bottom = 8.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        GlyphIcon(
-            glyph = model.glyph,
-            size = 22.dp,
-            tintForSimple = colors.primary,
-            modifier = Modifier.padding(end = 10.dp)
-        )
-
-        Column(
-            Modifier
-                .weight(1f)
-                .padding(end = 6.dp)
-        ) {
-            // BasicText avoids Material Text overhead; titles are plain (no emoji)
-            BasicText(
-                text = model.title,
-                style = TextStyle(
-                    color = titleColor,
-                    fontSize = 15.sp,
-                    fontWeight = FontWeight.SemiBold
-                ),
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis
+    Column(
+        modifier = modifier
+            .aspectRatio(1f)
+            .background(container, RoundedCornerShape(14.dp))
+            .combinedClickable(
+                onClick = {
+                    if (habit.type == HabitType.CHECKBOX) {
+                        onToggle(habit.id)
+                    } else if (model.isSimpleTapAdd) {
+                        onLogEntry(
+                            habit.id,
+                            habit.target ?: 1.0,
+                            habit.defaultLogNote(),
+                            LocalDate.now().toString()
+                        )
+                    } else {
+                        onRequestLog(habit)
+                    }
+                },
+                onLongClick = {
+                    onSkip(habit.id)
+                    if (habit.canSkip) onShowSkipPrompt(habit.id)
+                }
             )
-            if (model.metaLine.isNotBlank()) {
+            .padding(8.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
+    ) {
+        Box(contentAlignment = Alignment.TopEnd, modifier = Modifier.fillMaxWidth()) {
+            GlyphIcon(
+                glyph = model.glyph,
+                size = 26.dp,
+                tintForSimple = colors.primary,
+                modifier = Modifier.align(Alignment.Center)
+            )
+            if (statusGlyph.isNotEmpty()) {
                 BasicText(
-                    text = model.metaLine,
-                    style = TextStyle(color = colors.onSurfaceVariant, fontSize = 11.sp),
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-            }
-            if (model.noteLine != null) {
-                BasicText(
-                    text = model.noteLine,
-                    style = TextStyle(color = colors.primary, fontSize = 11.sp),
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
+                    text = statusGlyph,
+                    style = TextStyle(
+                        color = if (isSkipped) Color(0xFFF87171) else colors.primary,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold
+                    ),
+                    modifier = Modifier.align(Alignment.TopEnd)
                 )
             }
         }
-
-        Box(
-            modifier = Modifier
-                .combinedClickable(
-                    onClick = {
-                        if (habit.type == HabitType.CHECKBOX) {
-                            onToggle(habit.id)
-                        } else if (model.isSimpleTapAdd) {
-                            onLogEntry(habit.id, habit.target ?: 1.0, "", LocalDate.now().toString())
-                        } else {
-                            onRequestLog(habit)
-                        }
-                    },
-                    onLongClick = {
-                        onSkip(habit.id)
-                        if (habit.canSkip) onShowSkipPrompt(habit.id)
-                    }
-                )
-                .padding(horizontal = 8.dp, vertical = 6.dp)
-                .defaultMinSize(minWidth = 48.dp, minHeight = 44.dp),
-            contentAlignment = Alignment.Center
-        ) {
-            if (habit.type == HabitType.CHECKBOX) {
-                Box(
-                    modifier = Modifier
-                        .size(34.dp)
-                        .background(iconBg, RoundedCornerShape(10.dp)),
-                    contentAlignment = Alignment.Center
-                ) {
-                    when {
-                        showCheck -> Icon(
-                            Icons.Default.Check,
-                            contentDescription = "Done",
-                            tint = iconFg,
-                            modifier = Modifier.size(18.dp)
-                        )
-                        // ASCII only — no emoji font in the hot path
-                        isSkipped -> BasicText(
-                            text = ">",
-                            style = TextStyle(color = iconFg, fontSize = 16.sp, fontWeight = FontWeight.Bold)
-                        )
-                        else -> BasicText(
-                            text = "o",
-                            style = TextStyle(color = iconFg, fontSize = 15.sp, fontWeight = FontWeight.Medium)
-                        )
-                    }
-                }
-            } else {
-                val action = when {
-                    isSkipped -> "Skip"
-                    isDone -> "Edit"
-                    else -> "Log"
-                }
-                BasicText(
-                    text = action,
-                    style = TextStyle(
-                        color = iconFg,
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.SemiBold
-                    ),
-                    modifier = Modifier
-                        .background(iconBg, RoundedCornerShape(10.dp))
-                        .padding(horizontal = 12.dp, vertical = 10.dp)
-                )
-            }
+        Spacer(Modifier.height(6.dp))
+        BasicText(
+            text = model.title,
+            style = TextStyle(
+                color = titleColor,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.SemiBold
+            ),
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis
+        )
+        if (model.metaLine.isNotBlank()) {
+            Spacer(Modifier.height(2.dp))
+            BasicText(
+                text = model.metaLine,
+                style = TextStyle(color = colors.onSurfaceVariant, fontSize = 9.sp),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
         }
     }
 }

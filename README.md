@@ -108,8 +108,10 @@ Four focused sub-tabs:
 - Opt-in server on the phone (`Manage → Blocks`) — runs as a **foreground service** (notification while on)
 - **HTTP** on port 8787 (default): open `http://PHONE_IP:8787` — do **not** type `https://` on this port
 - **HTTPS** (optional, default on) on port **8788** with a bundled self-signed cert; accept the browser warning once
-- Same Wi‑Fi as your PC; phone firewall / VPN can block LAN access
-- **Today** (log/undo), **Habits** catalog, capture, Pomodoro, history API — fully local, no cloud
+- Same Wi‑Fi as your PC; phone firewall / VPN / **GrapheneOS network permission** can block access — allow Steady network access
+- Full desktop dashboard: **Today** (all habit types, skip/undo), **Inbox + Journal**, **Path** (goals + check-in), **History** (momentum, heatmap, tags, sleep nights), **Habits** CRUD, **Focus** (Pomodoro), workouts / sensors / reminders
+- Configurable **auto turn-off** (15m–4h or never) and **trusted Wi‑Fi whitelist**: auto-start on home SSID with longer session (1–12h / never) and a **mandatory secure PIN** (min 4) when auto-start is on
+- Fully local, no cloud
 
 ### Appearance
 - **Theme packs** inspired by Linux rice palettes: Nord, Catppuccin, Tokyo Night, Gruvbox, Dracula, Rosé Pine, Everforest, One Dark, OLED, Latte

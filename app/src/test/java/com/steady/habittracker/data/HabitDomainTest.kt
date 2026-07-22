@@ -189,6 +189,45 @@ class HabitDomainTest {
     }
 
     @Test
+    fun `withPermanentlyDeletedHabit removes habit entries and links`() {
+        val today = LocalDate.now().toString()
+        val data = AppData(
+            groups = listOf(Group("g1", "G")),
+            habits = listOf(
+                Habit("h1", "Keep", groupId = "g1"),
+                Habit("h2", "Gone", groupId = "g1", archived = true, afterHabitId = "h1"),
+                Habit("h3", "Stacked", groupId = "g1", afterHabitId = "h2")
+            ),
+            entries = mapOf(
+                today to mapOf(
+                    "h1" to HabitEntry(1.0),
+                    "h2" to HabitEntry(1.0, note = "dose")
+                )
+            ),
+            autoSuggestions = listOf(
+                AutoSuggestion(habitId = "h2", date = today, value = 1.0)
+            ),
+            schemaVersion = 13
+        )
+        val gone = data.withPermanentlyDeletedHabit("h2")
+        assertTrue(gone.habits.none { it.id == "h2" })
+        assertTrue(gone.habits.any { it.id == "h1" })
+        assertEquals(null, gone.habits.find { it.id == "h3" }?.afterHabitId)
+        assertFalse(gone.entries[today]?.containsKey("h2") == true)
+        assertTrue(gone.entries[today]?.containsKey("h1") == true)
+        assertTrue(gone.autoSuggestions.none { it.habitId == "h2" })
+        // bulk: only archived
+        val multi = data.copy(
+            habits = data.habits.map {
+                if (it.id == "h1") it.copy(archived = true) else it
+            }
+        ).withPermanentlyDeletedArchivedHabits()
+        assertTrue(multi.habits.none { it.archived })
+        assertTrue(multi.habits.any { it.id == "h3" && !it.archived })
+        assertTrue(multi.habits.none { it.id == "h1" || it.id == "h2" })
+    }
+
+    @Test
     fun `computeStreak and day completion work with schedules present`() {
         // Schedules don't affect these computes directly
         val data = sampleDataWithEntries().copy(

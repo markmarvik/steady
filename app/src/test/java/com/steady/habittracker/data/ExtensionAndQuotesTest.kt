@@ -52,11 +52,29 @@ class ExtensionAndQuotesTest {
     }
 
     @Test
+    fun habitDescriptionDefaultsLogNoteAndFallsBackToWhy() {
+        val withDesc = Habit(
+            id = "h1",
+            name = "Vitamin D",
+            description = "2000 IU with breakfast",
+            groupId = "g1"
+        )
+        assertEquals("2000 IU with breakfast", withDesc.effectiveDescription())
+        assertEquals("2000 IU with breakfast", withDesc.defaultLogNote())
+        val legacy = Habit(id = "h2", name = "Mag", why = "400 mg evening", groupId = "g1")
+        assertEquals("400 mg evening", legacy.effectiveDescription())
+        assertEquals("400 mg evening", legacy.defaultLogNote())
+    }
+
+    @Test
     fun captureTagPresetsIncludeIdeasNotesReminders() {
         assertTrue(CaptureTags.IDEAS in CaptureTags.PRESETS)
         assertTrue(CaptureTags.NOTES in CaptureTags.PRESETS)
         assertTrue(CaptureTags.REMINDERS in CaptureTags.PRESETS)
         assertTrue(CaptureTags.TODO in CaptureTags.DEFAULT_INBOX_TAGS)
+        assertTrue(CaptureTags.CHECKIN in CaptureTags.PRESETS)
+        assertTrue(CaptureTags.CHECKIN in CaptureTags.DEFAULT_JOURNAL_TAGS)
+        assertEquals("🎯", CaptureTags.glyph(CaptureTags.CHECKIN))
     }
 
     @Test
@@ -68,6 +86,8 @@ class ExtensionAndQuotesTest {
         assertFalse(prefs.goesToInbox(listOf(CaptureTags.MEMORIES)))
         assertFalse(prefs.goesToInbox(listOf(CaptureTags.GRATITUDE)))
         assertFalse(prefs.goesToInbox(listOf(CaptureTags.THOUGHTS)))
+        // ESM / random awareness check-ins are journal, not action inbox
+        assertFalse(prefs.goesToInbox(listOf(CaptureTags.CHECKIN)))
         // Mixed: any inbox tag keeps it in inbox
         assertTrue(prefs.goesToInbox(listOf(CaptureTags.GRATITUDE, CaptureTags.IDEAS)))
         assertTrue(prefs.goesToInbox(emptyList()))
@@ -103,6 +123,24 @@ class ExtensionAndQuotesTest {
         assertEquals(13, AppData().schemaVersion)
         assertNotNull(AppData().localWebPrefs)
         assertNotNull(AppData().pomodoroPrefs)
+    }
+
+    @Test
+    fun localWebPrefsTrustedWifiNeedsPin() {
+        val open = LocalWebPrefs(autoStartOnTrustedWifi = true, pin = "12", trustedSsids = listOf("Home"))
+        assertFalse(open.pinIsSecure())
+        assertFalse(open.canAutoStartOnWifi())
+        val secure = LocalWebPrefs(
+            autoStartOnTrustedWifi = true,
+            pin = "4821",
+            trustedSsids = listOf("Home"),
+            autoOffMinutes = 30,
+            trustedWifiAutoOffMinutes = 480
+        )
+        assertTrue(secure.pinIsSecure())
+        assertTrue(secure.canAutoStartOnWifi())
+        assertEquals(480, secure.effectiveAutoOffMinutes(onTrustedWifi = true))
+        assertEquals(30, secure.effectiveAutoOffMinutes(onTrustedWifi = false))
     }
 
     @Test

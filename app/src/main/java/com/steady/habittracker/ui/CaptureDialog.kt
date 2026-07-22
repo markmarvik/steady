@@ -61,19 +61,39 @@ import kotlinx.coroutines.delay
 /**
  * Modern, polished Quick Capture sheet.
  * Configured via [CapturePrefs] (Manage → Blocks → Capture).
+ *
+ * @param presetTags when non-null, pre-select these tags (e.g. random ESM check-in → Check-in).
+ * @param dialogTitle optional header override (defaults to "Quick capture").
+ * @param forceTags tags always applied on save even if the user deselects them (e.g. Check-in).
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun CaptureDialog(
     prefs: CapturePrefs = CapturePrefs(),
+    presetTags: List<String>? = null,
+    dialogTitle: String? = null,
+    forceTags: List<String> = emptyList(),
     onDismiss: () -> Unit,
     onCapture: (title: String, note: String, tags: List<String>) -> Unit
 ) {
-    val visibleTags = remember(prefs) { prefs.visibleTags() }
-    val initialTags = remember(prefs) {
-        prefs.defaultTags.filter { it in visibleTags }.ifEmpty {
-            visibleTags.take(1)
-        }.toSet()
+    val visibleTags = remember(prefs, presetTags, forceTags) {
+        val base = prefs.visibleTags()
+        val extra = ((presetTags.orEmpty()) + forceTags).filter { it.isNotBlank() }
+        (base + extra).distinct()
+    }
+    val initialTags = remember(prefs, presetTags, forceTags, visibleTags) {
+        val forced = forceTags.filter { it in visibleTags }.toSet()
+        val fromPreset = presetTags
+            ?.map { it.trim() }
+            ?.filter { it.isNotEmpty() && it in visibleTags }
+            ?.toSet()
+            .orEmpty()
+        when {
+            fromPreset.isNotEmpty() || forced.isNotEmpty() -> fromPreset + forced
+            else -> prefs.defaultTags.filter { it in visibleTags }.ifEmpty {
+                visibleTags.take(1)
+            }.toSet()
+        }
     }
     var title by remember { mutableStateOf("") }
     var note by remember { mutableStateOf("") }
@@ -93,6 +113,9 @@ fun CaptureDialog(
         val t = title.trim()
         if (t.isBlank()) return
         val tags = selectedTags.toMutableList()
+        forceTags.forEach { ft ->
+            if (ft.isNotBlank() && ft !in tags) tags.add(ft)
+        }
         var finalNote = note.trim()
         if (prefs.showEnergyScale && energy in 1..5) {
             if (CaptureTags.ENERGY !in tags) tags.add(CaptureTags.ENERGY)
@@ -139,13 +162,19 @@ fun CaptureDialog(
                     Spacer(Modifier.width(12.dp))
                     Column(Modifier.weight(1f)) {
                         Text(
-                            "Quick capture",
+                            dialogTitle ?: "Quick capture",
                             fontWeight = FontWeight.SemiBold,
                             fontSize = 18.sp,
                             color = MaterialTheme.colorScheme.onSurface
                         )
                         Text(
-                            "Ideas · Todo · Reminders → Inbox. Memories · Gratitude · Thoughts → Journal.",
+                            if (forceTags.any { it.equals(CaptureTags.CHECKIN, ignoreCase = true) } ||
+                                presetTags.orEmpty().any { it.equals(CaptureTags.CHECKIN, ignoreCase = true) }
+                            ) {
+                                "Awareness check-in — tagged as Check-in and saved to Journal."
+                            } else {
+                                "Ideas · Todo · Reminders → Inbox. Memories · Gratitude · Thoughts → Journal."
+                            },
                             fontSize = 11.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )

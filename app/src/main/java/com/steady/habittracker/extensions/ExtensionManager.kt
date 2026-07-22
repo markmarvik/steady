@@ -30,6 +30,8 @@ object ExtensionManager {
         val summaryNote: String = "",
         val openWorkout: Boolean = false,
         val openCapture: Boolean = false,
+        /** Tags pre-selected when opening capture (e.g. Check-in for ESM). */
+        val capturePresetTags: List<String> = emptyList(),
         val openSleepReview: Boolean = false
     )
 
@@ -52,7 +54,11 @@ object ExtensionManager {
             ExtensionType.SENSOR_AUTO_READ -> handleSensorRead(context, data, habit, entry, date)
             ExtensionType.SCREEN_USAGE -> handleScreenUsage(context, data, habit, entry, date)
             ExtensionType.WORKOUT_SESSION -> LogResult(data, openWorkout = true)
-            ExtensionType.ESM_CHECKIN -> LogResult(data, openCapture = true)
+            ExtensionType.ESM_CHECKIN -> LogResult(
+                data,
+                openCapture = true,
+                capturePresetTags = listOf(com.steady.habittracker.data.CaptureTags.CHECKIN)
+            )
             ExtensionType.POMODORO -> handlePomodoro(data, habit, entry, date)
         }.let { result ->
             // Chain: trigger child SENSOR_AUTO_READ / others with chainAfterHabitId

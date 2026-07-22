@@ -36,5 +36,12 @@ object DisplayIcon {
 
 fun Habit.displayGlyph(): String = DisplayIcon.glyph(icon, name)
 fun Habit.displayLabel(): String = DisplayIcon.label(icon, name)
+
+/** User-facing description; falls back to legacy [Habit.why]. */
+fun Habit.effectiveDescription(): String =
+    description.trim().ifBlank { why.trim() }
+
+/** Prefill for log notes (dosages, protocol, etc.). */
+fun Habit.defaultLogNote(): String = effectiveDescription()
 fun Group.displayGlyph(): String = DisplayIcon.glyph(icon, name)
 fun Group.displayLabel(): String = DisplayIcon.label(icon, name)

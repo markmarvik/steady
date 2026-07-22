@@ -17,6 +17,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.steady.habittracker.data.Habit
 import com.steady.habittracker.data.HabitType
+import com.steady.habittracker.data.defaultLogNote
+import com.steady.habittracker.data.effectiveDescription
 import java.time.LocalDate
 
 @Composable
@@ -33,7 +35,8 @@ fun LogEntryDialog(
             } else "1"
         )
     }
-    var note by remember { mutableStateOf("") }
+    // Prefill from habit description (dosages / protocol); user can edit before save
+    var note by remember(habit.id) { mutableStateOf(habit.defaultLogNote()) }
     var selectedScale by remember { mutableStateOf((habit.target ?: 3.0).toInt().coerceIn(1, 5)) }
     var dateStr by remember { mutableStateOf(LocalDate.now().toString()) }
     var showDate by remember { mutableStateOf(false) }
@@ -79,6 +82,15 @@ fun LogEntryDialog(
         title = { Text("Log: ${habit.name}") },
         text = {
             Column {
+                val desc = habit.effectiveDescription()
+                if (desc.isNotBlank()) {
+                    Text(
+                        desc,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        fontSize = 12.sp
+                    )
+                    Spacer(Modifier.height(8.dp))
+                }
                 when (habit.type) {
                     HabitType.CHECKBOX -> {
                         Text("Mark as complete?", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
@@ -125,23 +137,29 @@ fun LogEntryDialog(
                 }
 
                 Spacer(Modifier.height(8.dp))
-                if (habit.type == HabitType.NOTE || habit.type != HabitType.CHECKBOX) {
-                    val noteLabel = if (habit.type == HabitType.NOTE) {
-                        "Journal entry"
-                    } else {
-                        "Note (optional)"
-                    }
-                    OutlinedTextField(
-                        value = note,
-                        onValueChange = { note = it },
-                        label = { Text(noteLabel) },
-                        modifier = Modifier.fillMaxWidth()
-                            .then(if (habit.type == HabitType.NOTE) Modifier.focusRequester(noteFocusRequester) else Modifier),
-                        minLines = if (habit.type == HabitType.NOTE) 4 else 1,
-                        keyboardOptions = KeyboardOptions(imeAction = if (habit.type == HabitType.NOTE) ImeAction.Default else ImeAction.Done),
-                        keyboardActions = KeyboardActions(onDone = { commit() })
-                    )
+                // Always allow note — defaults to habit description (e.g. supplement dose)
+                val noteLabel = when {
+                    habit.type == HabitType.NOTE -> "Journal entry"
+                    desc.isNotBlank() -> "Note (default from description)"
+                    else -> "Note (optional)"
                 }
+                OutlinedTextField(
+                    value = note,
+                    onValueChange = { note = it },
+                    label = { Text(noteLabel) },
+                    placeholder = {
+                        if (desc.isBlank()) {
+                            Text("e.g. 500 mg · with food", fontSize = 12.sp)
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                        .then(if (habit.type == HabitType.NOTE) Modifier.focusRequester(noteFocusRequester) else Modifier),
+                    minLines = if (habit.type == HabitType.NOTE) 4 else 2,
+                    keyboardOptions = KeyboardOptions(
+                        imeAction = if (habit.type == HabitType.NOTE) ImeAction.Default else ImeAction.Done
+                    ),
+                    keyboardActions = KeyboardActions(onDone = { commit() })
+                )
 
                 Spacer(Modifier.height(4.dp))
                 TextButton(onClick = { showDate = !showDate }) {

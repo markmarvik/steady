@@ -4,7 +4,6 @@ import android.content.Context
 import android.net.ConnectivityManager
 import android.net.LinkProperties
 import android.net.NetworkCapabilities
-import android.os.Build
 import android.util.Log
 import com.steady.habittracker.data.AndroidHabitRepository
 import com.steady.habittracker.data.AppData
@@ -15,12 +14,19 @@ import com.steady.habittracker.data.HabitEntry
 import com.steady.habittracker.data.HabitType
 import com.steady.habittracker.data.LocalWebPrefs
 import com.steady.habittracker.data.MotivationalQuotes
+import com.steady.habittracker.data.PathAlignmentCheck
+import com.steady.habittracker.data.inboxCaptures
+import com.steady.habittracker.data.journalCaptures
 import com.steady.habittracker.data.withAddedCapture
 import com.steady.habittracker.data.withAddedHabit
+import com.steady.habittracker.data.withAddedPathCheck
 import com.steady.habittracker.data.withArchivedHabit
 import com.steady.habittracker.data.withPomodoroPrefs
 import com.steady.habittracker.data.withRemovedEntry
+import com.steady.habittracker.data.withUpdatedCapture
 import com.steady.habittracker.data.withUpdatedEntry
+import com.steady.habittracker.data.withUpdatedGoal
+import com.steady.habittracker.data.withoutCapture
 import com.steady.habittracker.extensions.ExtensionManager
 import com.steady.habittracker.widget.WidgetRenderer
 import kotlinx.coroutines.flow.first
@@ -36,7 +42,10 @@ import java.net.NetworkInterface
 import java.net.ServerSocket
 import java.net.Socket
 import java.security.KeyStore
+import java.time.Instant
 import java.time.LocalDate
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 import java.util.Collections
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
@@ -50,14 +59,14 @@ import kotlin.concurrent.thread
 /**
  * LAN web server for desktop access.
  * - HTTP on [LocalWebPrefs.port] (default 8787), bound to 0.0.0.0
- * - Optional HTTPS on [LocalWebPrefs.port] + 1 with bundled self-signed cert
- *
- * Prefer starting via [LocalWebService] so Android keeps the process alive.
+ * - Optional HTTPS on port+1 with bundled self-signed cert
+ * - SPA from assets/web/index.html + JSON APIs covering app features
  */
 object LocalWebServer {
     private const val TAG = "SteadyWeb"
     private const val KEYSTORE_ASSET = "steady_local.p12"
     private const val KEYSTORE_PASS = "steady-local"
+    private const val WEB_ASSET_DIR = "web"
 
     private val lock = Any()
     private val running = AtomicBoolean(false)
@@ -66,7 +75,6 @@ object LocalWebServer {
     private val prefsRef = AtomicReference(LocalWebPrefs())
     private var appContext: Context? = null
 
-    /** Last status for UI (thread-safe). */
     @Volatile
     var statusMessage: String = "Stopped"
         private set
@@ -83,27 +91,82 @@ object LocalWebServer {
     var boundHttpsPort: Int = 0
         private set
 
+    @Volatile
+    var autoOffDeadlineMs: Long = 0L
+        private set
+
+    @Volatile
+    var currentSsid: String? = null
+
     fun isRunning(): Boolean = running.get()
+    fun currentPrefs(): LocalWebPrefs? = prefsRef.get()
+    fun rememberPrefs(prefs: LocalWebPrefs) {
+        prefsRef.set(prefs)
+    }
+
+    fun setAutoOffDeadline(epochMs: Long) {
+        autoOffDeadlineMs = epochMs
+    }
+
+    fun autoOffRemainingLabel(): String? {
+        val d = autoOffDeadlineMs
+        if (d <= 0L) return null
+        val left = d - System.currentTimeMillis()
+        if (left <= 0L) return "now"
+        val mins = (left / 60_000L).toInt()
+        val secs = ((left % 60_000L) / 1000L).toInt()
+        return if (mins >= 60) {
+            val h = mins / 60
+            val m = mins % 60
+            "${h}h ${m}m"
+        } else if (mins > 0) {
+            "${mins}m ${secs}s"
+        } else {
+            "${secs}s"
+        }
+    }
+
+    fun markFailed(message: String) {
+        lastError = message
+        statusMessage = "Failed: $message"
+        running.set(false)
+    }
 
     fun setEnabled(context: Context, data: AppData) {
         appContext = context.applicationContext
-        prefsRef.set(data.localWebPrefs)
-        if (data.localWebPrefs.enabled) {
-            LocalWebService.start(context.applicationContext)
+        val prefs = data.localWebPrefs
+        prefsRef.set(prefs)
+        if (prefs.enabled) {
+            val withDeadline = if (prefs.autoOffAtEpochMs <= 0L) {
+                val mins = prefs.effectiveAutoOffMinutes(WifiWebMonitor.isOnTrustedWifi(context, prefs))
+                if (mins > 0) {
+                    prefs.copy(autoOffAtEpochMs = System.currentTimeMillis() + mins * 60_000L)
+                } else {
+                    prefs
+                }
+            } else {
+                prefs
+            }
+            prefsRef.set(withDeadline)
+            LocalWebService.start(context.applicationContext, withDeadline)
         } else {
             LocalWebService.stop(context.applicationContext)
             stop()
         }
     }
 
-    /**
-     * Start listening. Safe to call repeatedly.
-     * Called from [LocalWebService] on a background thread.
-     */
     fun start(context: Context, prefs: LocalWebPrefs = prefsRef.get()): Boolean {
         synchronized(lock) {
             appContext = context.applicationContext
             prefsRef.set(prefs)
+            if (running.get() &&
+                boundHttpPort == prefs.port.coerceIn(1024, 65534) &&
+                httpSocket.get()?.isClosed == false
+            ) {
+                statusMessage = buildStatus(boundHttpsPort > 0)
+                Log.i(TAG, "Already running · $statusMessage")
+                return true
+            }
             stopInternal()
 
             val httpPort = prefs.port.coerceIn(1024, 65534)
@@ -111,7 +174,6 @@ object LocalWebServer {
             lastError = null
 
             return try {
-                // Explicit wildcard — all interfaces (Wi‑Fi + localhost)
                 val http = ServerSocket()
                 http.reuseAddress = true
                 http.bind(InetSocketAddress("0.0.0.0", httpPort))
@@ -126,7 +188,6 @@ object LocalWebServer {
                             val https = factory.createServerSocket() as SSLServerSocket
                             https.reuseAddress = true
                             https.bind(InetSocketAddress("0.0.0.0", httpsPort))
-                            // Accept self-signed / LAN browsers
                             https.enabledProtocols = arrayOf("TLSv1.2", "TLSv1.3")
                             httpsSocket.set(https)
                             boundHttpsPort = https.localPort
@@ -135,9 +196,8 @@ object LocalWebServer {
                             Log.w(TAG, "HTTPS keystore missing; HTTP only")
                         }
                     } catch (e: Exception) {
-                        Log.e(TAG, "HTTPS bind failed", e)
+                        Log.e(TAG, "HTTPS bind failed (HTTP still up)", e)
                         boundHttpsPort = 0
-                        lastError = "HTTPS failed: ${e.message}"
                     }
                 } else {
                     boundHttpsPort = 0
@@ -175,9 +235,9 @@ object LocalWebServer {
         synchronized(lock) {
             stopInternal()
             statusMessage = "Stopped"
-            lastError = null
             boundHttpPort = 0
             boundHttpsPort = 0
+            autoOffDeadlineMs = 0L
         }
     }
 
@@ -185,14 +245,16 @@ object LocalWebServer {
         running.set(false)
         try {
             httpSocket.getAndSet(null)?.close()
-        } catch (_: Exception) { }
+        } catch (_: Exception) {
+        }
         try {
             httpsSocket.getAndSet(null)?.close()
-        } catch (_: Exception) { }
-        // Brief pause so the OS releases the port before rebind
+        } catch (_: Exception) {
+        }
         try {
             Thread.sleep(80)
-        } catch (_: InterruptedException) { }
+        } catch (_: InterruptedException) {
+        }
     }
 
     private fun buildStatus(httpsOk: Boolean): String {
@@ -214,6 +276,13 @@ object LocalWebServer {
             } catch (e: Exception) {
                 if (running.get()) {
                     Log.w(TAG, "accept ($label) error: ${e.message}")
+                    if (label == "http") {
+                        markFailed("Accept loop died: ${e.message}")
+                        try {
+                            server.close()
+                        } catch (_: Exception) {
+                        }
+                    }
                 }
                 break
             }
@@ -237,10 +306,8 @@ object LocalWebServer {
         }
     }
 
-    /** Best-effort LAN IPv4 addresses (Wi‑Fi first). */
     fun lanIpv4Addresses(): List<String> {
         val found = linkedSetOf<String>()
-        // ConnectivityManager active network (API 23+)
         try {
             val ctx = appContext
             if (ctx != null) {
@@ -261,30 +328,22 @@ object LocalWebServer {
                     }
                 }
             }
-        } catch (_: Exception) { }
+        } catch (_: Exception) {
+        }
 
-        // Enumerate all interfaces
         try {
             val ifaces = Collections.list(NetworkInterface.getNetworkInterfaces())
             for (ni in ifaces) {
                 if (!ni.isUp || ni.isLoopback) continue
-                val name = ni.name.lowercase()
-                val addrs = Collections.list(ni.inetAddresses)
-                for (addr in addrs) {
+                for (addr in Collections.list(ni.inetAddresses)) {
                     if (addr is Inet4Address && !addr.isLoopbackAddress) {
-                        val host = addr.hostAddress ?: continue
-                        // Prefer wlan/eth
-                        if (name.startsWith("wlan") || name.startsWith("eth") || name.startsWith("en")) {
-                            found.add(host)
-                        } else {
-                            found.add(host)
-                        }
+                        found.add(addr.hostAddress ?: continue)
                     }
                 }
             }
-        } catch (_: Exception) { }
+        } catch (_: Exception) {
+        }
 
-        // Deprecated WifiManager fallback
         try {
             val ctx = appContext
             if (ctx != null) {
@@ -298,7 +357,8 @@ object LocalWebServer {
                     if (ip != "0.0.0.0") found.add(ip)
                 }
             }
-        } catch (_: Exception) { }
+        } catch (_: Exception) {
+        }
 
         return found.toList()
     }
@@ -315,12 +375,6 @@ object LocalWebServer {
         return ips.map { "https://$it:$boundHttpsPort" } + "https://127.0.0.1:$boundHttpsPort"
     }
 
-    /** @deprecated use [httpUrls] */
-    fun localAddressHint(context: Context): String {
-        appContext = context.applicationContext
-        return httpUrls().firstOrNull() ?: "http://127.0.0.1:${prefsRef.get().port}"
-    }
-
     private fun handleClient(socket: Socket) {
         try {
             socket.soTimeout = 20_000
@@ -332,86 +386,183 @@ object LocalWebServer {
             val path = rawPath.substringBefore("?")
             val query = rawPath.substringAfter("?", "")
             var contentLength = 0
+            var pinHeader = ""
             var line: String?
             while (reader.readLine().also { line = it } != null) {
                 if (line.isNullOrEmpty()) break
-                if (line!!.startsWith("Content-Length:", ignoreCase = true)) {
-                    contentLength = line!!.substringAfter(":").trim().toIntOrNull() ?: 0
+                val l = line!!
+                if (l.startsWith("Content-Length:", ignoreCase = true)) {
+                    contentLength = l.substringAfter(":").trim().toIntOrNull() ?: 0
+                } else if (l.startsWith("X-Steady-Pin:", ignoreCase = true)) {
+                    pinHeader = l.substringAfter(":").trim()
                 }
             }
             val body = if (contentLength > 0) {
-                val buf = CharArray(contentLength)
+                val buf = CharArray(contentLength.coerceAtMost(2_000_000))
                 var read = 0
-                while (read < contentLength) {
-                    val n = reader.read(buf, read, contentLength - read)
+                while (read < contentLength && read < buf.size) {
+                    val n = reader.read(buf, read, (contentLength - read).coerceAtMost(buf.size - read))
                     if (n < 0) break
                     read += n
                 }
                 String(buf, 0, read)
-            } else ""
-
-            val prefs = prefsRef.get()
-            if (prefs.pin.isNotBlank() && path.startsWith("/api")) {
-                val pinOk = body.contains("\"pin\":\"${prefs.pin}\"") ||
-                    query.contains("pin=${prefs.pin}")
-                if (!pinOk) {
-                    writeResponse(socket.getOutputStream(), 401, "application/json", """{"error":"pin required"}""")
-                    return
-                }
+            } else {
+                ""
             }
 
+            val out = socket.getOutputStream()
+            val prefs = prefsRef.get()
+            val pinRequired = prefs.pin.isNotBlank()
+
+            // Public endpoints
             when {
-                path == "/" || path == "/index.html" ->
-                    writeResponse(socket.getOutputStream(), 200, "text/html; charset=utf-8", htmlDashboard())
-                path == "/habits" ->
-                    writeResponse(socket.getOutputStream(), 200, "text/html; charset=utf-8", htmlHabits())
-                path == "/api/status" && method == "GET" ->
+                path == "/api/status" && method == "GET" -> {
                     writeResponse(
-                        socket.getOutputStream(), 200, "application/json",
+                        out, 200, "application/json",
                         JSONObject()
                             .put("running", running.get())
                             .put("httpPort", boundHttpPort)
                             .put("httpsPort", boundHttpsPort)
                             .put("status", statusMessage)
+                            .put("pinRequired", pinRequired)
+                            .put("autoOff", autoOffRemainingLabel() ?: JSONObject.NULL)
+                            .put("ssid", currentSsid ?: JSONObject.NULL)
                             .toString()
                     )
+                    return
+                }
+                path == "/api/auth" && method == "POST" -> {
+                    writeResponse(out, 200, "application/json", apiAuth(body))
+                    return
+                }
+                (path == "/" || path == "/index.html") && method == "GET" -> {
+                    serveAsset(out, "index.html")
+                    return
+                }
+                path.startsWith("/assets/") && method == "GET" -> {
+                    serveAsset(out, path.removePrefix("/assets/"))
+                    return
+                }
+            }
+
+            if (pinRequired && path.startsWith("/api")) {
+                val pinOk = pinMatches(prefs.pin, pinHeader, body, query)
+                if (!pinOk) {
+                    writeResponse(out, 401, "application/json", """{"error":"pin required"}""")
+                    return
+                }
+            }
+
+            when {
+                path == "/api/summary" && method == "GET" ->
+                    writeResponse(out, 200, "application/json", apiSummary())
                 path == "/api/today" && method == "GET" ->
-                    writeResponse(socket.getOutputStream(), 200, "application/json", apiToday())
+                    writeResponse(out, 200, "application/json", apiToday())
                 path == "/api/habits" && method == "GET" ->
-                    writeResponse(socket.getOutputStream(), 200, "application/json", apiHabits())
+                    writeResponse(out, 200, "application/json", apiHabits())
                 path == "/api/groups" && method == "GET" ->
-                    writeResponse(socket.getOutputStream(), 200, "application/json", apiGroups())
+                    writeResponse(out, 200, "application/json", apiGroups())
                 path == "/api/history" && method == "GET" ->
-                    writeResponse(socket.getOutputStream(), 200, "application/json", apiHistory())
+                    writeResponse(out, 200, "application/json", apiHistory())
+                path == "/api/captures" && method == "GET" ->
+                    writeResponse(out, 200, "application/json", apiCaptures())
+                path == "/api/path" && method == "GET" ->
+                    writeResponse(out, 200, "application/json", apiPath())
+                path == "/api/more" && method == "GET" ->
+                    writeResponse(out, 200, "application/json", apiMore())
                 path == "/api/pomodoro" && method == "GET" ->
-                    writeResponse(socket.getOutputStream(), 200, "application/json", apiPomodoro())
+                    writeResponse(out, 200, "application/json", apiPomodoro())
                 path == "/api/quote" && method == "GET" -> {
                     val q = MotivationalQuotes.forToday()
                     writeResponse(
-                        socket.getOutputStream(), 200, "application/json",
+                        out, 200, "application/json",
                         JSONObject().put("text", q.text).put("attribution", q.attribution).toString()
                     )
                 }
                 path == "/api/log" && method == "POST" ->
-                    writeResponse(socket.getOutputStream(), 200, "application/json", apiLog(body))
+                    writeResponse(out, 200, "application/json", apiLog(body))
                 path == "/api/unlog" && method == "POST" ->
-                    writeResponse(socket.getOutputStream(), 200, "application/json", apiUnlog(body))
+                    writeResponse(out, 200, "application/json", apiUnlog(body))
+                path == "/api/skip" && method == "POST" ->
+                    writeResponse(out, 200, "application/json", apiSkip(body))
                 path == "/api/habit" && method == "POST" ->
-                    writeResponse(socket.getOutputStream(), 200, "application/json", apiCreateHabit(body))
+                    writeResponse(out, 200, "application/json", apiCreateHabit(body))
                 path == "/api/archive" && method == "POST" ->
-                    writeResponse(socket.getOutputStream(), 200, "application/json", apiArchiveHabit(body))
+                    writeResponse(out, 200, "application/json", apiArchiveHabit(body))
                 path == "/api/capture" && method == "POST" ->
-                    writeResponse(socket.getOutputStream(), 200, "application/json", apiCapture(body))
+                    writeResponse(out, 200, "application/json", apiCapture(body))
+                path == "/api/capture/done" && method == "POST" ->
+                    writeResponse(out, 200, "application/json", apiCaptureDone(body))
+                path == "/api/capture/delete" && method == "POST" ->
+                    writeResponse(out, 200, "application/json", apiCaptureDelete(body))
+                path == "/api/path/check" && method == "POST" ->
+                    writeResponse(out, 200, "application/json", apiPathCheck(body))
+                path == "/api/path/goal" && method == "POST" ->
+                    writeResponse(out, 200, "application/json", apiPathGoal(body))
                 path == "/api/pomodoro" && method == "POST" ->
-                    writeResponse(socket.getOutputStream(), 200, "application/json", apiPomodoroPost(body))
-                else -> writeResponse(socket.getOutputStream(), 404, "text/plain", "Not found")
+                    writeResponse(out, 200, "application/json", apiPomodoroPost(body))
+                else -> writeResponse(out, 404, "text/plain", "Not found")
             }
         } catch (e: Exception) {
             Log.w(TAG, "client error: ${e.message}")
         } finally {
             try {
                 socket.close()
-            } catch (_: Exception) { }
+            } catch (_: Exception) {
+            }
+        }
+    }
+
+    private fun pinMatches(expected: String, header: String, body: String, query: String): Boolean {
+        if (expected.isBlank()) return true
+        if (header == expected) return true
+        if (query.contains("pin=$expected")) return true
+        return try {
+            JSONObject(body.ifBlank { "{}" }).optString("pin", "") == expected
+        } catch (_: Exception) {
+            body.contains("\"pin\":\"$expected\"")
+        }
+    }
+
+    private fun serveAsset(out: OutputStream, name: String) {
+        val ctx = appContext
+        if (ctx == null) {
+            writeResponse(out, 500, "text/plain", "No context")
+            return
+        }
+        val safe = name.trimStart('/').replace("..", "")
+        val assetPath = if (safe.startsWith(WEB_ASSET_DIR)) safe else "$WEB_ASSET_DIR/$safe"
+        try {
+            ctx.assets.open(assetPath).use { input ->
+                val bytes = input.readBytes()
+                val type = when {
+                    safe.endsWith(".html") -> "text/html; charset=utf-8"
+                    safe.endsWith(".js") -> "application/javascript; charset=utf-8"
+                    safe.endsWith(".css") -> "text/css; charset=utf-8"
+                    safe.endsWith(".json") -> "application/json"
+                    safe.endsWith(".svg") -> "image/svg+xml"
+                    safe.endsWith(".png") -> "image/png"
+                    else -> "application/octet-stream"
+                }
+                writeBytes(out, 200, type, bytes)
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "asset miss $assetPath: ${e.message}")
+            writeResponse(out, 404, "text/plain", "Not found")
+        }
+    }
+
+    private fun apiAuth(body: String): String {
+        val prefs = prefsRef.get()
+        return try {
+            val pin = JSONObject(body.ifBlank { "{}" }).optString("pin", "")
+            if (prefs.pin.isBlank() || pin == prefs.pin) {
+                JSONObject().put("ok", true).toString()
+            } else {
+                JSONObject().put("ok", false).put("error", "Wrong PIN").toString()
+            }
+        } catch (e: Exception) {
+            JSONObject().put("ok", false).put("error", e.message ?: "auth failed").toString()
         }
     }
 
@@ -433,55 +584,121 @@ object LocalWebServer {
         }
     }
 
+    private fun formatWhen(epoch: Long): String {
+        if (epoch <= 0L) return ""
+        return try {
+            val z = Instant.ofEpochMilli(epoch).atZone(ZoneId.systemDefault())
+            z.format(DateTimeFormatter.ofPattern("MMM d · HH:mm"))
+        } catch (_: Exception) {
+            ""
+        }
+    }
+
+    private fun summaryJson(data: AppData): JSONObject {
+        val today = HabitDomain.getToday()
+        val pts = HabitDomain.computeDayPoints(data, today)
+        val life = HabitDomain.effectiveLifetimePoints(data, today)
+        val level = HabitDomain.computeLevel(life)
+        val due = HabitDomain.habitsDueOn(data, LocalDate.now())
+        val entries = data.entries[today] ?: emptyMap()
+        val done = due.count { h ->
+            val e = entries[h.id]
+            e != null && !e.skipped && e.value >= 0.5
+        }
+        val completion = if (due.isEmpty()) 1f else done.toFloat() / due.size
+        return JSONObject()
+            .put("date", today)
+            .put("momentum", pts)
+            .put("lifetimePoints", life)
+            .put("level", level)
+            .put("levelTitle", HabitDomain.levelTitle(level))
+            .put("streak", HabitDomain.computeStreak(data))
+            .put("pendingCaptures", data.inboxCaptures().size)
+            .put("completion", completion)
+            .put("completionLabel", "$done/${due.size} due")
+    }
+
+    private fun apiSummary(): String {
+        val data = loadData() ?: return """{"error":"load failed"}"""
+        return summaryJson(data).toString()
+    }
+
+    /** Full-day timeline (all due habits, not only pending) for web undo support. */
     private fun apiToday(): String {
         val data = loadData() ?: return """{"error":"load failed"}"""
         return try {
             val today = HabitDomain.getToday()
-            val sections = HabitDomain.timelineSectionsForToday(data)
-            val arr = JSONArray()
-            sections.forEach { sec ->
-                val habits = JSONArray()
-                sec.habits.forEach { h ->
-                    val entry = data.entries[today]?.get(h.id)
-                    habits.put(
+            val date = LocalDate.now()
+            val entries = data.entries[today] ?: emptyMap()
+            val due = HabitDomain.habitsDueOn(data, date)
+            val byGroup = mutableMapOf<String, MutableList<Habit>>()
+            due.forEach { h ->
+                val gids = listOf(h.groupId) + h.additionalGroupIds
+                gids.distinct().forEach { gid ->
+                    byGroup.getOrPut(gid) { mutableListOf() }.add(h)
+                }
+            }
+            val ordered = data.groups.filter { !it.archived }.sortedBy { it.order }
+            val currentId = HabitDomain.resolveCurrentGroup(data)?.id
+            val sections = JSONArray()
+            ordered.forEach { g ->
+                val habits = byGroup[g.id] ?: return@forEach
+                if (habits.isEmpty()) return@forEach
+                val unique = habits.distinctBy { it.id }
+                val arr = JSONArray()
+                var doneCount = 0
+                unique.sortedBy { it.order }.forEach { h ->
+                    val entry = entries[h.id]
+                    val skipped = entry?.skipped == true
+                    val done = !skipped && (entry?.value ?: 0.0) >= 0.5
+                    if (done || skipped) doneCount++
+                    val valueLabel = when {
+                        entry == null -> ""
+                        skipped -> "skipped"
+                        h.type == HabitType.SCALE_1_5 -> entry.value.toInt().toString()
+                        h.type == HabitType.COUNTER || h.type == HabitType.DURATION_MIN ->
+                            "${entry.value.toInt()}${if (h.unit.isNotBlank()) " ${h.unit}" else ""}"
+                        h.type == HabitType.NOTE -> entry.note.take(40)
+                        else -> if (done) "done" else ""
+                    }
+                    arr.put(
                         JSONObject()
                             .put("id", h.id)
                             .put("name", h.name)
+                            .put("description", h.description.ifBlank { h.why })
                             .put("icon", h.icon)
+                            .put("type", h.type.name)
                             .put("extension", h.extensionType.name)
-                            .put("done", (entry?.value ?: 0.0) >= 0.5)
-                            .put("skipped", entry?.skipped == true)
+                            .put("canSkip", h.canSkip)
+                            .put("target", h.target ?: JSONObject.NULL)
+                            .put("unit", h.unit)
+                            .put("done", done)
+                            .put("skipped", skipped)
+                            .put("value", entry?.value ?: 0.0)
                             .put("note", entry?.note ?: "")
+                            .put("valueLabel", valueLabel)
                     )
                 }
-                arr.put(
+                sections.put(
                     JSONObject()
-                        .put("group", sec.group.name)
-                        .put("isNow", sec.isNow)
-                        .put("habits", habits)
+                        .put("group", g.name)
+                        .put("groupIcon", g.icon)
+                        .put("groupId", g.id)
+                        .put("hint", g.timeHint)
+                        .put("isNow", g.id == currentId)
+                        .put("habits", arr)
+                        .put("doneCount", doneCount)
+                        .put("total", unique.size)
                 )
             }
-            val inbox = data.captures.filter {
-                !it.processed && data.capturePrefs.goesToInbox(it.tags)
-            }
-            val caps = JSONArray()
-            inbox.take(20).forEach { c ->
-                caps.put(
-                    JSONObject()
-                        .put("id", c.id)
-                        .put("title", c.title)
-                        .put("tags", JSONArray(c.tags))
-                )
-            }
-            JSONObject()
-                .put("date", today)
-                .put("sections", arr)
-                .put("pendingCaptures", inbox.size)
-                .put("captures", caps)
-                .put("momentum", HabitDomain.computeDayPoints(data, today))
-                .toString()
-        } catch (_: Exception) {
-            """{"error":"load failed"}"""
+            val sum = summaryJson(data)
+            sum.put("sections", sections)
+            sum.put("captureTags", JSONArray(data.capturePrefs.visibleTags()))
+            sum.put("defaultTags", JSONArray(data.capturePrefs.defaultTags))
+            sum.put("capturePlaceholder", data.capturePrefs.placeholderTitle)
+            sum.toString()
+        } catch (e: Exception) {
+            JSONObject().put("error", e.message ?: "load failed").toString()
         }
     }
 
@@ -502,15 +719,18 @@ object LocalWebServer {
         val arr = JSONArray()
         data.habits.filter { !it.archived }.sortedBy { it.name.lowercase() }.forEach { h ->
             val entry = data.entries[today]?.get(h.id)
+            val groupName = data.groups.find { it.id == h.groupId }?.name ?: h.groupId
             arr.put(
                 JSONObject()
                     .put("id", h.id)
                     .put("name", h.name)
+                    .put("description", h.description.ifBlank { h.why })
                     .put("groupId", h.groupId)
+                    .put("groupName", groupName)
                     .put("type", h.type.name)
                     .put("extension", h.extensionType.name)
                     .put("icon", h.icon)
-                    .put("doneToday", (entry?.value ?: 0.0) >= 0.5)
+                    .put("doneToday", (entry?.value ?: 0.0) >= 0.5 && entry?.skipped != true)
             )
         }
         return JSONObject().put("habits", arr).toString()
@@ -535,6 +755,7 @@ object LocalWebServer {
     private fun apiHistory(): String {
         val data = loadData() ?: return """{"error":"load failed"}"""
         val today = LocalDate.now()
+        val todayStr = today.toString()
         val days = JSONArray()
         for (i in 0 until 14) {
             val d = today.minusDays(i.toLong())
@@ -542,7 +763,10 @@ object LocalWebServer {
             val pts = HabitDomain.computeDayPoints(data, ds)
             val due = HabitDomain.habitsDueOn(data, d)
             val entries = data.entries[ds] ?: emptyMap()
-            val done = due.count { h -> (entries[h.id]?.value ?: 0.0) >= 0.5 }
+            val done = due.count { h ->
+                val e = entries[h.id]
+                e != null && !e.skipped && e.value >= 0.5
+            }
             days.put(
                 JSONObject()
                     .put("date", ds)
@@ -551,10 +775,183 @@ object LocalWebServer {
                     .put("due", due.size)
             )
         }
+        val heat = JSONArray()
+        val heatDays = 16 * 7
+        for (i in (heatDays - 1) downTo 0) {
+            val d = today.minusDays(i.toLong())
+            val ds = d.toString()
+            val due = HabitDomain.habitsDueOn(data, d)
+            val entries = data.entries[ds] ?: emptyMap()
+            val v = if (due.isEmpty()) {
+                null
+            } else {
+                due.count { h ->
+                    val e = entries[h.id]
+                    e != null && !e.skipped && e.value >= 0.5
+                }.toFloat() / due.size
+            }
+            heat.put(JSONObject().put("date", ds).put("v", v ?: JSONObject.NULL))
+        }
+        val tags = JSONArray()
+        data.tags.filter { !it.archived }.forEach { t ->
+            tags.put(
+                JSONObject()
+                    .put("id", t.id)
+                    .put("name", t.name)
+                    .put("avg", HabitDomain.computeTag7DayAvg(data, t.id))
+            )
+        }
+        val nights = JSONArray()
+        data.sleepNights.sortedByDescending { it.startedAt }.take(7).forEach { n ->
+            nights.put(
+                JSONObject()
+                    .put("wakeDate", n.wakeDate)
+                    .put("quietScore", n.quietScore)
+                    .put("eventCount", n.eventCount)
+                    .put("snoreLikeCount", n.snoreLikeCount)
+                    .put("loudMinutes", n.loudMinutes.toDouble())
+            )
+        }
+        val life = HabitDomain.effectiveLifetimePoints(data, todayStr)
+        val level = HabitDomain.computeLevel(life)
         return JSONObject()
             .put("streak", HabitDomain.computeStreak(data))
-            .put("lifetimePoints", data.score.lifetimePoints)
+            .put("lifetimePoints", life)
+            .put("todayPoints", HabitDomain.computeDayPoints(data, todayStr))
+            .put("level", level)
+            .put("levelTitle", HabitDomain.levelTitle(level))
             .put("days", days)
+            .put("heatmap", heat)
+            .put("heatmapDays", heatDays)
+            .put("tags", tags)
+            .put("sleepNights", nights)
+            .toString()
+    }
+
+    private fun apiCaptures(): String {
+        val data = loadData() ?: return """{"error":"load failed"}"""
+        fun capArr(list: List<CaptureItem>): JSONArray {
+            val arr = JSONArray()
+            list.forEach { c ->
+                arr.put(
+                    JSONObject()
+                        .put("id", c.id)
+                        .put("title", c.title)
+                        .put("note", c.note)
+                        .put("tags", JSONArray(c.tags))
+                        .put("processed", c.processed)
+                        .put("when", formatWhen(c.createdAt))
+                )
+            }
+            return arr
+        }
+        return JSONObject()
+            .put("inbox", capArr(data.inboxCaptures()))
+            .put("journal", capArr(data.journalCaptures()))
+            .toString()
+    }
+
+    private fun apiPath(): String {
+        val data = loadData() ?: return """{"error":"load failed"}"""
+        val goals = JSONArray()
+        data.goals.filter { !it.archived }.forEach { g ->
+            goals.put(
+                JSONObject()
+                    .put("id", g.id)
+                    .put("title", g.title)
+                    .put("description", g.description)
+                    .put("category", g.category.name)
+                    .put("horizon", g.horizon.name)
+                    .put("progress", g.progress.toDouble())
+                    .put("confidence", g.confidence.toDouble())
+                    .put("firstStepNow", g.firstStepNow)
+            )
+        }
+        val last = data.pathChecks.maxByOrNull { it.loggedAt }
+        val lastJson = if (last != null) {
+            JSONObject()
+                .put("date", last.date)
+                .put("vision", last.visionAlignment)
+                .put("energy", last.energyTowardDreams)
+                .put("identity", last.identityCongruence)
+                .put("note", last.note)
+        } else {
+            JSONObject.NULL
+        }
+        return JSONObject()
+            .put("goals", goals)
+            .put("lastCheck", lastJson)
+            .toString()
+    }
+
+    private fun apiMore(): String {
+        val data = loadData() ?: return """{"error":"load failed"}"""
+        val workouts = JSONArray()
+        data.workoutSessions.sortedByDescending { it.startedAt }.take(10).forEach { w ->
+            val name = data.routines.find { it.id == w.routineId }?.name
+            workouts.put(
+                JSONObject()
+                    .put("id", w.id)
+                    .put("routineId", w.routineId)
+                    .put("routineName", name ?: w.routineId)
+                    .put("date", w.date)
+                    .put("totalDurationMin", w.totalDurationMin ?: JSONObject.NULL)
+                    .put("completed", w.completed)
+            )
+        }
+        val routines = JSONArray()
+        data.routines.filter { !it.archived }.forEach { r ->
+            routines.put(
+                JSONObject()
+                    .put("id", r.id)
+                    .put("name", r.name)
+                    .put("exercises", r.exercises.size)
+                    .put("estimatedDurationMin", r.estimatedDurationMin)
+            )
+        }
+        val reminders = JSONArray()
+        data.reminders.forEach { r ->
+            val label = r.groupId?.let { gid -> data.groups.find { it.id == gid }?.name } ?: "Daily review"
+            reminders.put(
+                JSONObject()
+                    .put("id", r.id)
+                    .put("label", label)
+                    .put("time", r.time)
+                    .put("enabled", r.enabled)
+            )
+        }
+        val snaps = JSONArray()
+        data.sensorSnapshots.take(15).forEach { s ->
+            val hName = data.habits.find { it.id == s.habitId }?.name
+            snaps.put(
+                JSONObject()
+                    .put("habitId", s.habitId)
+                    .put("habitName", hName ?: s.habitId)
+                    .put("date", s.date)
+                    .put("summary", s.readings.entries.joinToString(" · ") { "${it.key}: ${it.value}" }.take(120))
+            )
+        }
+        return JSONObject()
+            .put(
+                "sleep",
+                JSONObject()
+                    .put("wakeTime", data.sleep.wakeTime)
+                    .put("bedTime", data.sleep.bedTime)
+                    .put("windDownMinutes", data.sleep.windDownMinutes)
+            )
+            .put(
+                "server",
+                JSONObject()
+                    .put("status", statusMessage)
+                    .put("httpPort", boundHttpPort)
+                    .put("httpsPort", boundHttpsPort)
+                    .put("autoOff", autoOffRemainingLabel() ?: JSONObject.NULL)
+                    .put("ssid", currentSsid ?: JSONObject.NULL)
+            )
+            .put("workouts", workouts)
+            .put("routines", routines)
+            .put("reminders", reminders)
+            .put("snapshots", snaps)
             .toString()
     }
 
@@ -570,6 +967,30 @@ object LocalWebServer {
             JSONObject().put("ok", true).put("habitId", habitId).toString()
         } catch (e: Exception) {
             JSONObject().put("error", e.message ?: "unlog failed").toString()
+        }
+    }
+
+    private fun apiSkip(body: String): String {
+        return try {
+            val json = JSONObject(body.ifBlank { "{}" })
+            val habitId = json.optString("habitId", "")
+            if (habitId.isBlank()) return """{"error":"habitId required"}"""
+            var data = loadData() ?: return """{"error":"load failed"}"""
+            val habit = data.habits.find { it.id == habitId }
+                ?: return """{"error":"habit not found"}"""
+            if (!habit.canSkip) return """{"error":"cannot skip"}"""
+            val today = HabitDomain.getToday()
+            val entry = HabitEntry(
+                value = 0.0,
+                note = json.optString("note", ""),
+                loggedAt = System.currentTimeMillis(),
+                skipped = true
+            )
+            data = data.withUpdatedEntry(today, habitId, entry)
+            saveData(data)
+            JSONObject().put("ok", true).put("habitId", habitId).toString()
+        } catch (e: Exception) {
+            JSONObject().put("error", e.message ?: "skip failed").toString()
         }
     }
 
@@ -662,17 +1083,94 @@ object LocalWebServer {
                 for (i in 0 until tagsArr.length()) tags.add(tagsArr.getString(i))
             }
             var data = loadData() ?: return """{"error":"load failed"}"""
+            val processed = !data.capturePrefs.goesToInbox(tags)
             val cap = CaptureItem(
                 id = "c_${UUID.randomUUID().toString().take(8)}",
                 title = title,
                 note = note.trim(),
-                tags = tags
+                tags = tags,
+                processed = processed
             )
             data = data.withAddedCapture(cap)
             saveData(data)
-            JSONObject().put("ok", true).put("id", cap.id).toString()
+            JSONObject().put("ok", true).put("id", cap.id).put("processed", processed).toString()
         } catch (e: Exception) {
             JSONObject().put("error", e.message ?: "capture failed").toString()
+        }
+    }
+
+    private fun apiCaptureDone(body: String): String {
+        return try {
+            val id = JSONObject(body.ifBlank { "{}" }).optString("id", "")
+            if (id.isBlank()) return """{"error":"id required"}"""
+            var data = loadData() ?: return """{"error":"load failed"}"""
+            val cap = data.captures.find { it.id == id } ?: return """{"error":"not found"}"""
+            data = data.withUpdatedCapture(cap.copy(processed = true))
+            saveData(data)
+            JSONObject().put("ok", true).toString()
+        } catch (e: Exception) {
+            JSONObject().put("error", e.message ?: "failed").toString()
+        }
+    }
+
+    private fun apiCaptureDelete(body: String): String {
+        return try {
+            val id = JSONObject(body.ifBlank { "{}" }).optString("id", "")
+            if (id.isBlank()) return """{"error":"id required"}"""
+            var data = loadData() ?: return """{"error":"load failed"}"""
+            data = data.withoutCapture(id)
+            saveData(data)
+            JSONObject().put("ok", true).toString()
+        } catch (e: Exception) {
+            JSONObject().put("error", e.message ?: "failed").toString()
+        }
+    }
+
+    private fun apiPathCheck(body: String): String {
+        return try {
+            val json = JSONObject(body.ifBlank { "{}" })
+            var data = loadData() ?: return """{"error":"load failed"}"""
+            val check = PathAlignmentCheck(
+                id = "pc_${UUID.randomUUID().toString().take(8)}",
+                date = HabitDomain.getToday(),
+                visionAlignment = json.optInt("vision", 3).coerceIn(1, 5),
+                energyTowardDreams = json.optInt("energy", 3).coerceIn(1, 5),
+                identityCongruence = json.optInt("identity", 3).coerceIn(1, 5),
+                note = json.optString("note", "").trim(),
+                loggedAt = System.currentTimeMillis()
+            )
+            data = data.withAddedPathCheck(check)
+            saveData(data)
+            JSONObject().put("ok", true).put("id", check.id).toString()
+        } catch (e: Exception) {
+            JSONObject().put("error", e.message ?: "failed").toString()
+        }
+    }
+
+    private fun apiPathGoal(body: String): String {
+        return try {
+            val json = JSONObject(body.ifBlank { "{}" })
+            val id = json.optString("id", "")
+            if (id.isBlank()) return """{"error":"id required"}"""
+            var data = loadData() ?: return """{"error":"load failed"}"""
+            val goal = data.goals.find { it.id == id } ?: return """{"error":"not found"}"""
+            val progress = json.optDouble("progress", goal.progress.toDouble()).toFloat().coerceIn(0f, 1f)
+            val confidence = if (json.has("confidence")) {
+                json.optDouble("confidence", goal.confidence.toDouble()).toFloat().coerceIn(0f, 1f)
+            } else {
+                goal.confidence
+            }
+            data = data.withUpdatedGoal(
+                goal.copy(
+                    progress = progress,
+                    confidence = confidence,
+                    updatedAt = System.currentTimeMillis()
+                )
+            )
+            saveData(data)
+            JSONObject().put("ok", true).put("progress", progress.toDouble()).toString()
+        } catch (e: Exception) {
+            JSONObject().put("error", e.message ?: "failed").toString()
         }
     }
 
@@ -717,254 +1215,16 @@ object LocalWebServer {
         }
     }
 
-    private fun htmlDashboard(): String {
-        val quote = MotivationalQuotes.forToday()
-        return """
-<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8"/>
-<meta name="viewport" content="width=device-width, initial-scale=1"/>
-<title>Steady · Local</title>
-<style>
-  body { font-family: system-ui, sans-serif; background:#0f1419; color:#e7ecf1; margin:0; padding:24px; max-width:720px; }
-  h1 { font-size:1.5rem; margin:0 0 8px; }
-  .sub { color:#8b9aab; margin-bottom:16px; }
-  card { display:block; background:#1a2332; border-radius:12px; padding:16px; margin-bottom:12px; }
-  .now { border-left:4px solid #3dcea8; }
-  .habit { padding:10px 0; border-bottom:1px solid #243044; display:flex; justify-content:space-between; align-items:center; gap:8px; }
-  .done { color:#3dcea8; }
-  .quote { font-style:italic; color:#b8c5d4; margin:12px 0 20px; }
-  button { background:#3dcea8; color:#0f1419; border:0; border-radius:8px; padding:8px 12px; font-weight:600; cursor:pointer; font-size:13px; }
-  button.sec { background:#5b8def; }
-  button.ghost { background:#243044; color:#e7ecf1; }
-  #timer { font-size:2.5rem; font-variant-numeric:tabular-nums; margin:12px 0; }
-  input, textarea { width:100%; box-sizing:border-box; background:#0f1419; border:1px solid #243044; color:#e7ecf1; border-radius:8px; padding:8px; margin:4px 0 8px; }
-  .row { display:flex; gap:8px; flex-wrap:wrap; }
-  .tag { font-size:10px; color:#8b9aab; }
-  a { color:#3dcea8; }
-</style>
-</head>
-<body>
-  <h1>Steady</h1>
-  <p class="sub">Local LAN · <a href="/">Today</a> · <a href="/habits">Habits</a> · Capture · Pomodoro</p>
-  <p class="quote">"${quote.text.replace("\"", "&quot;")}" — ${quote.attribution}</p>
-  <card>
-    <strong>Pomodoro</strong>
-    <div id="timer">25:00</div>
-    <div class="row">
-      <button onclick="startPomodoro(25)">Start 25m</button>
-      <button class="sec" onclick="startPomodoro(5)">5m break</button>
-      <button class="ghost" onclick="stopPomodoro()">Stop</button>
-    </div>
-  </card>
-  <card>
-    <strong>Quick capture</strong>
-    <input id="capTitle" placeholder="Title / idea"/>
-    <textarea id="capNote" rows="2" placeholder="Note (optional)"></textarea>
-    <div class="row">
-      <button onclick="sendCapture('Ideas')">Ideas</button>
-      <button onclick="sendCapture('Notes')">Notes</button>
-      <button onclick="sendCapture('Reminders')">Reminders</button>
-      <button class="ghost" onclick="sendCapture()">Save</button>
-    </div>
-  </card>
-  <div id="today">Loading…</div>
-<script>
-let endAt = 0;
-function tick() {
-  if (!endAt) return;
-  const left = Math.max(0, Math.floor((endAt - Date.now())/1000));
-  const m = String(Math.floor(left/60)).padStart(2,'0');
-  const s = String(left%60).padStart(2,'0');
-  document.getElementById('timer').textContent = m+':'+s;
-  if (left <= 0) { endAt = 0; document.getElementById('timer').textContent = 'Done'; }
-}
-setInterval(tick, 250);
-async function startPomodoro(mins) {
-  const m = mins || 25;
-  endAt = Date.now() + m*60*1000;
-  tick();
-  const action = m <= 10 ? 'break' : 'start';
-  try {
-    await fetch('/api/pomodoro', { method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify(action==='break' ? {action:'break', breakMin:m} : {action:'start', workMin:m}) });
-  } catch(e) {}
-}
-async function stopPomodoro() {
-  endAt = 0;
-  document.getElementById('timer').textContent = '—';
-  try {
-    await fetch('/api/pomodoro', { method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({action:'stop'}) });
-  } catch(e) {}
-}
-async function logHabit(id) {
-  try {
-    await fetch('/api/log', { method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({habitId:id, value:1}) });
-    loadToday();
-  } catch(e) { alert('Log failed'); }
-}
-async function unlogHabit(id) {
-  try {
-    await fetch('/api/unlog', { method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({habitId:id}) });
-    loadToday();
-  } catch(e) { alert('Undo failed'); }
-}
-async function sendCapture(tag) {
-  const title = document.getElementById('capTitle').value.trim();
-  if (!title) { alert('Title required'); return; }
-  const note = document.getElementById('capNote').value.trim();
-  const tags = tag ? [tag] : [];
-  try {
-    await fetch('/api/capture', { method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({title, note, tags}) });
-    document.getElementById('capTitle').value = '';
-    document.getElementById('capNote').value = '';
-    loadToday();
-  } catch(e) { alert('Capture failed'); }
-}
-async function loadToday() {
-  try {
-    const r = await fetch('/api/today');
-    const j = await r.json();
-    let html = '<p class="tag">'+ (j.date||'') +' · pts '+(j.momentum||0)+' · inbox '+(j.pendingCaptures||0)+'</p>';
-    (j.sections||[]).forEach(sec => {
-      html += '<card class="'+(sec.isNow?'now':'')+'"><strong>'+esc(sec.group)+(sec.isNow?' · now':'')+'</strong>';
-      (sec.habits||[]).forEach(h => {
-        html += '<div class="habit"><span>'+esc(h.name)+
-          (h.extension&&h.extension!=='NONE'?' <span class="tag">'+h.extension+'</span>':'')+
-          '</span>';
-        if (h.done) html += '<button class="ghost" onclick="unlogHabit(\''+h.id+'\')">Undo</button>';
-        else html += '<button onclick="logHabit(\''+h.id+'\')">Log</button>';
-        html += '</div>';
-      });
-      html += '</card>';
-    });
-    if (!(j.sections||[]).length) html += '<card>No pending habits — nice work.</card>';
-    document.getElementById('today').innerHTML = html;
-  } catch(e) {
-    document.getElementById('today').textContent = 'Failed to load — is the phone on the same Wi‑Fi?';
-  }
-}
-function esc(s) {
-  return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');
-}
-loadToday();
-setInterval(loadToday, 12000);
-</script>
-</body>
-</html>
-        """.trimIndent()
-    }
-
-    private fun htmlHabits(): String {
-        return """
-<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8"/>
-<meta name="viewport" content="width=device-width, initial-scale=1"/>
-<title>Steady · Habits</title>
-<style>
-  body { font-family: system-ui, sans-serif; background:#0f1419; color:#e7ecf1; margin:0; padding:24px; max-width:720px; }
-  h1 { font-size:1.4rem; }
-  a { color:#3dcea8; }
-  card { display:block; background:#1a2332; border-radius:12px; padding:14px; margin-bottom:10px; }
-  .row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
-  input, select { background:#0f1419; border:1px solid #243044; color:#e7ecf1; border-radius:8px; padding:8px; }
-  button { background:#3dcea8; color:#0f1419; border:0; border-radius:8px; padding:8px 12px; font-weight:600; cursor:pointer; }
-  button.ghost { background:#243044; color:#e7ecf1; }
-  button.danger { background:#7f1d1d; color:#fecaca; }
-  .habit { display:flex; justify-content:space-between; gap:8px; padding:8px 0; border-bottom:1px solid #243044; }
-  .tag { font-size:10px; color:#8b9aab; }
-</style>
-</head>
-<body>
-  <h1>Habits</h1>
-  <p class="tag"><a href="/">← Today</a> · create & archive · desktop CRUD</p>
-  <card>
-    <strong>New habit</strong>
-    <div class="row" style="margin-top:8px">
-      <input id="name" placeholder="Name" style="flex:1;min-width:140px"/>
-      <select id="group"></select>
-      <button onclick="createHabit()">Add</button>
-    </div>
-  </card>
-  <card>
-    <strong>14-day history</strong>
-    <div id="hist" class="tag">Loading…</div>
-  </card>
-  <div id="list">Loading…</div>
-<script>
-async function loadGroups() {
-  const r = await fetch('/api/groups');
-  const j = await r.json();
-  const sel = document.getElementById('group');
-  sel.innerHTML = '';
-  (j.groups||[]).forEach(g => {
-    const o = document.createElement('option');
-    o.value = g.id; o.textContent = g.name;
-    sel.appendChild(o);
-  });
-}
-async function loadHabits() {
-  const r = await fetch('/api/habits');
-  const j = await r.json();
-  let html = '<card><strong>Catalog ('+((j.habits||[]).length)+')</strong>';
-  (j.habits||[]).forEach(h => {
-    html += '<div class="habit"><span>'+esc(h.name)+
-      (h.extension&&h.extension!=='NONE'?' <span class="tag">'+h.extension+'</span>':'')+
-      (h.doneToday?' <span class="tag">done today</span>':'')+
-      '</span><button class="danger" onclick="archive(\''+h.id+'\')">Archive</button></div>';
-  });
-  html += '</card>';
-  document.getElementById('list').innerHTML = html;
-}
-async function loadHistory() {
-  try {
-    const r = await fetch('/api/history');
-    const j = await r.json();
-    let s = 'Streak '+ (j.streak||0) +' · lifetime '+ (j.lifetimePoints||0) +'<br/>';
-    (j.days||[]).slice(0,7).forEach(d => {
-      s += d.date +': '+d.done+'/'+d.due+' · '+d.points+' pts<br/>';
-    });
-    document.getElementById('hist').innerHTML = s;
-  } catch(e) { document.getElementById('hist').textContent = 'Failed'; }
-}
-async function createHabit() {
-  const name = document.getElementById('name').value.trim();
-  const groupId = document.getElementById('group').value;
-  if (!name || !groupId) { alert('Name + group required'); return; }
-  await fetch('/api/habit', { method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({name, groupId}) });
-  document.getElementById('name').value = '';
-  loadHabits();
-}
-async function archive(id) {
-  if (!confirm('Archive this habit?')) return;
-  await fetch('/api/archive', { method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({habitId:id}) });
-  loadHabits();
-}
-function esc(s) {
-  return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');
-}
-loadGroups(); loadHabits(); loadHistory();
-</script>
-</body>
-</html>
-        """.trimIndent()
-    }
-
     private fun writeResponse(out: OutputStream, code: Int, contentType: String, body: String) {
-        val bytes = body.toByteArray(Charsets.UTF_8)
+        writeBytes(out, code, contentType, body.toByteArray(Charsets.UTF_8))
+    }
+
+    private fun writeBytes(out: OutputStream, code: Int, contentType: String, bytes: ByteArray) {
         val status = when (code) {
             200 -> "OK"
             401 -> "Unauthorized"
             404 -> "Not Found"
+            500 -> "Error"
             else -> "Error"
         }
         val header = "HTTP/1.1 $code $status\r\n" +
@@ -972,6 +1232,8 @@ loadGroups(); loadHabits(); loadHistory();
             "Content-Length: ${bytes.size}\r\n" +
             "Connection: close\r\n" +
             "Access-Control-Allow-Origin: *\r\n" +
+            "Access-Control-Allow-Headers: Content-Type, X-Steady-Pin\r\n" +
+            "Cache-Control: no-store\r\n" +
             "\r\n"
         out.write(header.toByteArray(Charsets.UTF_8))
         out.write(bytes)
