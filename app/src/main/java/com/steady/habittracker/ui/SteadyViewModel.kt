@@ -1148,6 +1148,25 @@ class SteadyViewModel(
         }
     }
 
+    /** Edit an existing capture in place (title / note / tags). */
+    fun updateCapture(id: String, title: String, note: String = "", tags: List<String>? = null) {
+        if (title.isBlank()) return
+        viewModelScope.launch {
+            val current = appData.value
+            val existing = current.captures.find { it.id == id } ?: return@launch
+            val cleanedTags = (tags ?: existing.tags).map { it.trim() }.filter { it.isNotEmpty() }.distinct()
+            val toInbox = current.capturePrefs.goesToInbox(cleanedTags)
+            val updated = existing.copy(
+                title = title.trim(),
+                note = note.trim(),
+                tags = cleanedTags.ifEmpty { existing.tags },
+                // Keep processed state unless tags move it between inbox/journal
+                processed = if (toInbox) existing.processed else true
+            )
+            repository.saveData(current.withUpdatedCapture(updated))
+        }
+    }
+
     // --- Exercise routines (#20–#22) ---
     fun saveRoutine(routine: ExerciseRoutine) {
         viewModelScope.launch {

@@ -73,6 +73,9 @@ fun CaptureDialog(
     presetTags: List<String>? = null,
     dialogTitle: String? = null,
     forceTags: List<String> = emptyList(),
+    /** Prefill when editing an existing capture. */
+    initialTitle: String = "",
+    initialNote: String = "",
     onDismiss: () -> Unit,
     onCapture: (title: String, note: String, tags: List<String>) -> Unit
 ) {
@@ -95,8 +98,8 @@ fun CaptureDialog(
             }.toSet()
         }
     }
-    var title by remember { mutableStateOf("") }
-    var note by remember { mutableStateOf("") }
+    var title by remember { mutableStateOf(initialTitle) }
+    var note by remember { mutableStateOf(initialNote) }
     var selectedTags by remember { mutableStateOf(initialTags) }
     var energy by remember { mutableIntStateOf(0) } // 0 = unset
     val focusRequester = remember { FocusRequester() }

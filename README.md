@@ -42,9 +42,10 @@ See Manage → **Blocks** to add templates (sensor auto-read, screen usage, snor
 ### Today
 - Timeline groups ordered by your **Daily Planner** (24h schedule)
 - Current period highlighted; past / now / next sections
+- **Square habit grid** (denser layout) — tap to log, long-press to skip
 - Habit types: checkbox, counter, duration, scale, notes
 - Multi-group habits, stacking (“after …”), skip when needed
-- Quick capture inbox + workout session logger for exercise routines
+- **Write** (pen) for ideas/notes; Journal for archive; workout session logger for exercise routines
 
 ### Path
 - **Dreamline wizard** — Having / Being / Doing across 6- and 12-month horizons
@@ -56,7 +57,10 @@ See Manage → **Blocks** to add templates (sensor auto-read, screen usage, snor
 - Streaks, weekly bars, Anki-style heatmap
 - **Momentum** — Steady points, level, lifetime, 30-day points chart
 - Tag-based trends (Supplements, Movement, Sleep, …)
+- Habit squares sized by 30-day completion; expandable **screen usage** when enabled
 - Workout session history
+- **Chat with Grok** — multi-select notes/categories, time scope, stats tools; deep-link or copy; paste replies back as notes
+- Tap the top **progress bar** to open History (long-press for progress details)
 
 ### Manage
 Four focused sub-tabs:

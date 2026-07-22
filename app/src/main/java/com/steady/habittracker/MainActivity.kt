@@ -852,9 +852,13 @@ fun SteadyApp(
                         onSkip = viewModel::skipHabit,
                         onShowSkipPrompt = { id -> promptHabitId = id },
                         onQuickCapture = viewModel::addCapture,
+                        onUpdateCapture = { id, title, note, tags ->
+                            viewModel.updateCapture(id, title, note, tags)
+                        },
                         onProcessCapture = viewModel::markCaptureProcessed,
                         onDeleteCapture = viewModel::deleteCapture,
                         onReopenCapture = viewModel::reopenCaptureToInbox,
+                        onChatWithGrok = { showAskGrok = true },
                         onCreateMetric = { name -> viewModel.addMetricHabit(name) },
                         onLogMetric = viewModel::logEntry,
                         onStartRoutine = { rt -> activeWorkoutRoutine = rt },

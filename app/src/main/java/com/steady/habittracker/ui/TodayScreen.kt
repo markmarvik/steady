@@ -68,9 +68,11 @@ fun TodayScreen(
     onSkip: (String) -> Unit,
     onShowSkipPrompt: (habitId: String) -> Unit = {},
     onQuickCapture: (title: String, note: String, tags: List<String>) -> Unit = { _, _, _ -> },  // #10 quick capture
+    onUpdateCapture: (id: String, title: String, note: String, tags: List<String>) -> Unit = { _, _, _, _ -> },
     onProcessCapture: (id: String) -> Unit = {},
     onDeleteCapture: (id: String) -> Unit = {},
     onReopenCapture: (id: String) -> Unit = {},
+    onChatWithGrok: () -> Unit = {},
     // manual metric logging support (#19)
     onCreateMetric: (name: String) -> Unit = {},
     onLogMetric: (habitId: String, value: Double, note: String, date: String) -> Unit = { _, _, _, _ -> },
@@ -180,10 +182,11 @@ fun TodayScreen(
             prefs = appData.capturePrefs,
             presetTags = cap.tags,
             dialogTitle = "Edit note",
+            initialTitle = cap.title,
+            initialNote = cap.note,
             onDismiss = { editFlashCapture = null },
             onCapture = { title, note, tags ->
-                onQuickCapture(title, note, tags)
-                onDeleteCapture(cap.id)
+                onUpdateCapture(cap.id, title, note, tags)
                 editFlashCapture = null
                 flashCaptureId = null
             }
@@ -372,6 +375,19 @@ fun TodayScreen(
                     modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
                     color = colors.onSurface,
                     fontSize = 13.sp,
+                    fontWeight = FontWeight.Medium
+                )
+            }
+            Surface(
+                onClick = onChatWithGrok,
+                shape = RoundedCornerShape(20.dp),
+                color = colors.surfaceVariant
+            ) {
+                Text(
+                    "Grok",
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                    color = colors.onSurface,
+                    fontSize = 12.sp,
                     fontWeight = FontWeight.Medium
                 )
             }
