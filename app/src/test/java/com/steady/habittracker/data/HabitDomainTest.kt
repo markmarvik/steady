@@ -721,6 +721,54 @@ class HabitDomainTest {
     }
 
     @Test
+    fun `computeDayPoints uses habit pointValue importance`() {
+        val today = LocalDate.now().toString()
+        val base = sampleDataWithEntries(
+            mapOf(today to mapOf("h1" to HabitEntry(value = 1.0)))
+        )
+        val habits = base.habits.map {
+            when (it.id) {
+                "h1" -> it.copy(pointValue = 25)
+                else -> it
+            }
+        }
+        val data = base.copy(habits = habits)
+        val b = HabitDomain.computeDayPointsBreakdown(data, today)
+        assertEquals(25, b.habitPoints)
+    }
+
+    @Test
+    fun `screen overage penalty deducts points`() {
+        val today = LocalDate.now().toString()
+        val screenHabit = Habit(
+            id = "h_screen",
+            name = "Screen",
+            groupId = "g1",
+            extensionType = ExtensionType.SCREEN_USAGE,
+            extensionConfig = ExtensionConfig(dailyLimitMinutes = 120)
+        )
+        val base = sampleDataWithEntries(
+            mapOf(today to mapOf("h1" to HabitEntry(value = 1.0), "h2" to HabitEntry(value = 1.0)))
+        )
+        val data = base.copy(
+            habits = base.habits + screenHabit,
+            sensorSnapshots = listOf(
+                SensorSnapshot(
+                    id = "ss1",
+                    habitId = "h_screen",
+                    date = today,
+                    readings = mapOf("screen_min" to "180") // 60m over → 4 chunks * 2 = 8
+                )
+            )
+        )
+        assertEquals(8, HabitDomain.screenOveragePenalty(data, today))
+        val b = HabitDomain.computeDayPointsBreakdown(data, today)
+        assertEquals(8, b.screenPenalty)
+        // Screen block is also due → 2/4 completed is not solid; just base − penalty
+        assertEquals(20 - 8, b.total)
+    }
+
+    @Test
     fun `computeDayPoints full clear and target bonus`() {
         val today = LocalDate.now().toString()
         val data = sampleDataWithEntries(

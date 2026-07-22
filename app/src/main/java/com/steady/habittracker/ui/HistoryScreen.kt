@@ -28,7 +28,9 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.TextButton
+import androidx.compose.ui.platform.LocalContext
 import com.steady.habittracker.data.AppData
 import com.steady.habittracker.data.DisplayIcon
 import com.steady.habittracker.data.HabitDomain
@@ -36,6 +38,7 @@ import com.steady.habittracker.data.HabitType
 import com.steady.habittracker.data.SleepNightSession
 import com.steady.habittracker.data.TagIds
 import com.steady.habittracker.data.WorkoutSession
+import com.steady.habittracker.sensors.ScreenTimeReader
 import com.steady.habittracker.util.GrokContextBuilder
 import com.steady.habittracker.util.HabitSquareMetric
 import java.text.SimpleDateFormat
@@ -74,11 +77,40 @@ fun HistoryScreen(
         appData.sleepNights.sortedByDescending { it.startedAt }.take(10)
     }
     val habitSquares = remember(appData) { GrokContextBuilder.habitSquareMetrics(appData) }
+    val context = LocalContext.current
     val hasScreenUsage = remember(appData) { GrokContextBuilder.hasScreenUsageBlock(appData) }
-    val screenDaily = remember(appData) { GrokContextBuilder.dailyScreenMinutes(appData, 28) }
-    val screenAvg = remember(screenDaily) {
-        val vals = screenDaily.mapNotNull { it.second }.filter { it >= 0 }
-        if (vals.isEmpty()) null else vals.average()
+    var screenWindowDays by remember { mutableStateOf(7) }
+    val liveScreen = remember(hasScreenUsage, appData.habits) {
+        if (!hasScreenUsage || !ScreenTimeReader.hasUsageAccess(context)) {
+            emptyMap()
+        } else {
+            val map = mutableMapOf<String, Long?>()
+            var d = LocalDate.now()
+            // Pull live UsageStats for last 30 days so History isn't empty until a manual log
+            repeat(30) {
+                map[d.toString()] = ScreenTimeReader.screenOnMinutes(context, d)
+                d = d.minusDays(1)
+            }
+            map
+        }
+    }
+    val screenDaily = remember(appData, liveScreen) {
+        GrokContextBuilder.dailyScreenMinutes(appData, days = 30, liveMinutes = liveScreen)
+    }
+    val screenWindowSlice = remember(screenDaily, screenWindowDays) {
+        screenDaily.takeLast(screenWindowDays)
+    }
+    val screenTotal = remember(screenWindowSlice) {
+        GrokContextBuilder.screenTotalMinutes(screenWindowSlice, screenWindowDays)
+    }
+    val screenAvg = remember(screenWindowSlice, screenWindowDays) {
+        GrokContextBuilder.screenAvgMinutes(screenWindowSlice, screenWindowDays)
+    }
+    val screenLimit = remember(appData) { HabitDomain.screenDailyLimitMinutes(appData) }
+    val todayScreenPenalty = remember(appData, liveScreen) {
+        val today = LocalDate.now().toString()
+        val live = liveScreen[today]
+        HabitDomain.screenOveragePenalty(appData, today, minutesOverride = live)
     }
     val showWearableFrames = remember(appData) {
         appData.gadgetbridgePrefs.showHistoryFrames &&
@@ -339,7 +371,7 @@ fun HistoryScreen(
             }
         }
 
-        // —— #43 Screen usage expandable ——
+        // —— #43 Screen usage expandable (live UsageStats + snapshots; 3 / 7 / 30d) ——
         if (hasScreenUsage) {
             item {
                 Card(
@@ -367,18 +399,39 @@ fun HistoryScreen(
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
+                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            listOf(3, 7, 30).forEach { d ->
+                                FilterChip(
+                                    selected = screenWindowDays == d,
+                                    onClick = { screenWindowDays = d },
+                                    label = { Text("${d}d", fontSize = 11.sp) }
+                                )
+                            }
+                        }
+                        val totalLabel = formatScreenMinutes(screenTotal)
                         val avgLabel = screenAvg?.let { avg ->
-                            val m = avg.toLong()
-                            "${m / 60}h ${m % 60}m avg"
+                            formatScreenMinutes(avg.toLong()) + " avg/day"
                         } ?: "No samples yet"
                         Text(
-                            avgLabel,
+                            "Last ${screenWindowDays}d · $totalLabel total · $avgLabel",
                             fontSize = 12.sp,
                             color = MaterialTheme.colorScheme.onSurface
                         )
-                        // Mini heatmap of last 28 days
+                        screenLimit?.let { lim ->
+                            val penNote = if (todayScreenPenalty > 0) {
+                                " · today −$todayScreenPenalty pts over limit"
+                            } else {
+                                " · under limit today"
+                            }
+                            Text(
+                                "Soft limit ${lim}m/day · −${HabitDomain.SCREEN_OVERAGE_PER_15MIN} pts / 15m over (cap ${HabitDomain.SCREEN_OVERAGE_CAP})$penNote",
+                                fontSize = 10.sp,
+                                color = if (todayScreenPenalty > 0) Color(0xFFF87171)
+                                else MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
                         ScreenUsageHeatstrip(
-                            daily = screenDaily,
+                            daily = screenWindowSlice.map { (date, min) -> date to min },
                             accent = accent,
                             empty = MaterialTheme.colorScheme.surfaceVariant,
                             modifier = Modifier
@@ -391,10 +444,16 @@ fun HistoryScreen(
                                 fontSize = 11.sp,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
-                            screenDaily.asReversed().take(14).forEach { (date, min) ->
-                                val time = if (min == null) "—"
-                                else if (min < 0) "n/a"
-                                else "${min / 60}h ${min % 60}m"
+                            screenWindowSlice.asReversed().forEach { (date, min) ->
+                                val time = when {
+                                    min == null -> "—"
+                                    min < 0 -> "n/a"
+                                    else -> formatScreenMinutes(min)
+                                }
+                                val over = screenLimit != null && min != null && min > screenLimit
+                                val pen = if (over) {
+                                    HabitDomain.screenOveragePenalty(appData, date, minutesOverride = min)
+                                } else 0
                                 Row(
                                     Modifier
                                         .fillMaxWidth()
@@ -402,7 +461,12 @@ fun HistoryScreen(
                                     horizontalArrangement = Arrangement.SpaceBetween
                                 ) {
                                     Text(date, fontSize = 12.sp)
-                                    Text(time, fontSize = 12.sp, fontWeight = FontWeight.Medium, color = accent)
+                                    Text(
+                                        if (pen > 0) "$time · −$pen pts" else time,
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Medium,
+                                        color = if (pen > 0) Color(0xFFF87171) else accent
+                                    )
                                 }
                             }
                         }
@@ -1051,7 +1115,14 @@ private fun HabitSquareGrid(
     }
 }
 
-/** #43 Compact 28-day screen-time intensity strip. */
+private fun formatScreenMinutes(min: Long): String {
+    if (min < 0) return "n/a"
+    val h = min / 60
+    val m = min % 60
+    return if (h > 0) "${h}h ${m}m" else "${m}m"
+}
+
+/** #43 Compact screen-time intensity strip for the selected window. */
 @Composable
 private fun ScreenUsageHeatstrip(
     daily: List<Pair<String, Long?>>,

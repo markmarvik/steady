@@ -1333,6 +1333,7 @@ private fun EditHabitDialog(
     var icon by remember { mutableStateOf(habit.icon) }
     var type by remember { mutableStateOf(habit.type) }
     var canSkip by remember { mutableStateOf(habit.canSkip) }
+    var pointValue by remember { mutableStateOf(habit.effectivePointValue().toString()) }
     var defaultValue by remember { mutableStateOf(habit.target?.toString() ?: "") }
     var unit by remember { mutableStateOf(habit.unit) }
     var selectedTags by remember {
@@ -1454,6 +1455,30 @@ private fun EditHabitDialog(
                     ThemedCheckbox(checked = !canSkip, onCheckedChange = { canSkip = !it })
                     Text("Essential (harder to skip)", fontSize = 12.sp)
                 }
+                Spacer(Modifier.height(8.dp))
+                Text("Importance (Momentum points)", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                Text(
+                    "Higher = more points when completed. Default 10.",
+                    fontSize = 10.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(Modifier.height(4.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    listOf(5, 10, 15, 20, 30).forEach { pts ->
+                        FilterChip(
+                            selected = pointValue.toIntOrNull() == pts,
+                            onClick = { pointValue = pts.toString() },
+                            label = { Text("$pts", fontSize = 11.sp) }
+                        )
+                    }
+                }
+                OutlinedTextField(
+                    value = pointValue,
+                    onValueChange = { pointValue = it.filter { ch -> ch.isDigit() }.take(2) },
+                    label = { Text("Custom points (1–50)") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
                 if (type != HabitType.CHECKBOX && type != HabitType.NOTE) {
                     OutlinedTextField(
                         value = defaultValue,
@@ -1706,7 +1731,8 @@ private fun EditHabitDialog(
                                 time = remTime.ifBlank { "09:00" },
                                 strength = remStrength,
                                 remindOnMissed = remMissed
-                            )
+                            ),
+                            pointValue = pointValue.toIntOrNull()?.coerceIn(1, 50) ?: 10
                         )
                     )
                 },

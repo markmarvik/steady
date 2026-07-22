@@ -730,8 +730,16 @@ data class Habit(
     /** Config for [extensionType] (sensors, packages, pomodoro, chaining). */
     val extensionConfig: ExtensionConfig = ExtensionConfig(),
     /** Optional per-habit reminder (#30). */
-    val habitReminder: HabitReminderPrefs = HabitReminderPrefs()
-)
+    val habitReminder: HabitReminderPrefs = HabitReminderPrefs(),
+    /**
+     * Steady Momentum base points when this habit is completed (importance).
+     * Default matches [HabitDomain.BASE_POINTS] (10). Range typically 1–50.
+     */
+    val pointValue: Int = 10
+) {
+    /** Clamped importance weight used by scoring. */
+    fun effectivePointValue(): Int = pointValue.coerceIn(1, 50)
+}
 
 // --- Exercise routines & workout sessions (#20–#22) ---
 

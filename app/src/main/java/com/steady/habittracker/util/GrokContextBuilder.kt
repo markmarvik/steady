@@ -406,21 +406,54 @@ object GrokContextBuilder {
         data.habits.any { !it.archived && it.extensionType == ExtensionType.SCREEN_USAGE } ||
             data.sensorSnapshots.any { it.readings.containsKey("screen_min") }
 
-    /** Daily screen minutes for heatmap / History (date → minutes, -1 if unknown). */
-    fun dailyScreenMinutes(data: AppData, days: Int = 28): List<Pair<String, Long?>> {
+    /**
+     * Daily screen minutes for heatmap / History (oldest → newest).
+     * When [liveMinutes] is provided (from UsageStats), it fills days missing snapshots.
+     */
+    fun dailyScreenMinutes(
+        data: AppData,
+        days: Int = 28,
+        liveMinutes: Map<String, Long?> = emptyMap()
+    ): List<Pair<String, Long?>> {
         val snaps = screenUsageSnapshots(data)
         val byDate = snaps.groupBy { it.date }.mapValues { (_, list) ->
             list.maxByOrNull { it.loggedAt }
                 ?.readings?.get("screen_min")
                 ?.toLongOrNull()
+        }.toMutableMap()
+        // Prefer live readings for recent days (more accurate for “today” / History)
+        for ((date, min) in liveMinutes) {
+            if (min != null && min >= 0) {
+                val stored = byDate[date]
+                // Live wins for today; otherwise take max so we don't lose a logged total
+                if (stored == null || date == LocalDate.now().toString() || min >= stored) {
+                    byDate[date] = min
+                }
+            }
         }
         val out = mutableListOf<Pair<String, Long?>>()
         var d = LocalDate.now()
-        repeat(days) {
+        repeat(days.coerceAtLeast(1)) {
             out.add(d.toString() to byDate[d.toString()])
             d = d.minusDays(1)
         }
         return out.reversed()
+    }
+
+    /** Sum of known minutes over the last [days] (newest-first window). */
+    fun screenTotalMinutes(daily: List<Pair<String, Long?>>, days: Int): Long {
+        return daily.takeLast(days.coerceAtLeast(1))
+            .mapNotNull { it.second }
+            .filter { it >= 0 }
+            .sum()
+    }
+
+    fun screenAvgMinutes(daily: List<Pair<String, Long?>>, days: Int): Double? {
+        val vals = daily.takeLast(days.coerceAtLeast(1))
+            .mapNotNull { it.second }
+            .filter { it >= 0 }
+        if (vals.isEmpty()) return null
+        return vals.average()
     }
 
     fun formatRecentLogs(data: AppData, days: Int = 7): String {

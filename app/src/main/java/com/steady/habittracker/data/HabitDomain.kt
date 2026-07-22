@@ -1109,6 +1109,10 @@ object HabitDomain {
     const val FULL_CLEAR_BONUS = 25
     const val SOLID_DAY_BONUS = 10
     const val PATH_CHECK_BONUS = 15
+    /** Points deducted per 15 minutes of screen time over the soft daily limit. */
+    const val SCREEN_OVERAGE_PER_15MIN = 2
+    /** Cap on screen-overage penalty per day (keeps Momentum fair). */
+    const val SCREEN_OVERAGE_CAP = 40
     const val DAILY_POINTS_CAP = 500
     const val POINTS_PER_LEVEL = 500
     const val SCORE_HISTORY_MAX = 60
@@ -1124,6 +1128,8 @@ object HabitDomain {
         val fullClearBonus: Int,
         val solidDayBonus: Int,
         val pathCheckBonus: Int,
+        /** Negative or zero: points lost to screen over-usage. */
+        val screenPenalty: Int = 0,
         val rawTotal: Int,
         val total: Int
     ) {
@@ -1163,7 +1169,7 @@ object HabitDomain {
         val date = try {
             LocalDate.parse(dateStr)
         } catch (_: Exception) {
-            return DayPointsBreakdown(0, 0, 0, 0, 0, 0, 0, 0)
+            return DayPointsBreakdown(0, 0, 0, 0, 0, 0, 0, 0, 0)
         }
         val due = habitsDueOn(data, date)
         val dayMap = data.entries[dateStr] ?: emptyMap()
@@ -1173,7 +1179,7 @@ object HabitDomain {
         for (h in due) {
             val e = dayMap[h.id]
             if (!isEntryCompleted(e)) continue
-            habitPoints += BASE_POINTS
+            habitPoints += h.effectivePointValue()
             val value = e!!.value
             when (h.type) {
                 HabitType.COUNTER, HabitType.DURATION_MIN -> {
@@ -1191,8 +1197,9 @@ object HabitDomain {
         val fullClear = if (due.isNotEmpty() && isFullClear(data, date)) FULL_CLEAR_BONUS else 0
         val solid = if (due.isNotEmpty() && isSolidDay(data, date)) SOLID_DAY_BONUS else 0
         val path = if (hasPathCheckOn(data, dateStr)) PATH_CHECK_BONUS else 0
-        val raw = habitPoints + targetBonuses + qualityBonuses + fullClear + solid + path
-        val total = raw.coerceAtMost(DAILY_POINTS_CAP)
+        val screenPen = screenOveragePenalty(data, dateStr)
+        val raw = habitPoints + targetBonuses + qualityBonuses + fullClear + solid + path - screenPen
+        val total = raw.coerceIn(0, DAILY_POINTS_CAP)
         return DayPointsBreakdown(
             habitPoints = habitPoints,
             targetBonuses = targetBonuses,
@@ -1200,9 +1207,51 @@ object HabitDomain {
             fullClearBonus = fullClear,
             solidDayBonus = solid,
             pathCheckBonus = path,
+            screenPenalty = screenPen,
             rawTotal = raw,
             total = total
         )
+    }
+
+    /**
+     * Soft daily screen limit from any active Screen Usage block.
+     * Returns null when no limit is configured.
+     */
+    fun screenDailyLimitMinutes(data: AppData): Int? =
+        data.habits
+            .asSequence()
+            .filter { !it.archived && it.extensionType == ExtensionType.SCREEN_USAGE }
+            .mapNotNull { it.extensionConfig.dailyLimitMinutes }
+            .filter { it > 0 }
+            .minOrNull()
+
+    /**
+     * Stored screen minutes for [dateStr] from sensor snapshots (or entry note parse).
+     */
+    fun storedScreenMinutes(data: AppData, dateStr: String): Long? {
+        val snaps = data.sensorSnapshots.filter {
+            it.date == dateStr &&
+                (it.readings.containsKey("screen_min") ||
+                    it.readings["summary"]?.contains("Screen", ignoreCase = true) == true)
+        }
+        snaps.maxByOrNull { it.loggedAt }
+            ?.readings?.get("screen_min")
+            ?.toLongOrNull()
+            ?.let { return it }
+        return null
+    }
+
+    /**
+     * Points deducted when screen time exceeds the Screen Usage block soft limit.
+     * 2 pts per 15 min over, capped. Pure data (uses stored snapshots).
+     */
+    fun screenOveragePenalty(data: AppData, dateStr: String, minutesOverride: Long? = null): Int {
+        val limit = screenDailyLimitMinutes(data) ?: return 0
+        val min = minutesOverride ?: storedScreenMinutes(data, dateStr) ?: return 0
+        if (min < 0 || min <= limit) return 0
+        val over = (min - limit).toInt()
+        val chunks = over / 15
+        return (chunks * SCREEN_OVERAGE_PER_15MIN).coerceAtMost(SCREEN_OVERAGE_CAP)
     }
 
     fun computeDayPoints(data: AppData, dateStr: String): Int =
@@ -1224,8 +1273,9 @@ object HabitDomain {
         var ifDone = 0
         for (h in due) {
             val e = dayMap[h.id]
+            val base = h.effectivePointValue()
             if (isEntryCompleted(e)) {
-                ifDone += BASE_POINTS
+                ifDone += base
                 val value = e!!.value
                 when (h.type) {
                     HabitType.COUNTER, HabitType.DURATION_MIN -> {
@@ -1236,7 +1286,7 @@ object HabitDomain {
                     else -> Unit
                 }
             } else if (e?.skipped != true) {
-                ifDone += BASE_POINTS
+                ifDone += base
                 when (h.type) {
                     HabitType.COUNTER, HabitType.DURATION_MIN -> {
                         if (h.target != null && h.target > 0) ifDone += TARGET_BONUS
@@ -1251,7 +1301,9 @@ object HabitDomain {
         }
         // Path check may still be logged today
         ifDone += PATH_CHECK_BONUS
-        val potential = ifDone.coerceAtMost(DAILY_POINTS_CAP)
+        // Assume current screen penalty still applies if already over
+        ifDone -= screenOveragePenalty(data, dateStr)
+        val potential = ifDone.coerceIn(0, DAILY_POINTS_CAP)
         return (potential - current).coerceAtLeast(0)
     }
 

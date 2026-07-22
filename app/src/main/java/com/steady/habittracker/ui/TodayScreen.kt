@@ -63,9 +63,16 @@ import com.steady.habittracker.data.journalCaptures
 import com.steady.habittracker.data.openTodoCaptures
 import com.steady.habittracker.sensors.AutoLogEngine
 import com.steady.habittracker.sensors.AutoLogMapper
+import com.steady.habittracker.util.SteadyHaptics
+import com.steady.habittracker.util.rememberSteadyHaptics
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
 
 @Composable
 fun TodayScreen(
@@ -386,18 +393,27 @@ fun TodayScreen(
             }
         }
 
-        // Habit square density (2–4 cols): two-finger horizontal pinch — no chrome buttons
+        // Habit square density (2–4 cols): deliberate two-finger horizontal pinch
         var gridCols by remember {
             mutableIntStateOf(appData.todayGridColumns.coerceIn(2, 4))
         }
+        var densityHintVisible by remember { mutableStateOf(false) }
+        val haptics = rememberSteadyHaptics()
         LaunchedEffect(appData.todayGridColumns) {
             gridCols = appData.todayGridColumns.coerceIn(2, 4)
         }
+        LaunchedEffect(densityHintVisible) {
+            if (densityHintVisible) {
+                delay(900)
+                densityHintVisible = false
+            }
+        }
 
+        Box(Modifier.weight(1f)) {
         LazyColumn(
             state = listState,
             modifier = Modifier
-                .weight(1f)
+                .fillMaxSize()
                 .pointerInput(Unit) {
                     detectHorizontalGridZoom { zoomInLargerTiles ->
                         val next = if (zoomInLargerTiles) {
@@ -408,6 +424,8 @@ fun TodayScreen(
                         if (next != gridCols) {
                             gridCols = next
                             onSetTodayGridColumns(next)
+                            densityHintVisible = true
+                            haptics(SteadyHaptics.Kind.ZOOM)
                         }
                     }
                 },
@@ -748,6 +766,33 @@ fun TodayScreen(
                 }
             }
         }
+
+        // Floating density feedback while pinching (2–4 cols)
+        androidx.compose.animation.AnimatedVisibility(
+            visible = densityHintVisible,
+            modifier = Modifier.align(Alignment.Center),
+            enter = fadeIn() + scaleIn(initialScale = 0.85f),
+            exit = fadeOut() + scaleOut(targetScale = 0.9f)
+        ) {
+            Surface(
+                shape = RoundedCornerShape(16.dp),
+                color = colors.primary.copy(alpha = 0.92f),
+                shadowElevation = 6.dp
+            ) {
+                Text(
+                    when (gridCols) {
+                        2 -> "Large · 2 wide"
+                        3 -> "Medium · 3 wide"
+                        else -> "Dense · 4 wide"
+                    },
+                    modifier = Modifier.padding(horizontal = 18.dp, vertical = 12.dp),
+                    color = colors.onPrimary,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.SemiBold
+                )
+            }
+        }
+        } // Box
     }
 }
 
@@ -893,6 +938,9 @@ private fun TimelineSectionHeader(section: TimelineSection, colors: TodayListCol
  * Two-finger horizontal pinch on the Today list:
  * - fingers move apart → fewer columns (larger squares)
  * - fingers move together → more columns (denser)
+ *
+ * Less sensitive than a 1:1 scale: requires a deliberate ~30% span change
+ * and a minimum finger distance so casual scroll/jitter doesn't flip density.
  * One-finger scroll is left alone (only consumes when ≥2 pointers).
  */
 private suspend fun androidx.compose.ui.input.pointer.PointerInputScope.detectHorizontalGridZoom(
@@ -902,36 +950,52 @@ private suspend fun androidx.compose.ui.input.pointer.PointerInputScope.detectHo
         awaitFirstDown(requireUnconsumed = false)
         var lastSpanX: Float? = null
         var accumRatio = 1f
+        var steppedThisGesture = false
         while (true) {
             val event = awaitPointerEvent()
             val pressed = event.changes.filter { it.pressed }
             if (pressed.size < 2) {
                 lastSpanX = null
                 accumRatio = 1f
+                steppedThisGesture = false
                 if (pressed.isEmpty()) break
                 continue
             }
             val xs = pressed.map { it.position.x }
             val spanX = (xs.maxOrNull()!! - xs.minOrNull()!!).coerceAtLeast(1f)
+            // Ignore tiny two-finger contact (accidental)
+            if (spanX < 72f) {
+                lastSpanX = spanX
+                continue
+            }
             val prev = lastSpanX
             lastSpanX = spanX
-            if (prev != null && prev > 24f) {
+            if (prev != null && prev > 48f) {
                 val step = spanX / prev
-                accumRatio *= step
+                // Clamp single-frame jumps so a jumpy event can't fire multiple steps
+                accumRatio *= step.coerceIn(0.85f, 1.18f)
                 when {
-                    accumRatio >= 1.14f -> {
+                    // ~32% larger span → larger tiles (fewer columns)
+                    accumRatio >= 1.32f -> {
                         onStep(true)
                         accumRatio = 1f
+                        steppedThisGesture = true
+                        // Small cooldown: reset baseline so one continuous pinch can still step again
+                        lastSpanX = spanX
                     }
-                    accumRatio <= 0.88f -> {
+                    // ~28% smaller span → denser (more columns)
+                    accumRatio <= 0.72f -> {
                         onStep(false)
                         accumRatio = 1f
+                        steppedThisGesture = true
+                        lastSpanX = spanX
                     }
                 }
             }
             // Steal the gesture only while pinching so vertical fling still works one-finger
+            // Always consume multi-touch movement so LazyColumn doesn't fight the zoom
             pressed.forEach { change ->
-                if (change.positionChanged()) change.consume()
+                if (change.positionChanged() || steppedThisGesture) change.consume()
             }
         }
     }
@@ -1026,13 +1090,20 @@ private fun TodoHabitSquare(
     onComplete: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val haptics = rememberSteadyHaptics()
     Column(
         modifier = modifier
             .aspectRatio(1f)
             .background(colors.surface, RoundedCornerShape(14.dp))
             .combinedClickable(
-                onClick = onComplete,
-                onLongClick = onComplete
+                onClick = {
+                    haptics(SteadyHaptics.Kind.SUCCESS)
+                    onComplete()
+                },
+                onLongClick = {
+                    haptics(SteadyHaptics.Kind.SUCCESS)
+                    onComplete()
+                }
             )
             .padding(8.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -1081,6 +1152,7 @@ private fun HabitSquare(
     onShowSkipPrompt: (habitId: String) -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val haptics = rememberSteadyHaptics()
     val habit = model.habit
     val isDone = model.isDone
     val isSkipped = model.isSkipped
@@ -1135,8 +1207,18 @@ private fun HabitSquare(
             .combinedClickable(
                 onClick = {
                     if (habit.type == HabitType.CHECKBOX) {
+                        // Completing feels rewarding; unchecking is a light tick
+                        if (!isDone) {
+                            haptics(
+                                if (streak >= 6) SteadyHaptics.Kind.REWARD
+                                else SteadyHaptics.Kind.SUCCESS
+                            )
+                        } else {
+                            haptics(SteadyHaptics.Kind.TICK)
+                        }
                         onToggle(habit.id)
                     } else if (model.isSimpleTapAdd) {
+                        haptics(SteadyHaptics.Kind.SUCCESS)
                         onLogEntry(
                             habit.id,
                             habit.target ?: 1.0,
@@ -1144,10 +1226,12 @@ private fun HabitSquare(
                             LocalDate.now().toString()
                         )
                     } else {
+                        haptics(SteadyHaptics.Kind.TICK)
                         onRequestLog(habit)
                     }
                 },
                 onLongClick = {
+                    haptics(SteadyHaptics.Kind.WARN)
                     onSkip(habit.id)
                     if (habit.canSkip) onShowSkipPrompt(habit.id)
                 }
