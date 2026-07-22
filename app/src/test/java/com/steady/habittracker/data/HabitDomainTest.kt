@@ -128,6 +128,48 @@ class HabitDomainTest {
     }
 
     @Test
+    fun `computeHabitStreak counts consecutive due completions`() {
+        val today = LocalDate.now()
+        val entries = (0..2).associate { i ->
+            val d = today.minusDays(i.toLong()).toString()
+            d to mapOf("h1" to HabitEntry(value = 1.0))
+        }
+        val data = sampleDataWithEntries(entries)
+        assertEquals(3, HabitDomain.computeHabitStreak(data, "h1"))
+        assertEquals(0, HabitDomain.computeHabitStreak(data, "h2"))
+    }
+
+    @Test
+    fun `computeHabitStreak ignores open today and keeps prior chain`() {
+        val today = LocalDate.now()
+        val entries = mapOf(
+            today.minusDays(1).toString() to mapOf("h1" to HabitEntry(value = 1.0)),
+            today.minusDays(2).toString() to mapOf("h1" to HabitEntry(value = 1.0))
+            // today intentionally missing
+        )
+        val data = sampleDataWithEntries(entries)
+        assertEquals(2, HabitDomain.computeHabitStreak(data, "h1"))
+    }
+
+    @Test
+    fun `timelineSectionsForToday includeCompleted shows finished habits`() {
+        val today = LocalDate.now()
+        val data = sampleDataWithEntries(
+            mapOf(today.toString() to mapOf("h1" to HabitEntry(value = 1.0)))
+        )
+        val pendingOnly = HabitDomain.timelineSectionsForToday(data, today, LocalTime.of(10, 0))
+        val pendingIds = pendingOnly.flatMap { it.habits }.map { it.id }.toSet()
+        assertFalse(pendingIds.contains("h1"))
+
+        val withDone = HabitDomain.timelineSectionsForToday(
+            data, today, LocalTime.of(10, 0), includeCompleted = true
+        )
+        val ids = withDone.flatMap { it.habits }.map { it.id }.toSet()
+        assertTrue(ids.contains("h1"))
+        assertTrue(ids.contains("h2"))
+    }
+
+    @Test
     fun `groupHabits excludes archived`() {
         val data = sampleDataWithEntries().copy(
             groups = listOf(Group("g1", "M", archived = false), Group("g2", "W", archived = true)),

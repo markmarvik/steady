@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.FilterChip
@@ -34,22 +35,26 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.steady.habittracker.data.AppData
 import com.steady.habittracker.data.CaptureItem
+import com.steady.habittracker.data.CapturePrefs
 import com.steady.habittracker.data.CaptureTags
 import com.steady.habittracker.data.journalCaptures
 import com.steady.habittracker.data.reflectionCaptures
+import com.steady.habittracker.data.trashedCaptures
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.concurrent.TimeUnit
 
 private enum class JournalPageFilter {
     ALL,
     REFLECTIONS,
     DONE_INBOX,
-    OPEN_INBOX
+    OPEN_INBOX,
+    TRASH
 }
 
 /**
- * Full-screen Journal for power users: search, filter by type/tag, expand, edit, reopen, delete.
+ * Full-screen Journal: search, filter, edit, soft-delete to trash (30 days default), restore.
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -57,6 +62,10 @@ fun JournalScreen(
     appData: AppData,
     onBack: () -> Unit,
     onDelete: (String) -> Unit = {},
+    onRestore: (String) -> Unit = {},
+    onPermanentlyDelete: (String) -> Unit = {},
+    onEmptyTrash: () -> Unit = {},
+    onUpdateCapturePrefs: (CapturePrefs) -> Unit = {},
     onReopenToInbox: (String) -> Unit = {},
     onEdit: (CaptureItem) -> Unit = {},
     onOpenWrite: () -> Unit = {}
@@ -66,6 +75,13 @@ fun JournalScreen(
     var tagFilter by remember { mutableStateOf<String?>(null) }
     var query by remember { mutableStateOf("") }
     var expandedIds by remember { mutableStateOf(setOf<String>()) }
+    var pendingDeleteId by remember { mutableStateOf<String?>(null) }
+    var pendingPurgeId by remember { mutableStateOf<String?>(null) }
+    var confirmEmptyTrash by remember { mutableStateOf(false) }
+    var showTrashSettings by remember { mutableStateOf(false) }
+
+    val prefs = appData.capturePrefs
+    val retainDays = prefs.trashRetainDays.coerceIn(1, 365)
 
     val allJournal = remember(appData.captures, appData.capturePrefs) {
         appData.journalCaptures()
@@ -76,20 +92,22 @@ fun JournalScreen(
     val doneInbox = remember(appData.captures, appData.capturePrefs) {
         val inbox = appData.capturePrefs.resolvedInboxTags()
         appData.captures
-            .filter { it.processed && it.tags.any { t -> t in inbox } }
+            .filter { !it.isTrashed && it.processed && it.tags.any { t -> t in inbox } }
             .sortedByDescending { it.createdAt }
     }
     val openInbox = remember(appData.captures, appData.capturePrefs) {
         appData.captures
-            .filter { !it.processed && appData.capturePrefs.goesToInbox(it.tags) }
+            .filter { !it.isTrashed && !it.processed && appData.capturePrefs.goesToInbox(it.tags) }
             .sortedByDescending { it.createdAt }
     }
+    val trash = remember(appData.captures) { appData.trashedCaptures() }
 
     val source = when (filter) {
         JournalPageFilter.ALL -> allJournal
         JournalPageFilter.REFLECTIONS -> reflections
         JournalPageFilter.DONE_INBOX -> doneInbox
         JournalPageFilter.OPEN_INBOX -> openInbox
+        JournalPageFilter.TRASH -> trash
     }
 
     val list = remember(source, tagFilter, query) {
@@ -132,7 +150,13 @@ fun JournalScreen(
                     color = MaterialTheme.colorScheme.onSurface
                 )
                 Text(
-                    "${list.size} shown · ${allJournal.size} archived · ${openInbox.size} open",
+                    when (filter) {
+                        JournalPageFilter.TRASH ->
+                            "${list.size} in trash · auto-purge after $retainDays days"
+                        else ->
+                            "${list.size} shown · ${allJournal.size} archived · ${openInbox.size} open" +
+                                if (trash.isNotEmpty()) " · ${trash.size} trash" else ""
+                    },
                     fontSize = 11.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -178,9 +202,35 @@ fun JournalScreen(
                 onClick = { filter = JournalPageFilter.OPEN_INBOX },
                 label = { Text("Open · ${openInbox.size}", fontSize = 11.sp) }
             )
+            if (prefs.showTrashInJournal || trash.isNotEmpty()) {
+                FilterChip(
+                    selected = filter == JournalPageFilter.TRASH,
+                    onClick = { filter = JournalPageFilter.TRASH },
+                    label = { Text("🗑 Trash · ${trash.size}", fontSize = 11.sp) }
+                )
+            }
         }
 
-        if (tagOptions.isNotEmpty()) {
+        if (filter == JournalPageFilter.TRASH) {
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 6.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                TextButton(onClick = { showTrashSettings = true }) {
+                    Text("Trash settings", fontSize = 12.sp, color = accent)
+                }
+                if (trash.isNotEmpty()) {
+                    TextButton(onClick = { confirmEmptyTrash = true }) {
+                        Text("Empty trash", fontSize = 12.sp, color = MaterialTheme.colorScheme.error)
+                    }
+                }
+            }
+        }
+
+        if (tagOptions.isNotEmpty() && filter != JournalPageFilter.TRASH) {
             FlowRow(
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
                 verticalArrangement = Arrangement.spacedBy(4.dp),
@@ -211,6 +261,8 @@ fun JournalScreen(
                     query.isNotBlank() -> "No matches for “$query”."
                     filter == JournalPageFilter.OPEN_INBOX ->
                         "Nothing open. Use Write for Ideas / Todo / Reminders."
+                    filter == JournalPageFilter.TRASH ->
+                        "Trash is empty. Deleted entries stay here for $retainDays days."
                     else ->
                         "Journal is empty. Memories, Thoughts, Gratitude, and closed inbox items land here."
                 },
@@ -225,17 +277,28 @@ fun JournalScreen(
             ) {
                 items(list, key = { it.id }) { cap ->
                     val expanded = cap.id in expandedIds
+                    val daysLeft = cap.deletedAt?.let { del ->
+                        val age = System.currentTimeMillis() - del
+                        val left = retainDays - TimeUnit.MILLISECONDS.toDays(age).toInt()
+                        left.coerceAtLeast(0)
+                    }
                     JournalEntryCard(
                         cap = cap,
                         dateLabel = dateFmt.format(Date(cap.createdAt)),
                         expanded = expanded,
-                        isOpen = !cap.processed && appData.capturePrefs.goesToInbox(cap.tags),
+                        isOpen = !cap.processed && appData.capturePrefs.goesToInbox(cap.tags) && !cap.isTrashed,
+                        isTrash = filter == JournalPageFilter.TRASH,
+                        trashDaysLeft = daysLeft,
                         onToggleExpand = {
                             expandedIds = if (expanded) expandedIds - cap.id else expandedIds + cap.id
                         },
                         onEdit = { onEdit(cap) },
-                        onDelete = { onDelete(cap.id) },
-                        onReopen = if (cap.processed && appData.capturePrefs.goesToInbox(cap.tags)) {
+                        onDelete = { pendingDeleteId = cap.id },
+                        onRestore = { onRestore(cap.id) },
+                        onPermanentDelete = { pendingPurgeId = cap.id },
+                        onReopen = if (cap.processed && !cap.isTrashed &&
+                            appData.capturePrefs.goesToInbox(cap.tags)
+                        ) {
                             { onReopenToInbox(cap.id) }
                         } else null
                     )
@@ -243,6 +306,121 @@ fun JournalScreen(
                 item { Spacer(Modifier.height(24.dp)) }
             }
         }
+    }
+
+    // Confirm move to trash
+    pendingDeleteId?.let { id ->
+        val cap = appData.captures.find { it.id == id }
+        AlertDialog(
+            onDismissRequest = { pendingDeleteId = null },
+            title = { Text("Move to trash?") },
+            text = {
+                Text(
+                    "“${cap?.title?.ifBlank { "(untitled)" } ?: "Entry"}” will stay in trash for " +
+                        "$retainDays days, then be permanently removed. You can restore it anytime from Trash."
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        onDelete(id)
+                        pendingDeleteId = null
+                    }
+                ) {
+                    Text("Move to trash", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingDeleteId = null }) { Text("Cancel") }
+            }
+        )
+    }
+
+    // Confirm permanent delete
+    pendingPurgeId?.let { id ->
+        AlertDialog(
+            onDismissRequest = { pendingPurgeId = null },
+            title = { Text("Delete forever?") },
+            text = { Text("This cannot be undone. The entry will be removed immediately.") },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        onPermanentlyDelete(id)
+                        pendingPurgeId = null
+                    }
+                ) {
+                    Text("Delete forever", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingPurgeId = null }) { Text("Cancel") }
+            }
+        )
+    }
+
+    if (confirmEmptyTrash) {
+        AlertDialog(
+            onDismissRequest = { confirmEmptyTrash = false },
+            title = { Text("Empty trash?") },
+            text = { Text("Permanently delete all ${trash.size} item(s) in trash now?") },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        onEmptyTrash()
+                        confirmEmptyTrash = false
+                    }
+                ) {
+                    Text("Empty trash", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmEmptyTrash = false }) { Text("Cancel") }
+            }
+        )
+    }
+
+    if (showTrashSettings) {
+        AlertDialog(
+            onDismissRequest = { showTrashSettings = false },
+            title = { Text("Trash settings") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        "Soft-deleted journal and inbox items are kept this long, then purged automatically.",
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Text("Retain for (days)", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        listOf(7, 14, 30, 60, 90).forEach { d ->
+                            FilterChip(
+                                selected = retainDays == d,
+                                onClick = {
+                                    onUpdateCapturePrefs(prefs.copy(trashRetainDays = d))
+                                },
+                                label = { Text("$d", fontSize = 12.sp) }
+                            )
+                        }
+                    }
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("Show Trash tab", fontSize = 13.sp)
+                        androidx.compose.material3.Switch(
+                            checked = prefs.showTrashInJournal,
+                            onCheckedChange = {
+                                onUpdateCapturePrefs(prefs.copy(showTrashInJournal = it))
+                            }
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showTrashSettings = false }) { Text("Done") }
+            }
+        )
     }
 }
 
@@ -252,9 +430,13 @@ private fun JournalEntryCard(
     dateLabel: String,
     expanded: Boolean,
     isOpen: Boolean,
+    isTrash: Boolean,
+    trashDaysLeft: Int?,
     onToggleExpand: () -> Unit,
     onEdit: () -> Unit,
     onDelete: () -> Unit,
+    onRestore: () -> Unit,
+    onPermanentDelete: () -> Unit,
     onReopen: (() -> Unit)?
 ) {
     val long = cap.note.length > 160
@@ -263,10 +445,11 @@ private fun JournalEntryCard(
             .fillMaxWidth()
             .clickable(onClick = onToggleExpand),
         colors = CardDefaults.cardColors(
-            containerColor = if (isOpen)
-                MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f)
-            else
-                MaterialTheme.colorScheme.surface
+            containerColor = when {
+                isTrash -> MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.25f)
+                isOpen -> MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f)
+                else -> MaterialTheme.colorScheme.surface
+            }
         ),
         shape = RoundedCornerShape(14.dp)
     ) {
@@ -290,6 +473,15 @@ private fun JournalEntryCard(
                         fontSize = 10.sp,
                         fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.padding(start = 8.dp)
+                    )
+                }
+                if (isTrash && trashDaysLeft != null) {
+                    Text(
+                        "${trashDaysLeft}d left",
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = MaterialTheme.colorScheme.error,
                         modifier = Modifier.padding(start = 8.dp)
                     )
                 }
@@ -333,16 +525,25 @@ private fun JournalEntryCard(
                 horizontalArrangement = Arrangement.spacedBy(4.dp),
                 modifier = Modifier.padding(top = 4.dp)
             ) {
-                TextButton(onClick = onEdit) {
-                    Text("Edit", fontSize = 12.sp, color = MaterialTheme.colorScheme.primary)
-                }
-                if (onReopen != null) {
-                    TextButton(onClick = onReopen) {
-                        Text("Reopen", fontSize = 12.sp)
+                if (isTrash) {
+                    TextButton(onClick = onRestore) {
+                        Text("Restore", fontSize = 12.sp, color = MaterialTheme.colorScheme.primary)
                     }
-                }
-                TextButton(onClick = onDelete) {
-                    Text("Delete", fontSize = 12.sp, color = MaterialTheme.colorScheme.error)
+                    TextButton(onClick = onPermanentDelete) {
+                        Text("Delete forever", fontSize = 12.sp, color = MaterialTheme.colorScheme.error)
+                    }
+                } else {
+                    TextButton(onClick = onEdit) {
+                        Text("Edit", fontSize = 12.sp, color = MaterialTheme.colorScheme.primary)
+                    }
+                    if (onReopen != null) {
+                        TextButton(onClick = onReopen) {
+                            Text("Reopen", fontSize = 12.sp)
+                        }
+                    }
+                    TextButton(onClick = onDelete) {
+                        Text("Delete", fontSize = 12.sp, color = MaterialTheme.colorScheme.error)
+                    }
                 }
             }
         }

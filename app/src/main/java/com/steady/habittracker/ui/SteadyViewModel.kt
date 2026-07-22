@@ -41,7 +41,10 @@ import com.steady.habittracker.data.withoutSchedule
 import com.steady.habittracker.data.withUnarchivedGroup
 import com.steady.habittracker.data.withUnarchivedHabit
 import com.steady.habittracker.data.withAddedCapture
-import com.steady.habittracker.data.withoutCapture
+import com.steady.habittracker.data.withCaptureTrashed
+import com.steady.habittracker.data.withCaptureRestored
+import com.steady.habittracker.data.withoutCapturePermanent
+import com.steady.habittracker.data.withPurgedExpiredTrash
 import com.steady.habittracker.data.withUpdatedCapture
 import com.steady.habittracker.data.withRemindersMasterEnabled
 import com.steady.habittracker.data.BlueprintRoutines
@@ -756,10 +759,19 @@ class SteadyViewModel(
     fun importBackupJson(jsonString: String, onResult: (String?) -> Unit) {
         viewModelScope.launch {
             try {
-                val restored = repository.decodeBackupJson(jsonString)
+                // Full AppData restore (all settings, prefs, trash, extensions, routines, …)
+                val restored = repository.decodeBackupJson(jsonString).withPurgedExpiredTrash()
                 repository.saveData(restored)
                 rescheduleReminders(restored)
                 refreshWidget(restored)
+                val ctx = appContext
+                if (ctx != null) {
+                    com.steady.habittracker.web.LocalWebServer.setEnabled(ctx, restored)
+                    if (restored.autoLogMasterEnabled) {
+                        AutoLogWorker.enqueue(ctx)
+                    }
+                    SleepAudioScheduler.reschedule(ctx, restored)
+                }
                 onResult(null)
             } catch (e: Exception) {
                 onResult(e.message ?: "Invalid backup file")
@@ -1146,10 +1158,42 @@ class SteadyViewModel(
         }
     }
 
+    /** Soft-delete → trash (kept [CapturePrefs.trashRetainDays]). */
     fun deleteCapture(id: String) {
         viewModelScope.launch {
+            val current = appData.value.withPurgedExpiredTrash()
+            repository.saveData(current.withCaptureTrashed(id))
+        }
+    }
+
+    fun restoreCapture(id: String) {
+        viewModelScope.launch {
             val current = appData.value
-            repository.saveData(current.withoutCapture(id))
+            repository.saveData(current.withCaptureRestored(id))
+        }
+    }
+
+    /** Permanent delete from trash. */
+    fun permanentlyDeleteCapture(id: String) {
+        viewModelScope.launch {
+            val current = appData.value
+            repository.saveData(current.withoutCapturePermanent(id))
+        }
+    }
+
+    fun emptyTrash() {
+        viewModelScope.launch {
+            val current = appData.value
+            repository.saveData(
+                current.copy(captures = current.captures.filter { !it.isTrashed })
+            )
+        }
+    }
+
+    fun updateCapturePrefsAndPurge(prefs: CapturePrefs) {
+        viewModelScope.launch {
+            val current = appData.value.withCapturePrefs(prefs).withPurgedExpiredTrash()
+            repository.saveData(current)
         }
     }
 

@@ -430,7 +430,7 @@ fun SteadyApp(
             title = { Text("Restore backup?") },
             text = {
                 Text(
-                    "This replaces all current Steady data (habits, logs, Momentum score, reminder settings, Path goals) with the backup file."
+                    "This replaces all current Steady data — habits, logs, Momentum, reminders, Path, Blocks settings, trash, grid density, Grok presets, and every other preference — with the backup file."
                 )
             },
             confirmButton = {
@@ -683,6 +683,10 @@ fun SteadyApp(
                     appData = appData,
                     onBack = { showJournal = false },
                     onDelete = viewModel::deleteCapture,
+                    onRestore = viewModel::restoreCapture,
+                    onPermanentlyDelete = viewModel::permanentlyDeleteCapture,
+                    onEmptyTrash = viewModel::emptyTrash,
+                    onUpdateCapturePrefs = viewModel::updateCapturePrefs,
                     onReopenToInbox = viewModel::reopenCaptureToInbox,
                     onEdit = { cap ->
                         writeEditItem = cap
@@ -716,8 +720,8 @@ fun SteadyApp(
                 .padding(padding)
                 .padding(16.dp)
         ) {
-            // #40 Top bar: title + large date, progress tight under title (rice / professional)
-            // #41 Tap progress → History; long-press → progress details dialog
+            // Top bar: Steady left · day/date right · settings
+            // Progress slider → History (tap); long-press → progress details
             val yesterdayRate = weeklyRates.getOrNull(5)?.second ?: 0f
             val trendDelta = ((completionRate - yesterdayRate) * 100).toInt()
             val trendPositive = completionRate >= yesterdayRate
@@ -728,7 +732,7 @@ fun SteadyApp(
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.Top
+                verticalAlignment = Alignment.CenterVertically
             ) {
                 Column(Modifier.weight(1f)) {
                     Text(
@@ -737,13 +741,6 @@ fun SteadyApp(
                         fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.onSurface,
                         letterSpacing = (-0.5).sp
-                    )
-                    Text(
-                        dateLabel,
-                        color = MaterialTheme.colorScheme.onSurface,
-                        fontSize = 20.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        modifier = Modifier.padding(top = 2.dp)
                     )
                     Row(
                         horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -759,6 +756,13 @@ fun SteadyApp(
                         )
                     }
                 }
+                Text(
+                    dateLabel,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.padding(end = 4.dp)
+                )
                 IconButton(onClick = { showSettings = true }) {
                     Icon(
                         Icons.Default.Settings,
@@ -818,13 +822,6 @@ fun SteadyApp(
                                 fontWeight = FontWeight.SemiBold
                             )
                         }
-                        Spacer(Modifier.width(8.dp))
-                        Text(
-                            "History ›",
-                            color = accent.copy(alpha = 0.9f),
-                            fontSize = 10.sp,
-                            fontWeight = FontWeight.Medium
-                        )
                     }
                     Spacer(Modifier.height(6.dp))
                     LinearProgressIndicator(
@@ -977,7 +974,8 @@ fun SteadyApp(
                         },
                         onAcceptAutoSuggestion = viewModel::acceptAutoSuggestion,
                         onDismissAutoSuggestion = viewModel::dismissAutoSuggestion,
-                        onRunAutoLog = { viewModel.runAutoLogNow() }
+                        onRunAutoLog = { viewModel.runAutoLogNow() },
+                        onCompleteTodo = viewModel::markCaptureProcessed
                     )
                     1 -> PathScreen(
                         appData = appData,

@@ -25,7 +25,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.material3.FilterChip
 import com.steady.habittracker.data.ExerciseDef
+import com.steady.habittracker.data.ExerciseLibrary
 import com.steady.habittracker.data.ExerciseRoutine
 import com.steady.habittracker.data.ShowPreset
 import java.util.UUID
@@ -43,6 +45,8 @@ fun RoutineEditorDialog(
     var tagsText by remember { mutableStateOf(existing?.tags?.joinToString(", ") ?: "Strength") }
     var showPreset by remember { mutableStateOf(existing?.showPreset ?: ShowPreset.DAILY) }
     var weekdays by remember { mutableStateOf(existing?.weekdays ?: setOf(1, 2, 3, 4, 5, 6, 7)) }
+    var catalogCategory by remember { mutableStateOf("Calisthenics") }
+    var showCatalog by remember { mutableStateOf(false) }
     var exercises by remember {
         mutableStateOf(
             existing?.exercises?.sortedBy { it.order }?.toList()
@@ -148,7 +152,42 @@ fun RoutineEditorDialog(
                         order = exercises.size
                     )
                 }) {
-                    Text("+ Add exercise", color = MaterialTheme.colorScheme.primary)
+                    Text("+ Add blank exercise", color = MaterialTheme.colorScheme.primary)
+                }
+                TextButton(onClick = { showCatalog = !showCatalog }) {
+                    Text(
+                        if (showCatalog) "Hide library" else "+ From library (calisthenics / gym / stretch)",
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
+                if (showCatalog) {
+                    Spacer(Modifier.height(4.dp))
+                    Text("Library category", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        listOf("Calisthenics", "Gym", "Longevity", "Stretching", "Cardio").forEach { cat ->
+                            FilterChip(
+                                selected = catalogCategory == cat,
+                                onClick = { catalogCategory = cat },
+                                label = { Text(cat, fontSize = 10.sp) }
+                            )
+                        }
+                    }
+                    val items = ExerciseLibrary.byCategory()[catalogCategory].orEmpty()
+                    items.forEach { item ->
+                        TextButton(
+                            onClick = {
+                                exercises = exercises + ExerciseLibrary.toDef(item, exercises.size).copy(
+                                    id = "ex_${UUID.randomUUID().toString().take(6)}"
+                                )
+                            }
+                        ) {
+                            Text(
+                                "+ ${item.name} · ${item.reps} · track ${item.metric}",
+                                fontSize = 11.sp,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                    }
                 }
             }
         },

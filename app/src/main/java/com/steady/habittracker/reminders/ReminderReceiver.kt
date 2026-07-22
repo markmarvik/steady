@@ -48,12 +48,8 @@ class ReminderReceiver : BroadcastReceiver() {
                     }
                     "checkin" -> {
                         if (data.remindersMasterEnabled && data.notificationPrefs.randomCheckInsEnabled) {
-                            val prompts = listOf(
-                                "What are you working on right now?",
-                                "Quick check-in: Energy level? Any distractions?",
-                                "Productivity nudge: Are you on path?",
-                                "Pause — capture one thought or idea.",
-                                "Awareness: still aligned with today's priorities?"
+                            val prompts = com.steady.habittracker.data.EsmDefaults.questionsFor(
+                                data.notificationPrefs
                             )
                             NotificationHelper.showReminder(
                                 appContext,

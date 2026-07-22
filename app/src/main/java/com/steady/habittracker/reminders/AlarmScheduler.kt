@@ -95,18 +95,32 @@ object AlarmScheduler {
 
     private fun scheduleRandomCheckIn(context: Context, am: AlarmManager, data: AppData) {
         val prefs = data.notificationPrefs
-        val spacingMin = when (prefs.randomCheckInFrequency.lowercase()) {
-            "low" -> 120
-            "high" -> 45
+        val minI = prefs.checkInMinIntervalMin.coerceIn(10, 240)
+        val maxI = prefs.checkInMaxIntervalMin.coerceIn(minI, 360)
+        // Legacy frequency still nudges defaults when min/max left at stock
+        val spacingBase = when {
+            prefs.checkInMinIntervalMin != 30 || prefs.checkInMaxIntervalMin != 120 ->
+                (minI + maxI) / 2
+            prefs.randomCheckInFrequency.equals("low", true) -> 120
+            prefs.randomCheckInFrequency.equals("high", true) -> 45
             else -> 75
+        }.coerceIn(minI, maxI)
+        val spacingMin = if (prefs.checkInScheduleMode.equals("group", true)) {
+            HabitDomain.suggestedCheckInSpacingMinutes(data, minI, maxI, spacingBase)
+        } else {
+            (minI..maxI).random()
         }
-        val jitter = (0 until (spacingMin / 3).coerceAtLeast(5)).random()
+        val jitter = (0 until (spacingMin / 4).coerceAtLeast(3)).random()
         val last = prefs.lastRandomCheckInAt
         val now = System.currentTimeMillis()
-        val earliest = if (last > 0) last + (spacingMin + jitter) * 60_000L else now + 30 * 60_000L
-        var triggerAt = earliest.coerceAtLeast(now + 15 * 60_000L)
+        val earliest = if (last > 0) last + (spacingMin + jitter) * 60_000L else now + minI * 60_000L
+        var triggerAt = earliest.coerceAtLeast(now + 10 * 60_000L)
         // Push into active hours (avoid quiet)
         triggerAt = HabitDomain.pushPastQuietHours(triggerAt, prefs)
+        // Group mode: prefer next open window if we're outside MORNING/WORK/EVENING
+        if (prefs.checkInScheduleMode.equals("group", true)) {
+            triggerAt = HabitDomain.alignCheckInToGroupWindow(triggerAt, data, prefs)
+        }
         val pi = makePending(context, SpecialAlarmIds.RANDOM_CHECKIN, kind = "checkin")
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && !am.canScheduleExactAlarms()) {
             am.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerAt, pi)

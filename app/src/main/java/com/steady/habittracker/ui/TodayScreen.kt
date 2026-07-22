@@ -26,6 +26,7 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import java.time.LocalDate
 import java.time.LocalTime
@@ -46,6 +47,7 @@ import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
 import com.steady.habittracker.data.AppData
 import com.steady.habittracker.data.AutoSuggestion
+import com.steady.habittracker.data.CaptureItem
 import com.steady.habittracker.data.CaptureTags
 import com.steady.habittracker.data.Habit
 import com.steady.habittracker.data.HabitDomain
@@ -58,6 +60,7 @@ import com.steady.habittracker.data.displayLabel
 import com.steady.habittracker.data.effectiveDescription
 import com.steady.habittracker.data.inboxCaptures
 import com.steady.habittracker.data.journalCaptures
+import com.steady.habittracker.data.openTodoCaptures
 import com.steady.habittracker.sensors.AutoLogEngine
 import com.steady.habittracker.sensors.AutoLogMapper
 import java.text.SimpleDateFormat
@@ -91,7 +94,9 @@ fun TodayScreen(
     onOpenLogConsumed: () -> Unit = {},
     onAcceptAutoSuggestion: (AutoSuggestion) -> Unit = {},
     onDismissAutoSuggestion: (AutoSuggestion) -> Unit = {},
-    onRunAutoLog: () -> Unit = {}
+    onRunAutoLog: () -> Unit = {},
+    /** Mark a Todo capture done (process). */
+    onCompleteTodo: (String) -> Unit = {}
 ) {
     if (appData.habits.none { !it.archived } || appData.groups.isEmpty()) {
         Text(
@@ -137,6 +142,9 @@ fun TodayScreen(
         )
     }
 
+    // Show completed tiles (grayed + streak flame). Session-persisted across config changes.
+    var showDoneHabits by rememberSaveable { mutableStateOf(false) }
+
     // Stable keys for domain work — avoid full AppData identity thrash when possible
     val dateKey = remember { LocalDate.now().toString() }
     val sections = remember(
@@ -146,11 +154,32 @@ fun TodayScreen(
         appData.activeScheduleId,
         appData.sleep,
         appData.entries[dateKey],
+        todayEntries,
+        showDoneHabits
+    ) {
+        HabitDomain.timelineSectionsForToday(
+            appData,
+            LocalDate.now(),
+            LocalTime.now(),
+            includeCompleted = showDoneHabits
+        )
+    }
+    // Day cue always based on pending-only view so "now / next" stays action-oriented
+    val cue = remember(
+        appData.habits,
+        appData.groups,
+        appData.schedules,
+        appData.activeScheduleId,
+        appData.sleep,
+        appData.entries[dateKey],
         todayEntries
     ) {
-        HabitDomain.timelineSectionsForToday(appData, LocalDate.now(), LocalTime.now())
+        HabitDomain.dayProgressionCue(
+            appData,
+            LocalDate.now(),
+            LocalTime.now()
+        )
     }
-    val cue = remember(sections) { HabitDomain.dayProgressionCueFromSections(sections) }
     val nameById = remember(appData.habits) { appData.habits.associate { it.id to it.name } }
     val tagLabels = remember(appData.habits, appData.tags) { HabitDomain.tagLabelByHabitId(appData) }
     // Action inbox only (Ideas / Todo / Reminders) — journal tags never appear here
@@ -173,8 +202,20 @@ fun TodayScreen(
             if (HabitDomain.isRoutineCompletedOn(appData, rt.id, dateKey)) rt.id else null
         }.toSet()
     }
+    // Done count for the toggle label (due today and finished)
+    val doneTodayCount = remember(appData.habits, appData.entries[dateKey], todayEntries, dateKey) {
+        val due = HabitDomain.habitsDueOn(appData, LocalDate.now())
+        due.count { h ->
+            val e = todayEntries[h.id] ?: appData.entries[dateKey]?.get(h.id)
+            e != null && !e.skipped && e.value >= 0.5
+        }
+    }
+    val androidContext = androidx.compose.ui.platform.LocalContext.current
+    val openTodos = remember(appData.captures, appData.capturePrefs) {
+        appData.openTodoCaptures()
+    }
     // Per-section row models so items don't re-run domain / string work while scrolling
-    val sectionRows = remember(sections, todayEntries, nameById, tagLabels) {
+    val sectionRows = remember(sections, todayEntries, nameById, tagLabels, appData.entries, androidContext) {
         sections.map { section ->
             val rows = section.habits.map { habit ->
                 val entry = todayEntries[habit.id]
@@ -189,11 +230,13 @@ fun TodayScreen(
                 val isSkipped = entry?.skipped == true
                 val title = if (!habit.canSkip) "${habit.name} (essential)" else habit.name
                 val desc = habit.effectiveDescription()
+                val streak = HabitDomain.computeHabitStreak(appData, habit.id)
                 val meta = buildList {
                     if (desc.isNotBlank()) add(desc)
                     if (habit.extensionType != com.steady.habittracker.data.ExtensionType.NONE) {
                         add(com.steady.habittracker.data.ExtensionCatalog.label(habit.extensionType))
-                        com.steady.habittracker.extensions.ExtensionManager.statusLine(habit, appData)?.let { add(it) }
+                        com.steady.habittracker.extensions.ExtensionManager
+                            .statusLine(habit, appData, androidContext)?.let { add(it) }
                     }
                     tagLabels[habit.id]?.takeIf { it.isNotBlank() }?.let { add(it) }
                     habit.afterHabitId?.let { nameById[it] }?.let { add("after $it") }
@@ -209,6 +252,7 @@ fun TodayScreen(
                     isDone = isDone,
                     isSkipped = isSkipped,
                     isSimpleTapAdd = isSimpleTapAdd,
+                    streak = streak,
                     glyph = habit.icon.trim().ifEmpty { habit.displayGlyph() },
                     title = title,
                     metaLine = meta,
@@ -261,6 +305,23 @@ fun TodayScreen(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
+            // Show completed habits (grayed + streak flame)
+            Surface(
+                onClick = { showDoneHabits = !showDoneHabits },
+                shape = RoundedCornerShape(20.dp),
+                color = if (showDoneHabits) colors.primary.copy(alpha = 0.18f) else colors.surfaceVariant
+            ) {
+                Text(
+                    buildString {
+                        append(if (showDoneHabits) "Hide done" else "Show done")
+                        if (doneTodayCount > 0) append(" · $doneTodayCount")
+                    },
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                    color = if (showDoneHabits) colors.primary else colors.onSurface,
+                    fontSize = 12.sp,
+                    fontWeight = if (showDoneHabits) FontWeight.SemiBold else FontWeight.Medium
+                )
+            }
             Spacer(Modifier.weight(1f))
             // Compact pill actions
             Surface(
@@ -560,7 +621,7 @@ fun TodayScreen(
                 }
             }
 
-            if (sections.isEmpty()) {
+            if (sections.isEmpty() && openTodos.isEmpty()) {
                 item(key = "empty", contentType = "empty") {
                     Text(
                         "Nothing left for today — enjoy the space.\nAdd or configure items in Manage.",
@@ -571,19 +632,27 @@ fun TodayScreen(
                 }
             }
 
+            // If Work section has no pending habits, still show Todos in a Work-like header
+            val workSectionPresent = sectionRows.any {
+                isWorkGroup(it.section.group.timeHint, it.section.group.name)
+            }
+
             sectionRows.forEach { bundle ->
                 item(key = "sec_${bundle.section.group.id}", contentType = "sec") {
                     TimelineSectionHeader(section = bundle.section, colors = colors)
                 }
                 // Square habit grid — pinch horizontally to change columns (2–4)
                 val cols = gridCols
-                val chunks = bundle.rows.chunked(cols)
+                val isWorkSection = isWorkGroup(bundle.section.group.timeHint, bundle.section.group.name)
+                // Todos appear as habit-like squares inside Work (same size / density)
+                val todoRows = if (isWorkSection) openTodos else emptyList()
+                val habitChunks = bundle.rows.chunked(cols)
                 items(
-                    chunks.size,
+                    habitChunks.size,
                     key = { idx -> "grid_${bundle.section.group.id}_${cols}_$idx" },
                     contentType = { "habit_row" }
                 ) { idx ->
-                    val chunk = chunks[idx]
+                    val chunk = habitChunks[idx]
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(6.dp)
@@ -601,6 +670,78 @@ fun TodayScreen(
                             )
                         }
                         repeat(cols - chunk.count()) {
+                            Spacer(Modifier.weight(1f))
+                        }
+                    }
+                }
+                if (todoRows.isNotEmpty()) {
+                    item(key = "todos_hdr_${bundle.section.group.id}", contentType = "todo_hdr") {
+                        Text(
+                            "Todos · ${todoRows.size}",
+                            color = colors.primary,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier.padding(start = 4.dp, top = 4.dp, bottom = 2.dp)
+                        )
+                    }
+                    val todoChunks = todoRows.chunked(cols)
+                    items(
+                        todoChunks.size,
+                        key = { idx -> "todo_grid_${bundle.section.group.id}_${cols}_$idx" },
+                        contentType = { "todo_row" }
+                    ) { idx ->
+                        val chunk = todoChunks[idx]
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            chunk.forEach { todo ->
+                                TodoHabitSquare(
+                                    cap = todo,
+                                    colors = colors,
+                                    onComplete = { onCompleteTodo(todo.id) },
+                                    modifier = Modifier.weight(1f)
+                                )
+                            }
+                            repeat(cols - chunk.size) {
+                                Spacer(Modifier.weight(1f))
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (!workSectionPresent && openTodos.isNotEmpty()) {
+                item(key = "todos_standalone_hdr", contentType = "todo_hdr") {
+                    Text(
+                        "Work · Todos · ${openTodos.size}",
+                        color = colors.primary,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.padding(start = 4.dp, top = 8.dp, bottom = 4.dp)
+                    )
+                }
+                val cols = gridCols
+                val todoChunks = openTodos.chunked(cols)
+                items(
+                    todoChunks.size,
+                    key = { idx -> "todo_standalone_${cols}_$idx" },
+                    contentType = { "todo_row" }
+                ) { idx ->
+                    val chunk = todoChunks[idx]
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        chunk.forEach { todo ->
+                            TodoHabitSquare(
+                                cap = todo,
+                                colors = colors,
+                                onComplete = { onCompleteTodo(todo.id) },
+                                modifier = Modifier.weight(1f)
+                            )
+                        }
+                        repeat(cols - chunk.size) {
                             Spacer(Modifier.weight(1f))
                         }
                     }
@@ -629,6 +770,8 @@ private data class TodayHabitRowModel(
     val isDone: Boolean,
     val isSkipped: Boolean,
     val isSimpleTapAdd: Boolean,
+    /** Consecutive due-day completions for flame marker. */
+    val streak: Int = 0,
     /** Icon/letter — drawn via [GlyphIcon] (emoji cached as bitmap). */
     val glyph: String,
     val title: String,
@@ -864,6 +1007,67 @@ private fun RecentWriteFlashCard(
     }
 }
 
+private fun isWorkGroup(timeHint: String, name: String): Boolean {
+    val hint = timeHint.uppercase()
+    val n = name.lowercase()
+    return hint == "WORK" ||
+        n.contains("work") ||
+        n.contains("focus") ||
+        n.contains("deep") ||
+        n.contains("office")
+}
+
+/** Todo capture rendered like a habit square inside the Work section. */
+@Composable
+@OptIn(ExperimentalFoundationApi::class)
+private fun TodoHabitSquare(
+    cap: CaptureItem,
+    colors: TodayListColors,
+    onComplete: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Column(
+        modifier = modifier
+            .aspectRatio(1f)
+            .background(colors.surface, RoundedCornerShape(14.dp))
+            .combinedClickable(
+                onClick = onComplete,
+                onLongClick = onComplete
+            )
+            .padding(8.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
+    ) {
+        Text(CaptureTags.glyph(CaptureTags.TODO), fontSize = 22.sp)
+        Spacer(Modifier.height(6.dp))
+        BasicText(
+            text = cap.title.ifBlank { "Todo" },
+            style = TextStyle(
+                color = colors.onSurface,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.SemiBold
+            ),
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis
+        )
+        if (cap.note.isNotBlank()) {
+            Spacer(Modifier.height(2.dp))
+            BasicText(
+                text = cap.note,
+                style = TextStyle(color = colors.onSurfaceVariant, fontSize = 9.sp),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        } else {
+            Spacer(Modifier.height(2.dp))
+            BasicText(
+                text = "tap to done",
+                style = TextStyle(color = colors.primary, fontSize = 9.sp)
+            )
+        }
+    }
+}
+
 /** #46 Square habit tile — denser Today layout (3-up grid). Tap = log; long-press = skip. */
 @Composable
 @OptIn(ExperimentalFoundationApi::class)
@@ -880,25 +1084,53 @@ private fun HabitSquare(
     val habit = model.habit
     val isDone = model.isDone
     val isSkipped = model.isSkipped
+    val streak = model.streak
 
     val container = when {
         isSkipped -> colors.surfaceVariant
-        isDone && habit.type == HabitType.CHECKBOX -> colors.primary.copy(alpha = 0.28f)
-        isDone -> colors.primary.copy(alpha = 0.18f)
+        // Done tiles: muted / grayed so they recede behind pending work
+        isDone -> colors.surfaceVariant.copy(alpha = 0.55f)
         else -> colors.surface
     }
     val showCheck = habit.type == HabitType.CHECKBOX && isDone && !isSkipped
-    val titleColor = if (isSkipped) Color(0xFFF87171) else colors.onSurface
+    val titleColor = when {
+        isSkipped -> Color(0xFFF87171)
+        isDone -> colors.onSurfaceVariant.copy(alpha = 0.72f)
+        else -> colors.onSurface
+    }
+    val iconTint = if (isDone && !isSkipped) {
+        colors.onSurfaceVariant.copy(alpha = 0.55f)
+    } else {
+        colors.primary
+    }
     val statusGlyph = when {
         isSkipped -> "›"
         showCheck -> "✓"
-        isDone -> "·"
+        isDone -> "✓"
         else -> ""
+    }
+    val flame = when {
+        streak <= 0 -> ""
+        streak < 3 -> "🕯️"
+        streak < 7 -> "🔥"
+        streak < 14 -> "🔥"
+        streak < 30 -> "🔥🔥"
+        else -> "🔥🔥"
+    }
+    // Flame “grows” with streak length
+    val flameSize = when {
+        streak <= 0 -> 0.sp
+        streak < 3 -> 10.sp
+        streak < 7 -> 12.sp
+        streak < 14 -> 14.sp
+        streak < 30 -> 15.sp
+        else -> 16.sp
     }
 
     Column(
         modifier = modifier
             .aspectRatio(1f)
+            .alpha(if (isDone && !isSkipped) 0.72f else 1f)
             .background(container, RoundedCornerShape(14.dp))
             .combinedClickable(
                 onClick = {
@@ -928,14 +1160,16 @@ private fun HabitSquare(
             GlyphIcon(
                 glyph = model.glyph,
                 size = 26.dp,
-                tintForSimple = colors.primary,
-                modifier = Modifier.align(Alignment.Center)
+                tintForSimple = iconTint,
+                modifier = Modifier
+                    .align(Alignment.Center)
+                    .alpha(if (isDone && !isSkipped) 0.55f else 1f)
             )
             if (statusGlyph.isNotEmpty()) {
                 BasicText(
                     text = statusGlyph,
                     style = TextStyle(
-                        color = if (isSkipped) Color(0xFFF87171) else colors.primary,
+                        color = if (isSkipped) Color(0xFFF87171) else colors.onSurfaceVariant,
                         fontSize = 12.sp,
                         fontWeight = FontWeight.Bold
                     ),
@@ -943,7 +1177,7 @@ private fun HabitSquare(
                 )
             }
         }
-        Spacer(Modifier.height(6.dp))
+        Spacer(Modifier.height(4.dp))
         BasicText(
             text = model.title,
             style = TextStyle(
@@ -954,7 +1188,35 @@ private fun HabitSquare(
             maxLines = 2,
             overflow = TextOverflow.Ellipsis
         )
-        if (model.metaLine.isNotBlank()) {
+        if (streak > 0 && flame.isNotEmpty()) {
+            Spacer(Modifier.height(2.dp))
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.Center
+            ) {
+                BasicText(
+                    text = flame,
+                    style = TextStyle(fontSize = flameSize)
+                )
+                Spacer(Modifier.width(2.dp))
+                BasicText(
+                    text = streak.toString(),
+                    style = TextStyle(
+                        color = if (isDone) {
+                            colors.onSurfaceVariant.copy(alpha = 0.85f)
+                        } else {
+                            colors.primary
+                        },
+                        fontSize = when {
+                            streak < 7 -> 10.sp
+                            streak < 14 -> 11.sp
+                            else -> 12.sp
+                        },
+                        fontWeight = FontWeight.Bold
+                    )
+                )
+            }
+        } else if (model.metaLine.isNotBlank() && !isDone) {
             Spacer(Modifier.height(2.dp))
             BasicText(
                 text = model.metaLine,

@@ -64,10 +64,11 @@ class AndroidHabitRepository(private val context: Context) : HabitRepository {
         }
 
     override suspend fun saveData(data: AppData) {
-        // Update cache immediately so subsequent flow emissions / reads are fast (perf #18)
-        val encoded = json.encodeToString(data)
+        // Purge expired trash, then persist full AppData (encodeDefaults keeps all settings)
+        val cleaned = data.withPurgedExpiredTrash()
+        val encoded = json.encodeToString(cleaned)
         lastJson = encoded
-        cachedParsed = data
+        cachedParsed = cleaned
         context.dataStore.edit { preferences ->
             preferences[DATA_KEY] = encoded
         }
@@ -75,21 +76,29 @@ class AndroidHabitRepository(private val context: Context) : HabitRepository {
 
     /**
      * Decode a full JSON backup (same shape as DataStore / Export Backup).
-     * Applies schema migration + score finalization. Throws on invalid JSON.
+     * Applies schema migration + score finalization + trash purge. Throws on invalid JSON.
      */
     fun decodeBackupJson(jsonString: String): AppData {
         val parsed = json.decodeFromString<AppData>(jsonString)
-        return migrateIfNeeded(parsed)
+        return migrateIfNeeded(parsed).withPurgedExpiredTrash()
     }
 
-    /** Encode full AppData for export (pretty optional for human editing). */
+    /**
+     * Encode full AppData for export — all settings, prefs, entries, trash, extensions.
+     * [encodeDefaults] = true so restores never drop unset fields.
+     */
     fun encodeBackupJson(data: AppData, pretty: Boolean = true): String {
+        val cleaned = data.withPurgedExpiredTrash()
         val encoder = if (pretty) {
-            Json { prettyPrint = true; encodeDefaults = true; ignoreUnknownKeys = true }
+            Json {
+                prettyPrint = true
+                encodeDefaults = true
+                ignoreUnknownKeys = true
+            }
         } else {
             json
         }
-        return encoder.encodeToString(data)
+        return encoder.encodeToString(cleaned)
     }
 
     /**
@@ -105,7 +114,9 @@ class AndroidHabitRepository(private val context: Context) : HabitRepository {
     fun migrateIfNeeded(data: AppData): AppData {
         // Empty habits are valid (clean slate / first-run builder). Only require groups + tags structure.
         if (data.schemaVersion >= 14 && data.groups.isNotEmpty() && data.tags.isNotEmpty()) {
-            return HabitDomain.withFinalizedScoreHistory(data.withJournalCapturesArchived())
+            return HabitDomain.withFinalizedScoreHistory(
+                data.withJournalCapturesArchived().withPurgedExpiredTrash()
+            )
         }
         if (data.schemaVersion >= 13 && data.groups.isNotEmpty() && data.tags.isNotEmpty()) {
             return HabitDomain.withFinalizedScoreHistory(

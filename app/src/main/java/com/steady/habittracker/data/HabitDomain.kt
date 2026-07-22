@@ -137,21 +137,32 @@ object HabitDomain {
     /**
      * Pure visual day progression: sections top→bottom in day order (Morning → … → Sleep).
      * No clock labels — only names + isNow / isPast for a soft “you are here” cue.
-     * Only sections with pending habits are returned (action-oriented Today).
+     * By default only pending habits (action-oriented Today).
+     * [includeCompleted] also shows finished items (grayed in UI) so streaks stay visible.
      */
     fun timelineSectionsForToday(
         data: AppData,
         date: LocalDate = LocalDate.now(),
-        now: LocalTime = LocalTime.now()
+        now: LocalTime = LocalTime.now(),
+        includeCompleted: Boolean = false
     ): List<TimelineSection> {
         val dateStr = date.toString()
         val entries = data.entries[dateStr] ?: emptyMap()
-        val duePending = habitsDueOn(data, date).filter { isPendingEntry(entries[it.id]) }
-        if (duePending.isEmpty()) return emptyList()
+        val due = habitsDueOn(data, date)
+        val shown = if (includeCompleted) {
+            // Pending + completed; keep skipped out of the grid (they already left the day).
+            due.filter { h ->
+                val e = entries[h.id]
+                isPendingEntry(e) || ((e?.value ?: 0.0) >= 0.5 && e?.skipped != true)
+            }
+        } else {
+            due.filter { isPendingEntry(entries[it.id]) }
+        }
+        if (shown.isEmpty()) return emptyList()
 
         // Multi-group expansion (#24): habit appears under every membership group
         val byGroup = mutableMapOf<String, MutableList<Habit>>()
-        duePending.forEach { h ->
+        shown.forEach { h ->
             membershipGroupIds(h).forEach { gid ->
                 byGroup.getOrPut(gid) { mutableListOf() }.add(h)
             }
@@ -159,6 +170,14 @@ object HabitDomain {
         val orderedIds = orderedGroupIdsForDay(data, now)
         val currentId = resolveCurrentGroup(data, now)?.id
         val currentIndex = orderedIds.indexOf(currentId).takeIf { it >= 0 }
+
+        fun orderForSection(habits: List<Habit>): List<Habit> {
+            val stacked = sortByStack(habits, data.habits)
+            if (!includeCompleted) return stacked
+            val pending = stacked.filter { isPendingEntry(entries[it.id]) }
+            val done = stacked.filter { !isPendingEntry(entries[it.id]) }
+            return pending + done
+        }
 
         val sections = mutableListOf<TimelineSection>()
         orderedIds.forEachIndexed { index, gid ->
@@ -171,7 +190,7 @@ object HabitDomain {
             sections.add(
                 TimelineSection(
                     group = group,
-                    habits = sortByStack(habits, data.habits),
+                    habits = orderForSection(habits),
                     isNow = isNow,
                     isPast = isPast && !isNow,
                     isFuture = isFuture && !isNow
@@ -186,7 +205,7 @@ object HabitDomain {
             sections.add(
                 TimelineSection(
                     group = group,
-                    habits = sortByStack(habits, data.habits),
+                    habits = orderForSection(habits),
                     isNow = gid == currentId,
                     isPast = false,
                     isFuture = true
@@ -363,6 +382,47 @@ object HabitDomain {
             if (streak > 365) break
         }
         return streak
+    }
+
+    /**
+     * Consecutive due-days this habit was completed (value ≥ 0.5, not skipped).
+     * Days the habit was not due are skipped without breaking the chain.
+     * If today is still pending, the streak starts from yesterday (streak not lost mid-day).
+     */
+    fun computeHabitStreak(data: AppData, habitId: String): Int {
+        val habit = data.habits.find { it.id == habitId && !it.archived } ?: return 0
+        var streak = 0
+        var checkDate = LocalDate.parse(getToday())
+        var started = false
+        repeat(400) {
+            val dueToday = isDueOn(habit, checkDate)
+            val key = checkDate.toString()
+            val entry = data.entries[key]?.get(habitId)
+            val done = entry != null && !entry.skipped && entry.value >= 0.5
+            if (dueToday) {
+                if (done) {
+                    streak++
+                    started = true
+                } else {
+                    // Today still open: don't break yet — look at prior days.
+                    if (started || checkDate != LocalDate.parse(getToday())) {
+                        return streak
+                    }
+                }
+            }
+            checkDate = checkDate.minusDays(1)
+        }
+        return streak
+    }
+
+    /** Flame glyph that “grows” with streak length (UI companion to [computeHabitStreak]). */
+    fun streakFlameEmoji(streak: Int): String = when {
+        streak <= 0 -> ""
+        streak < 3 -> "🕯️"
+        streak < 7 -> "🔥"
+        streak < 14 -> "🔥"
+        streak < 30 -> "🔥"
+        else -> "🔥"
     }
 
     /** Completion among habits *due* that day (not full catalog). */
@@ -1395,6 +1455,67 @@ object HabitDomain {
     }
 
     /**
+     * Group-aware ESM spacing:
+     * - MORNING: ~2 check-ins in the morning window → ~45–60 min
+     * - WORK: every ~[minInterval] minutes (default 30)
+     * - BEDTIME / evening: 2–3 total → ~60–90 min
+     * - SLEEP / quiet-ish: max interval
+     */
+    fun suggestedCheckInSpacingMinutes(
+        data: AppData,
+        minI: Int,
+        maxI: Int,
+        base: Int,
+        now: LocalTime = LocalTime.now()
+    ): Int {
+        val g = resolveCurrentGroup(data, now)
+        val hint = g?.timeHint?.uppercase().orEmpty()
+        val name = g?.name?.lowercase().orEmpty()
+        val isMorning = hint == "MORNING" || name.contains("morn") || name.contains("wake")
+        val isWork = hint == "WORK" || name.contains("work") || name.contains("focus")
+        val isEvening = hint == "BEDTIME" || name.contains("even") || name.contains("bed") || name.contains("wind")
+        val isSleep = hint == "SLEEP" || name.contains("sleep")
+        val raw = when {
+            isWork -> minI
+            isMorning -> ((minI + maxI) / 2).coerceAtLeast(40)
+            isEvening -> (minI * 2).coerceIn(minI, maxI)
+            isSleep -> maxI
+            else -> base
+        }
+        return raw.coerceIn(minI, maxI)
+    }
+
+    /**
+     * If [triggerMillis] falls outside typical check-in windows (sleep / deep night),
+     * nudge to next morning / work window start when possible.
+     */
+    fun alignCheckInToGroupWindow(
+        triggerMillis: Long,
+        data: AppData,
+        prefs: NotificationPrefs,
+        zone: ZoneId = ZoneId.systemDefault()
+    ): Long {
+        val zdt = Instant.ofEpochMilli(triggerMillis).atZone(zone)
+        val t = zdt.toLocalTime()
+        val g = resolveCurrentGroup(data, t)
+        val hint = g?.timeHint?.uppercase().orEmpty()
+        val name = g?.name?.lowercase().orEmpty()
+        val isSleep = hint == "SLEEP" || name.contains("sleep")
+        if (!isSleep && !isInQuietHours(prefs, t.hour * 60 + t.minute)) {
+            return triggerMillis
+        }
+        // Next wake / morning: use sleep.wakeTime when set
+        val wake = parseTimeToMinutes(data.sleep.wakeTime)
+        var target = zdt.withHour(wake / 60).withMinute(wake % 60).withSecond(0).withNano(0)
+        if (!target.toInstant().isAfter(Instant.ofEpochMilli(triggerMillis))) {
+            target = target.plusDays(1)
+        }
+        // Slight jitter into morning (0–40 min)
+        target = target.plusMinutes((0..40).random().toLong())
+        return pushPastQuietHours(target.toInstant().toEpochMilli(), prefs, zone)
+    }
+
+    /**
      * Median log minute-of-day for habits belonging to [groupId], from [HabitEntry.loggedAt].
      * Returns null if fewer than [ADAPTIVE_MIN_SAMPLES] samples.
      */
@@ -1576,8 +1697,12 @@ fun pendingGroupedForDate(data: AppData, date: LocalDate = LocalDate.now()) = Ha
 fun timelineSectionsForToday(
     data: AppData,
     date: LocalDate = LocalDate.now(),
-    now: LocalTime = LocalTime.now()
-) = HabitDomain.timelineSectionsForToday(data, date, now)
+    now: LocalTime = LocalTime.now(),
+    includeCompleted: Boolean = false
+) = HabitDomain.timelineSectionsForToday(data, date, now, includeCompleted)
+
+fun computeHabitStreak(data: AppData, habitId: String): Int =
+    HabitDomain.computeHabitStreak(data, habitId)
 fun showRuleLabel(habit: Habit): String = HabitDomain.showRuleLabel(habit)
 
 /** One spine section on Today / widget (pure visual day order). */

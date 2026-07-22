@@ -331,7 +331,14 @@ data class CapturePrefs(
     val placeholderTitle: String = "What's on your mind?",
     val placeholderNote: String = "Optional details…",
     /** Confirm button label. */
-    val saveLabel: String = "Save"
+    val saveLabel: String = "Save",
+    /**
+     * Soft-deleted journal/inbox items stay in trash this many days before permanent purge.
+     * Default 30. Range 1–365 in UI.
+     */
+    val trashRetainDays: Int = 30,
+    /** When true, Journal shows a Trash filter chip. */
+    val showTrashInJournal: Boolean = true
 ) {
     fun visibleTags(): List<String> {
         val base = if (enabledTags.isEmpty()) CaptureTags.PRESETS else enabledTags
@@ -357,22 +364,30 @@ data class CapturePrefs(
     }
 }
 
-/** Pending (open) inbox captures — Ideas / Todo / Reminders etc. */
+/** Pending (open) inbox captures — Ideas / Todo / Reminders etc. (excludes trash). */
 fun AppData.inboxCaptures(): List<CaptureItem> {
     val prefs = capturePrefs
     return captures
-        .filter { !it.processed && prefs.goesToInbox(it.tags) }
+        .filter { !it.isTrashed && !it.processed && prefs.goesToInbox(it.tags) }
         .sortedByDescending { it.createdAt }
 }
 
+/** Open Todo-tagged captures for Today Work section. */
+fun AppData.openTodoCaptures(): List<CaptureItem> {
+    return inboxCaptures().filter { cap ->
+        cap.tags.any { it.equals(CaptureTags.TODO, ignoreCase = true) }
+    }
+}
+
 /**
- * Journal / archive — reflections and completed inbox items.
+ * Journal / archive — reflections and completed inbox items (excludes trash).
  * Includes auto-archived non-inbox tags (memories, gratitude, …) and manually done inbox items.
  */
 fun AppData.journalCaptures(): List<CaptureItem> {
     val prefs = capturePrefs
     return captures
         .filter { cap ->
+            if (cap.isTrashed) return@filter false
             // Auto-archived journal entries (never were open inbox)
             (!prefs.goesToInbox(cap.tags)) ||
                 // Or closed inbox items
@@ -385,8 +400,46 @@ fun AppData.journalCaptures(): List<CaptureItem> {
 fun AppData.reflectionCaptures(): List<CaptureItem> {
     val prefs = capturePrefs
     return captures
-        .filter { !prefs.goesToInbox(it.tags) }
+        .filter { !it.isTrashed && !prefs.goesToInbox(it.tags) }
         .sortedByDescending { it.createdAt }
+}
+
+/** Soft-deleted captures still within retention window. */
+fun AppData.trashedCaptures(): List<CaptureItem> =
+    captures.filter { it.isTrashed }.sortedByDescending { it.deletedAt ?: 0L }
+
+/** Move capture to trash (soft delete). */
+fun AppData.withCaptureTrashed(id: String, atMs: Long = System.currentTimeMillis()): AppData =
+    copy(
+        captures = captures.map {
+            if (it.id == id) it.copy(deletedAt = atMs) else it
+        }
+    )
+
+/** Restore a capture from trash. */
+fun AppData.withCaptureRestored(id: String): AppData =
+    copy(
+        captures = captures.map {
+            if (it.id == id) it.copy(deletedAt = null) else it
+        }
+    )
+
+/** Permanently remove one capture. */
+fun AppData.withoutCapturePermanent(id: String): AppData =
+    copy(captures = captures.filter { it.id != id })
+
+/**
+ * Drop trash older than [CapturePrefs.trashRetainDays].
+ * Call on load / save / journal open so retention is enforced.
+ */
+fun AppData.withPurgedExpiredTrash(nowMs: Long = System.currentTimeMillis()): AppData {
+    val days = capturePrefs.trashRetainDays.coerceIn(1, 365)
+    val cutoff = nowMs - days * 24L * 60L * 60L * 1000L
+    val kept = captures.filter { cap ->
+        val del = cap.deletedAt ?: return@filter true
+        del >= cutoff
+    }
+    return if (kept.size == captures.size) this else copy(captures = kept)
 }
 
 /** Pending or last sensor proposal for a habit on a date. */
@@ -488,8 +541,15 @@ data class CaptureItem(
      * so they never enter the action inbox.
      */
     val processed: Boolean = false,
-    val linkedHabitId: String? = null
-)
+    val linkedHabitId: String? = null,
+    /**
+     * Soft-delete timestamp. Null = active. Non-null = in trash until purge after
+     * [CapturePrefs.trashRetainDays].
+     */
+    val deletedAt: Long? = null
+) {
+    val isTrashed: Boolean get() = deletedAt != null
+}
 
 /**
  * Configurable reminder (per group or global "missed review").
@@ -753,8 +813,25 @@ data class NotificationPrefs(
     val motivationalQuotesTime: String = "08:00",
     /** ESM-style random awareness check-ins (#36). */
     val randomCheckInsEnabled: Boolean = false,
-    /** low | medium | high — average spacing between polls. */
+    /** low | medium | high — legacy spacing preset (used when min/max not custom). */
     val randomCheckInFrequency: String = "medium",
+    /**
+     * Minimum minutes between awareness check-ins.
+     * Default 30 — work blocks fire about twice an hour when group-aware.
+     */
+    val checkInMinIntervalMin: Int = 30,
+    /** Maximum minutes between check-ins (caps random spacing). */
+    val checkInMaxIntervalMin: Int = 120,
+    /**
+     * random = uniform spacing in [min,max];
+     * group = denser during WORK, a few in MORNING/BEDTIME windows.
+     */
+    val checkInScheduleMode: String = "group",
+    /**
+     * Quality ESM prompts (research-style). One is picked per fire.
+     * Empty list → [EsmDefaults.QUESTIONS].
+     */
+    val checkInQuestions: List<String> = emptyList(),
     /** Remind about still-pending habits later in the day (#30). */
     val missedHabitReminders: Boolean = false,
     /** Prefer explicit dismiss/snooze over auto-cancel (#30). */
@@ -764,6 +841,27 @@ data class NotificationPrefs(
     /** Last random check-in fire epoch ms (spacing). */
     val lastRandomCheckInAt: Long = 0L
 )
+
+/** Default experience-sampling style prompts for awareness check-ins. */
+object EsmDefaults {
+    val QUESTIONS: List<String> = listOf(
+        "What are you doing right now?",
+        "How energized do you feel (1–5)?",
+        "How calm or stressed do you feel right now?",
+        "Are you present, or is your mind elsewhere?",
+        "Who are you with (or are you alone)?",
+        "How aligned is this with what matters to you today?",
+        "What emotion is strongest in this moment?",
+        "Would you rather be doing something else?",
+        "How is your body feeling (tension, ease, energy)?",
+        "What will you do in the next 15 minutes?"
+    )
+
+    fun questionsFor(prefs: NotificationPrefs): List<String> {
+        val custom = prefs.checkInQuestions.map { it.trim() }.filter { it.isNotEmpty() }
+        return custom.ifEmpty { QUESTIONS }
+    }
+}
 
 /** Classification for overnight loud events (heuristic, not medical diagnosis). */
 @Serializable
@@ -1062,7 +1160,8 @@ fun AppData.withActiveSchedule(scheduleId: String?): AppData = copy(activeSchedu
 fun AppData.withAddedCapture(capture: CaptureItem): AppData = copy(captures = captures + capture)
 fun AppData.withUpdatedCapture(updated: CaptureItem): AppData =
     copy(captures = captures.map { if (it.id == updated.id) updated else it })
-fun AppData.withoutCapture(id: String): AppData = copy(captures = captures.filter { it.id != id })
+/** @deprecated Prefer [withCaptureTrashed] for user deletes; this permanently removes. */
+fun AppData.withoutCapture(id: String): AppData = withoutCapturePermanent(id)
 fun AppData.withCapturePrefs(prefs: CapturePrefs): AppData = copy(capturePrefs = prefs)
 
 fun AppData.withGrokPresets(presets: List<GrokPreset>, lastId: String? = lastGrokPresetId): AppData =

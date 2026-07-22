@@ -58,8 +58,8 @@ import java.time.LocalDate
 /**
  * Manage = three focused areas:
  * - Habits: groups as wide section headers + habits as a 2-column square grid
- * - Blocks: special habit extensions (#33, #37)
- * - Time: sleep/schedule, reminders, sensors, backup
+ * - Blocks: accordion modules with enable checkbox + per-block config (#33, #37)
+ * - Time: day schedule, reminders, backup (block tools live under Blocks)
  */
 @Composable
 fun ManageScreen(
@@ -346,17 +346,19 @@ fun ManageScreen(
                                     )
                                 }
                             } else {
-                                val pairs = habitsInGroup.chunked(2)
+                                // Same square density as Today (2–4 columns from todayGridColumns)
+                                val manageCols = appData.todayGridColumns.coerceIn(2, 4)
+                                val pairs = habitsInGroup.chunked(manageCols)
                                 items(
                                     pairs,
                                     key = { pair ->
-                                        "row_${group.id}_${pair.joinToString("_") { it.id }}"
+                                        "row_${group.id}_${manageCols}_${pair.joinToString("_") { it.id }}"
                                     },
                                     contentType = { "habit_row" }
                                 ) { pair ->
                                     Row(
                                         Modifier.fillMaxWidth(),
-                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp)
                                     ) {
                                         pair.forEach { h ->
                                             Box(Modifier.weight(1f)) {
@@ -397,7 +399,7 @@ fun ManageScreen(
                                                 )
                                             }
                                         }
-                                        if (pair.size == 1) {
+                                        repeat(manageCols - pair.size) {
                                             Spacer(Modifier.weight(1f))
                                         }
                                     }
@@ -627,27 +629,36 @@ fun ManageScreen(
             }
 
             1 -> {
-                // ——— Blocks: special habit extensions (#33, #37) ———
+                // ——— Blocks: accordion modules (enable + config live here, not in Time) ———
                 BlocksConfigSection(
                     appData = appData,
                     groups = activeGroups,
                     onAddExtension = onAddExtensionBlock,
+                    onArchiveHabit = onDeleteHabit,
                     onEditHabit = { showEditHabit = it },
                     onUpdateLocalWebPrefs = onUpdateLocalWebPrefs,
                     onUpdateNotificationPrefs = onUpdateNotificationPrefs,
-                    onUpdateCapturePrefs = onUpdateCapturePrefs
+                    onUpdateCapturePrefs = onUpdateCapturePrefs,
+                    onSetAutoLogMasterEnabled = onSetAutoLogMasterEnabled,
+                    onRunAutoLogNow = onRunAutoLogNow,
+                    onUpdateSleepAudioPrefs = onUpdateSleepAudioPrefs,
+                    onStartSleepAudio = onStartSleepAudio,
+                    onStopSleepAudio = onStopSleepAudio,
+                    onLoadBlueprintRoutines = onLoadBlueprintRoutines,
+                    onSaveRoutine = onSaveRoutine,
+                    onStartRoutine = onStartRoutine
                 )
             }
 
             else -> {
-                // ——— Time: day schedule, reminders, sensors, backup (collapsible panels) ———
+                // ——— Time: schedule, reminders, backup only (block configs live under Blocks) ———
                 LazyColumn(
                     modifier = Modifier.weight(1f),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     item {
                         Text(
-                            "When your day happens",
+                            "When your day happens · block tools are under Blocks",
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             fontSize = 12.sp,
                             modifier = Modifier.padding(bottom = 2.dp)
@@ -707,39 +718,10 @@ fun ManageScreen(
                     }
                     item {
                         TimePanel(
-                            title = "Sensors & auto-log",
-                            subtitle = "Screen, light, noise, steps — permissions here",
-                            expanded = timeSection == 2,
-                            onToggle = { timeSection = if (timeSection == 2) -1 else 2 }
-                        ) {
-                            AutoLogCard(
-                                appData = appData,
-                                onToggleMaster = onSetAutoLogMasterEnabled,
-                                onSyncNow = onRunAutoLogNow
-                            )
-                        }
-                    }
-                    item {
-                        TimePanel(
-                            title = "Sleep audio",
-                            subtitle = "Overnight snore / loud-event capture",
-                            expanded = timeSection == 3,
-                            onToggle = { timeSection = if (timeSection == 3) -1 else 3 }
-                        ) {
-                            SleepAudioCard(
-                                appData = appData,
-                                onUpdatePrefs = onUpdateSleepAudioPrefs,
-                                onStartNow = onStartSleepAudio,
-                                onStopNow = onStopSleepAudio
-                            )
-                        }
-                    }
-                    item {
-                        TimePanel(
                             title = "Backup",
                             subtitle = "Export / import full Steady JSON",
-                            expanded = timeSection == 4,
-                            onToggle = { timeSection = if (timeSection == 4) -1 else 4 }
+                            expanded = timeSection == 2,
+                            onToggle = { timeSection = if (timeSection == 2) -1 else 2 }
                         ) {
                             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                                 Text(
@@ -1973,6 +1955,34 @@ private fun CapturePrefsCard(
                 }
             }
 
+            Text("Trash", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+            Text(
+                "Deleted journal entries stay recoverable for this many days",
+                fontSize = 10.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                listOf(7, 14, 30, 60, 90).forEach { d ->
+                    FilterChip(
+                        selected = prefs.trashRetainDays == d,
+                        onClick = { onUpdate(prefs.copy(trashRetainDays = d)) },
+                        label = { Text("${d}d", fontSize = 11.sp) }
+                    )
+                }
+            }
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text("Show trash tab in Journal", fontSize = 13.sp)
+                }
+                Switch(
+                    checked = prefs.showTrashInJournal,
+                    onCheckedChange = { onUpdate(prefs.copy(showTrashInJournal = it)) }
+                )
+            }
             Row(
                 Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -2139,448 +2149,1073 @@ private fun BlocksConfigSection(
     appData: AppData,
     groups: List<Group>,
     onAddExtension: (com.steady.habittracker.data.ExtensionType, String?) -> Unit,
+    onArchiveHabit: (String) -> Unit,
     onEditHabit: (Habit) -> Unit,
     onUpdateLocalWebPrefs: (com.steady.habittracker.data.LocalWebPrefs) -> Unit,
     onUpdateNotificationPrefs: (NotificationPrefs) -> Unit,
-    onUpdateCapturePrefs: (com.steady.habittracker.data.CapturePrefs) -> Unit = {}
+    onUpdateCapturePrefs: (com.steady.habittracker.data.CapturePrefs) -> Unit = {},
+    onSetAutoLogMasterEnabled: (Boolean) -> Unit = {},
+    onRunAutoLogNow: () -> Unit = {},
+    onUpdateSleepAudioPrefs: (SleepAudioPrefs) -> Unit = {},
+    onStartSleepAudio: () -> Unit = {},
+    onStopSleepAudio: () -> Unit = {},
+    onLoadBlueprintRoutines: () -> Unit = {},
+    onSaveRoutine: (com.steady.habittracker.data.ExerciseRoutine) -> Unit = {},
+    onStartRoutine: (com.steady.habittracker.data.ExerciseRoutine) -> Unit = {}
 ) {
-    val context = androidx.compose.ui.platform.LocalContext.current
-    val activeBlocks = remember(appData.habits) {
-        com.steady.habittracker.data.ExtensionCatalog.activeExtensionHabits(appData)
+    // Only one accordion open at a time (block type name or tool key).
+    var expandedKey by remember { mutableStateOf<String?>(null) }
+    var routineEditor by remember {
+        mutableStateOf<com.steady.habittracker.data.ExerciseRoutine?>(null)
     }
+    var showNewRoutineEditor by remember { mutableStateOf(false) }
     val prefs = appData.notificationPrefs
     val web = appData.localWebPrefs
+    val canAdd = groups.isNotEmpty()
+
+    fun isTypeEnabled(type: com.steady.habittracker.data.ExtensionType): Boolean =
+        appData.habits.any { !it.archived && it.extensionType == type }
+
+    fun habitsOf(type: com.steady.habittracker.data.ExtensionType): List<Habit> =
+        appData.habits.filter { !it.archived && it.extensionType == type }
+
+    fun setTypeEnabled(type: com.steady.habittracker.data.ExtensionType, enabled: Boolean) {
+        if (enabled) {
+            if (!isTypeEnabled(type) && canAdd) onAddExtension(type, null)
+            when (type) {
+                com.steady.habittracker.data.ExtensionType.SNORE_WATCH_ACTIVATE,
+                com.steady.habittracker.data.ExtensionType.SNORE_WATCH_STOP -> {
+                    if (!appData.sleepAudioPrefs.enabled) {
+                        onUpdateSleepAudioPrefs(appData.sleepAudioPrefs.copy(enabled = true))
+                    }
+                }
+                com.steady.habittracker.data.ExtensionType.SENSOR_AUTO_READ,
+                com.steady.habittracker.data.ExtensionType.SCREEN_USAGE -> {
+                    if (!appData.autoLogMasterEnabled) onSetAutoLogMasterEnabled(true)
+                }
+                else -> Unit
+            }
+            expandedKey = type.name
+        } else {
+            habitsOf(type).forEach { onArchiveHabit(it.id) }
+            // After archiving this type, disable shared masters only when nothing else needs them.
+            when (type) {
+                com.steady.habittracker.data.ExtensionType.SNORE_WATCH_ACTIVATE,
+                com.steady.habittracker.data.ExtensionType.SNORE_WATCH_STOP -> {
+                    val otherSnore = appData.habits.any { h ->
+                        !h.archived &&
+                            h.extensionType != type &&
+                            (
+                                h.extensionType == com.steady.habittracker.data.ExtensionType.SNORE_WATCH_ACTIVATE ||
+                                    h.extensionType == com.steady.habittracker.data.ExtensionType.SNORE_WATCH_STOP
+                            )
+                    }
+                    if (!otherSnore && appData.sleepAudioPrefs.enabled) {
+                        onUpdateSleepAudioPrefs(appData.sleepAudioPrefs.copy(enabled = false))
+                    }
+                }
+                else -> Unit
+            }
+            if (expandedKey == type.name) expandedKey = null
+        }
+    }
+
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
-        verticalArrangement = Arrangement.spacedBy(10.dp)
+        verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         item {
             Text(
-                "Special habit blocks",
+                "Habit blocks",
                 fontWeight = FontWeight.SemiBold,
                 color = MaterialTheme.colorScheme.primary,
                 fontSize = 14.sp
             )
             Text(
-                "Extensions appear on Today & the widget like normal habits. Add a template to a suggested group, then place it on the timeline in Time.",
+                "Check a block to enable it. Tap the row to open its settings (one section at a time). " +
+                    "Enabled blocks appear on Today & the widget — place them on the day timeline in Time.",
                 fontSize = 11.sp,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
-        items(com.steady.habittracker.data.ExtensionCatalog.TEMPLATES, key = { it.type.name }) { t ->
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                shape = RoundedCornerShape(12.dp)
+
+        items(
+            com.steady.habittracker.data.ExtensionCatalog.TEMPLATES,
+            key = { it.type.name }
+        ) { t ->
+            val type = t.type
+            val enabled = isTypeEnabled(type)
+            val expanded = expandedKey == type.name
+            val active = habitsOf(type)
+            BlockAccordion(
+                title = "${t.defaultIcon} ${t.title}",
+                subtitle = if (enabled) {
+                    "${t.category} · ${active.size} active"
+                } else {
+                    "${t.category} · off"
+                },
+                enabled = enabled,
+                expanded = expanded,
+                canEnable = canAdd || enabled,
+                onToggleExpand = {
+                    expandedKey = if (expanded) null else type.name
+                },
+                onEnabledChange = { on -> setTypeEnabled(type, on) }
             ) {
-                Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text("${t.defaultIcon} ${t.title}", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
-                    Text(t.description, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Text(t.category, fontSize = 10.sp, color = MaterialTheme.colorScheme.primary)
-                    val count = appData.habits.count { !it.archived && it.extensionType == t.type }
+                Text(
+                    t.description,
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                // Always show permissions so users can grant before enabling
+                BlockPermissionPanel(type = type)
+
+                if (!enabled) {
+                    Text(
+                        "Check the box to add this block to your planner.",
+                        fontSize = 11.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                } else {
+                    when (type) {
+                        com.steady.habittracker.data.ExtensionType.SNORE_WATCH_ACTIVATE,
+                        com.steady.habittracker.data.ExtensionType.SNORE_WATCH_STOP -> {
+                            SleepAudioCard(
+                                appData = appData,
+                                onUpdatePrefs = onUpdateSleepAudioPrefs,
+                                onStartNow = onStartSleepAudio,
+                                onStopNow = onStopSleepAudio
+                            )
+                        }
+                        com.steady.habittracker.data.ExtensionType.SENSOR_AUTO_READ -> {
+                            AutoLogCard(
+                                appData = appData,
+                                onToggleMaster = onSetAutoLogMasterEnabled,
+                                onSyncNow = onRunAutoLogNow
+                            )
+                        }
+                        com.steady.habittracker.data.ExtensionType.SCREEN_USAGE -> {
+                            ScreenUsageBlockPanel(appData = appData)
+                            AutoLogCard(
+                                appData = appData,
+                                onToggleMaster = onSetAutoLogMasterEnabled,
+                                onSyncNow = onRunAutoLogNow
+                            )
+                        }
+                        com.steady.habittracker.data.ExtensionType.ESM_CHECKIN -> {
+                            EsmCheckInBlockPanel(
+                                prefs = prefs,
+                                onUpdate = onUpdateNotificationPrefs
+                            )
+                        }
+                        com.steady.habittracker.data.ExtensionType.POMODORO -> {
+                            Text(
+                                "Work/break minutes are on each Focus habit (edit square). " +
+                                    "Optional LAN timer UI is under Tools → Local web below.",
+                                fontSize = 11.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        com.steady.habittracker.data.ExtensionType.WORKOUT_SESSION -> {
+                            WorkoutBlockPanel(
+                                appData = appData,
+                                onLoadBlueprint = onLoadBlueprintRoutines,
+                                onNewRoutine = { showNewRoutineEditor = true },
+                                onEditRoutine = { routineEditor = it },
+                                onStart = onStartRoutine
+                            )
+                        }
+                        else -> Unit
+                    }
+
+                    if (active.isNotEmpty()) {
+                        Text(
+                            "On planner",
+                            fontWeight = FontWeight.SemiBold,
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        active.forEach { h ->
+                            Card(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable { onEditHabit(h) },
+                                colors = CardDefaults.cardColors(
+                                    containerColor = MaterialTheme.colorScheme.surfaceVariant
+                                ),
+                                shape = RoundedCornerShape(10.dp)
+                            ) {
+                                Column(Modifier.padding(10.dp)) {
+                                    Text(
+                                        "${h.icon.ifBlank { "◆" }} ${h.name}",
+                                        fontWeight = FontWeight.Medium,
+                                        fontSize = 13.sp
+                                    )
+                                    Text(
+                                        groups.find { it.id == h.groupId }?.name ?: h.groupId,
+                                        fontSize = 11.sp,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                        }
+                    }
                     TextButton(
-                        onClick = { onAddExtension(t.type, null) },
-                        enabled = groups.isNotEmpty()
+                        onClick = { onAddExtension(type, null) },
+                        enabled = canAdd
                     ) {
                         Text(
-                            if (count > 0) "Add another to planner ($count active)" else "Add to planner",
+                            if (active.isEmpty()) "Add to planner" else "Add another",
                             fontSize = 12.sp
                         )
                     }
                 }
             }
         }
-        if (activeBlocks.isNotEmpty()) {
-            item {
-                Text("Active blocks", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
-            }
-            items(activeBlocks, key = { it.id }) { h ->
-                Card(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable { onEditHabit(h) },
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-                    shape = RoundedCornerShape(10.dp)
-                ) {
-                    Column(Modifier.padding(10.dp)) {
-                        Text(
-                            "${h.icon.ifBlank { "◆" }} ${h.name}",
-                            fontWeight = FontWeight.Medium,
-                            fontSize = 13.sp
-                        )
-                        Text(
-                            com.steady.habittracker.data.ExtensionCatalog.label(h.extensionType) +
-                                " · " + (groups.find { it.id == h.groupId }?.name ?: h.groupId),
-                            fontSize = 11.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                }
-            }
-        }
+
         item {
-            CapturePrefsCard(
-                prefs = appData.capturePrefs,
-                onUpdate = onUpdateCapturePrefs
+            Spacer(Modifier.height(4.dp))
+            Text(
+                "Tools",
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.primary,
+                fontSize = 14.sp
+            )
+            Text(
+                "Not day-timeline blocks — capture inbox and optional LAN dashboard.",
+                fontSize = 11.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
+
         item {
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                shape = RoundedCornerShape(12.dp)
+            val key = "tool:capture"
+            val expanded = expandedKey == key
+            BlockAccordion(
+                title = "✏️ Quick Capture",
+                subtitle = if (expanded) "Inbox & journal tags" else "Inbox tags · journal defaults",
+                enabled = true,
+                expanded = expanded,
+                canEnable = true,
+                showEnable = false,
+                onToggleExpand = { expandedKey = if (expanded) null else key },
+                onEnabledChange = {}
             ) {
-                Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text("Awareness & quotes", fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.primary)
-                    Row(
-                        Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column(Modifier.weight(1f)) {
-                            Text("Daily motivational quotes", fontSize = 13.sp)
-                            Text("Consistency quotes each morning", fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                CapturePrefsCard(
+                    prefs = appData.capturePrefs,
+                    onUpdate = onUpdateCapturePrefs
+                )
+            }
+        }
+
+        item {
+            val key = "tool:web"
+            val expanded = expandedKey == key
+            BlockAccordion(
+                title = "🌐 Local web UI",
+                subtitle = if (web.enabled) "Server on · port ${web.port}" else "LAN dashboard · off",
+                enabled = web.enabled,
+                expanded = expanded,
+                canEnable = true,
+                onToggleExpand = { expandedKey = if (expanded) null else key },
+                onEnabledChange = { on ->
+                    onUpdateLocalWebPrefs(web.copy(enabled = on, autoStartedByWifi = false))
+                    if (on) expandedKey = key
+                }
+            ) {
+                LocalWebPrefsContent(
+                    web = web,
+                    onUpdate = onUpdateLocalWebPrefs
+                )
+            }
+        }
+
+        item { Spacer(Modifier.height(24.dp)) }
+    }
+
+    if (showNewRoutineEditor) {
+        RoutineEditorDialog(
+            existing = null,
+            onDismiss = { showNewRoutineEditor = false },
+            onSave = {
+                onSaveRoutine(it)
+                showNewRoutineEditor = false
+            }
+        )
+    }
+    routineEditor?.let { rt ->
+        RoutineEditorDialog(
+            existing = rt,
+            onDismiss = { routineEditor = null },
+            onSave = {
+                onSaveRoutine(it)
+                routineEditor = null
+            }
+        )
+    }
+}
+
+/** Permissions + quick grant actions for a special block. */
+@Composable
+private fun BlockPermissionPanel(type: com.steady.habittracker.data.ExtensionType) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    var tick by remember { mutableIntStateOf(0) }
+    val micLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.RequestPermission()
+    ) { tick++ }
+    val activityLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.RequestPermission()
+    ) { tick++ }
+    val locationLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.RequestPermission()
+    ) { tick++ }
+    val notifLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.RequestPermission()
+    ) { tick++ }
+
+    val usageOk = remember(tick) {
+        com.steady.habittracker.sensors.ScreenTimeReader.hasUsageAccess(context)
+    }
+    val micOk = remember(tick) {
+        androidx.core.content.ContextCompat.checkSelfPermission(
+            context, android.Manifest.permission.RECORD_AUDIO
+        ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+    }
+    val stepsOk = remember(tick) {
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+            androidx.core.content.ContextCompat.checkSelfPermission(
+                context, android.Manifest.permission.ACTIVITY_RECOGNITION
+            ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+        } else true
+    }
+    val locOk = remember(tick) {
+        androidx.core.content.ContextCompat.checkSelfPermission(
+            context, android.Manifest.permission.ACCESS_COARSE_LOCATION
+        ) == android.content.pm.PackageManager.PERMISSION_GRANTED ||
+            androidx.core.content.ContextCompat.checkSelfPermission(
+                context, android.Manifest.permission.ACCESS_FINE_LOCATION
+            ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+    }
+    val notifOk = remember(tick) {
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+            androidx.core.content.ContextCompat.checkSelfPermission(
+                context, android.Manifest.permission.POST_NOTIFICATIONS
+            ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+        } else true
+    }
+
+    data class Need(
+        val title: String,
+        val ok: Boolean,
+        val grant: (() -> Unit)?
+    )
+
+    val needs = when (type) {
+        com.steady.habittracker.data.ExtensionType.SNORE_WATCH_ACTIVATE,
+        com.steady.habittracker.data.ExtensionType.SNORE_WATCH_STOP -> listOf(
+            Need("Microphone (overnight audio)", micOk) {
+                micLauncher.launch(android.Manifest.permission.RECORD_AUDIO)
+            }
+        )
+        com.steady.habittracker.data.ExtensionType.SENSOR_AUTO_READ -> listOf(
+            Need("Usage access (screen time)", usageOk) {
+                try {
+                    context.startActivity(
+                        android.content.Intent(android.provider.Settings.ACTION_USAGE_ACCESS_SETTINGS)
+                    )
+                } catch (_: Exception) { }
+                tick++
+            },
+            Need("Activity / steps", stepsOk) {
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+                    activityLauncher.launch(android.Manifest.permission.ACTIVITY_RECOGNITION)
+                }
+            },
+            Need("Location (optional GPS)", locOk) {
+                locationLauncher.launch(android.Manifest.permission.ACCESS_COARSE_LOCATION)
+            },
+            Need("Microphone (noise)", micOk) {
+                micLauncher.launch(android.Manifest.permission.RECORD_AUDIO)
+            }
+        )
+        com.steady.habittracker.data.ExtensionType.SCREEN_USAGE -> listOf(
+            Need("Usage access (required for totals & apps)", usageOk) {
+                try {
+                    context.startActivity(
+                        android.content.Intent(android.provider.Settings.ACTION_USAGE_ACCESS_SETTINGS)
+                    )
+                } catch (_: Exception) { }
+                tick++
+            }
+        )
+        com.steady.habittracker.data.ExtensionType.ESM_CHECKIN -> listOf(
+            Need("Notifications", notifOk) {
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+                    notifLauncher.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+                }
+            }
+        )
+        com.steady.habittracker.data.ExtensionType.POMODORO -> emptyList()
+        com.steady.habittracker.data.ExtensionType.WORKOUT_SESSION -> emptyList()
+        else -> emptyList()
+    }
+    if (needs.isEmpty()) return
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f)
+        ),
+        shape = RoundedCornerShape(10.dp)
+    ) {
+        Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text(
+                "Permissions",
+                fontWeight = FontWeight.SemiBold,
+                fontSize = 12.sp,
+                color = MaterialTheme.colorScheme.primary
+            )
+            needs.forEach { n ->
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        "${if (n.ok) "✓" else "○"} ${n.title}",
+                        fontSize = 11.sp,
+                        color = if (n.ok) MaterialTheme.colorScheme.primary
+                        else MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    if (!n.ok && n.grant != null) {
+                        TextButton(onClick = n.grant) {
+                            Text("Grant", fontSize = 11.sp)
                         }
-                        Switch(
-                            checked = prefs.motivationalQuotesEnabled,
-                            onCheckedChange = {
-                                onUpdateNotificationPrefs(prefs.copy(motivationalQuotesEnabled = it))
-                            }
-                        )
-                    }
-                    Row(
-                        Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column(Modifier.weight(1f)) {
-                            Text("Random check-ins (ESM)", fontSize = 13.sp)
-                            Text("Gentle “what are you doing?” polls", fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
-                        Switch(
-                            checked = prefs.randomCheckInsEnabled,
-                            onCheckedChange = {
-                                onUpdateNotificationPrefs(prefs.copy(randomCheckInsEnabled = it))
-                            }
-                        )
-                    }
-                    if (prefs.randomCheckInsEnabled) {
-                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                            listOf("low", "medium", "high").forEach { f ->
-                                FilterChip(
-                                    selected = prefs.randomCheckInFrequency == f,
-                                    onClick = {
-                                        onUpdateNotificationPrefs(prefs.copy(randomCheckInFrequency = f))
-                                    },
-                                    label = { Text(f, fontSize = 11.sp) }
-                                )
-                            }
-                        }
-                    }
-                    Row(
-                        Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column(Modifier.weight(1f)) {
-                            Text("Missed habit evening nudge", fontSize = 13.sp)
-                            Text("20:00 if items still pending", fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
-                        Switch(
-                            checked = prefs.missedHabitReminders,
-                            onCheckedChange = {
-                                onUpdateNotificationPrefs(prefs.copy(missedHabitReminders = it))
-                            }
-                        )
                     }
                 }
             }
-        }
-        item {
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                shape = RoundedCornerShape(12.dp)
+            if (type == com.steady.habittracker.data.ExtensionType.SCREEN_USAGE ||
+                type == com.steady.habittracker.data.ExtensionType.SENSOR_AUTO_READ
             ) {
-                Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text("Local web UI (LAN)", fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.primary)
+                TextButton(onClick = { tick++ }) {
+                    Text("Refresh status", fontSize = 11.sp)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ScreenUsageBlockPanel(appData: AppData) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    var tick by remember { mutableIntStateOf(0) }
+    val usageOk = remember(tick) {
+        com.steady.habittracker.sensors.ScreenTimeReader.hasUsageAccess(context)
+    }
+    val minutes = remember(tick, usageOk) {
+        if (usageOk) com.steady.habittracker.sensors.ScreenTimeReader.screenOnMinutes(context) else null
+    }
+    val top = remember(tick, usageOk) {
+        if (usageOk) {
+            com.steady.habittracker.sensors.ScreenTimeReader.topAppsMinutes(context, limit = 5)
+        } else emptyList()
+    }
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        shape = RoundedCornerShape(12.dp)
+    ) {
+        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text(
+                "Screen usage today",
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.primary,
+                fontSize = 13.sp
+            )
+            if (!usageOk) {
+                Text(
+                    "Grant Usage access above, then tap Refresh. Without it Android will not report totals.",
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            } else {
+                Text(
+                    "Total · ${com.steady.habittracker.sensors.ScreenTimeReader.formatMinutes(minutes)}",
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.SemiBold
+                )
+                if (top.isEmpty()) {
                     Text(
-                        "Desktop dashboard for Today, Path, History, inbox, habits, focus, sleep & more. " +
-                            "Use http:// (not https://) on the HTTP port. GrapheneOS: grant Network access for this app.",
+                        "No app breakdown yet (can take a few minutes of use after granting access).",
                         fontSize = 11.sp,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
-                    val currentSsid = remember {
-                        com.steady.habittracker.web.WifiWebMonitor.currentSsid(context)
-                    }
-                    if (currentSsid != null) {
+                } else {
+                    top.forEach { (pkg, min) ->
+                        val label = com.steady.habittracker.sensors.InstalledApps.labelFor(context, pkg)
                         Text(
-                            "Current Wi‑Fi: $currentSsid",
-                            fontSize = 11.sp,
-                            color = MaterialTheme.colorScheme.primary
-                        )
-                    } else {
-                        Text(
-                            "Current Wi‑Fi: unknown (grant Location / Nearby devices to read SSID)",
-                            fontSize = 10.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                            "${label.take(22)} · ${min}m",
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.onSurface
                         )
                     }
-                    Row(
-                        Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text("Enable server", fontSize = 13.sp)
-                        Switch(
-                            checked = web.enabled,
-                            onCheckedChange = {
-                                onUpdateLocalWebPrefs(web.copy(enabled = it, autoStartedByWifi = false))
-                            }
-                        )
-                    }
-                    // Always show security + timer + Wi‑Fi settings
-                    OutlinedTextField(
-                        value = web.pin,
-                        onValueChange = { onUpdateLocalWebPrefs(web.copy(pin = it.take(12))) },
-                        label = { Text(if (web.autoStartOnTrustedWifi) "PIN (required, min 4)" else "Access PIN (recommended)") },
-                        singleLine = true,
-                        supportingText = {
-                            Text(
-                                if (web.pinIsSecure()) "PIN unlocks the web UI on your LAN"
-                                else "Set 4+ characters — required for trusted-Wi‑Fi auto-start",
-                                fontSize = 10.sp
+                }
+                TextButton(onClick = { tick++ }) {
+                    Text("Refresh reading", fontSize = 12.sp)
+                }
+            }
+            val limit = appData.habits
+                .firstOrNull { !it.archived && it.extensionType == com.steady.habittracker.data.ExtensionType.SCREEN_USAGE }
+                ?.extensionConfig?.dailyLimitMinutes
+            if (limit != null) {
+                Text("Soft limit on habit: ${limit}m · edit the habit square to change", fontSize = 10.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+    }
+}
+
+@Composable
+private fun EsmCheckInBlockPanel(
+    prefs: NotificationPrefs,
+    onUpdate: (NotificationPrefs) -> Unit
+) {
+    var customQ by remember {
+        mutableStateOf(prefs.checkInQuestions.joinToString("\n"))
+    }
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        shape = RoundedCornerShape(12.dp)
+    ) {
+        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(
+                "Awareness & check-ins",
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.primary,
+                fontSize = 13.sp
+            )
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text("Enable random check-ins", fontSize = 13.sp)
+                    Text(
+                        "Quality ESM prompts · opens Write with Check-in tag",
+                        fontSize = 10.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Switch(
+                    checked = prefs.randomCheckInsEnabled,
+                    onCheckedChange = { onUpdate(prefs.copy(randomCheckInsEnabled = it)) }
+                )
+            }
+            Text("Schedule mode", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                listOf(
+                    "group" to "By day group",
+                    "random" to "Random"
+                ).forEach { (mode, label) ->
+                    FilterChip(
+                        selected = prefs.checkInScheduleMode == mode,
+                        onClick = { onUpdate(prefs.copy(checkInScheduleMode = mode)) },
+                        label = { Text(label, fontSize = 11.sp) }
+                    )
+                }
+            }
+            Text(
+                "Group mode: a few in morning, ~every min interval at work, 2–3 in evening. Skips sleep.",
+                fontSize = 10.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Text("Interval (minutes)", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+            Text(
+                "Min ${prefs.checkInMinIntervalMin} · Max ${prefs.checkInMaxIntervalMin}",
+                fontSize = 11.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Text("Minimum spacing", fontSize = 11.sp)
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                listOf(15, 30, 45, 60).forEach { m ->
+                    FilterChip(
+                        selected = prefs.checkInMinIntervalMin == m,
+                        onClick = {
+                            onUpdate(
+                                prefs.copy(
+                                    checkInMinIntervalMin = m,
+                                    checkInMaxIntervalMin = prefs.checkInMaxIntervalMin.coerceAtLeast(m)
+                                )
                             )
                         },
-                        modifier = Modifier.fillMaxWidth()
+                        label = { Text("${m}m", fontSize = 11.sp) }
                     )
-                    Text("Manual auto turn-off", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
-                    Text(
-                        "When you enable the server by hand",
-                        fontSize = 10.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        listOf(15 to "15m", 30 to "30m", 60 to "1h", 120 to "2h", 240 to "4h", 0 to "∞").forEach { (mins, label) ->
-                            FilterChip(
-                                selected = web.autoOffMinutes == mins,
-                                onClick = { onUpdateLocalWebPrefs(web.copy(autoOffMinutes = mins)) },
-                                label = { Text(label, fontSize = 11.sp) }
+                }
+            }
+            Text("Maximum spacing", fontSize = 11.sp)
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                listOf(60, 90, 120, 180).forEach { m ->
+                    FilterChip(
+                        selected = prefs.checkInMaxIntervalMin == m,
+                        onClick = {
+                            onUpdate(
+                                prefs.copy(
+                                    checkInMaxIntervalMin = m.coerceAtLeast(prefs.checkInMinIntervalMin)
+                                )
                             )
-                        }
-                    }
-                    Spacer(Modifier.height(4.dp))
-                    Text("Trusted Wi‑Fi", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                        },
+                        label = { Text("${m}m", fontSize = 11.sp) }
+                    )
+                }
+            }
+            Text("Preset density (legacy)", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                listOf("low", "medium", "high").forEach { f ->
+                    FilterChip(
+                        selected = prefs.randomCheckInFrequency == f,
+                        onClick = { onUpdate(prefs.copy(randomCheckInFrequency = f)) },
+                        label = { Text(f, fontSize = 11.sp) }
+                    )
+                }
+            }
+            Text("Questions (one per line)", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+            Text(
+                "Leave blank for proven defaults (${com.steady.habittracker.data.EsmDefaults.QUESTIONS.size} prompts).",
+                fontSize = 10.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            OutlinedTextField(
+                value = customQ,
+                onValueChange = { customQ = it },
+                modifier = Modifier.fillMaxWidth(),
+                minLines = 3,
+                maxLines = 8,
+                placeholder = {
                     Text(
-                        "Auto-start on listed networks with a longer session. Mandatory secure PIN.",
+                        com.steady.habittracker.data.EsmDefaults.QUESTIONS.take(3).joinToString("\n"),
+                        fontSize = 11.sp
+                    )
+                }
+            )
+            TextButton(
+                onClick = {
+                    val list = customQ.lines().map { it.trim() }.filter { it.isNotEmpty() }
+                    onUpdate(prefs.copy(checkInQuestions = list))
+                }
+            ) {
+                Text("Save questions", fontSize = 12.sp)
+            }
+            TextButton(
+                onClick = {
+                    customQ = ""
+                    onUpdate(prefs.copy(checkInQuestions = emptyList()))
+                }
+            ) {
+                Text("Reset to default questions", fontSize = 12.sp)
+            }
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text("Daily motivational quotes", fontSize = 13.sp)
+                    Text(
+                        "At ${prefs.motivationalQuotesTime}",
                         fontSize = 10.sp,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
+                }
+                Switch(
+                    checked = prefs.motivationalQuotesEnabled,
+                    onCheckedChange = { onUpdate(prefs.copy(motivationalQuotesEnabled = it)) }
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun WorkoutBlockPanel(
+    appData: AppData,
+    onLoadBlueprint: () -> Unit,
+    onNewRoutine: () -> Unit,
+    onEditRoutine: (com.steady.habittracker.data.ExerciseRoutine) -> Unit,
+    onStart: (com.steady.habittracker.data.ExerciseRoutine) -> Unit
+) {
+    val routines = remember(appData.routines) {
+        HabitDomain.getActiveRoutines(appData)
+    }
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        shape = RoundedCornerShape(12.dp)
+    ) {
+        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text(
+                "Workout routines",
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.primary,
+                fontSize = 13.sp
+            )
+            Text(
+                "Log sets, reps, weight & RPE per exercise. Seed longevity templates " +
+                    "(calisthenics, gym compounds, Zone 2, stretch) or build your own.",
+                fontSize = 11.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                TextButton(onClick = onLoadBlueprint) {
+                    Text("Load defaults", fontSize = 12.sp)
+                }
+                TextButton(onClick = onNewRoutine) {
+                    Text("New routine", fontSize = 12.sp)
+                }
+            }
+            Text(
+                "Exercise library: ${com.steady.habittracker.data.ExerciseLibrary.ALL.size} movements " +
+                    "(calisthenics · gym · longevity · stretch)",
+                fontSize = 10.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            if (routines.isEmpty()) {
+                Text(
+                    "No routines yet — load defaults or create one.",
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            } else {
+                routines.take(12).forEach { rt ->
                     Row(
-                        Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
+                        Modifier
+                            .fillMaxWidth()
+                            .clickable { onEditRoutine(rt) }
+                            .padding(vertical = 4.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Column(Modifier.weight(1f)) {
-                            Text("Auto-start on trusted Wi‑Fi", fontSize = 13.sp)
+                            Text(rt.name, fontSize = 13.sp, fontWeight = FontWeight.Medium)
                             Text(
-                                if (web.pinIsSecure()) "Uses longer auto-off below"
-                                else "Set a PIN (4+) first",
-                                fontSize = 10.sp,
+                                "${rt.exercises.size} exercises · ~${rt.estimatedDurationMin}m" +
+                                    if (rt.tags.isNotEmpty()) " · ${rt.tags.take(2).joinToString()}" else "",
+                                fontSize = 11.sp,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
-                        Switch(
-                            checked = web.autoStartOnTrustedWifi && web.pinIsSecure(),
-                            enabled = web.pinIsSecure() && web.trustedSsids.isNotEmpty(),
-                            onCheckedChange = {
-                                onUpdateLocalWebPrefs(web.copy(autoStartOnTrustedWifi = it))
-                            }
-                        )
-                    }
-                    Row(
-                        Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column(Modifier.weight(1f)) {
-                            Text("Stop when leaving trusted Wi‑Fi", fontSize = 13.sp)
-                        }
-                        Switch(
-                            checked = web.stopWhenLeavingTrustedWifi,
-                            onCheckedChange = {
-                                onUpdateLocalWebPrefs(web.copy(stopWhenLeavingTrustedWifi = it))
-                            }
-                        )
-                    }
-                    Text("Trusted session length", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        listOf(60 to "1h", 240 to "4h", 480 to "8h", 720 to "12h", 0 to "∞").forEach { (mins, label) ->
-                            FilterChip(
-                                selected = web.trustedWifiAutoOffMinutes == mins,
-                                onClick = {
-                                    onUpdateLocalWebPrefs(web.copy(trustedWifiAutoOffMinutes = mins))
-                                },
-                                label = { Text(label, fontSize = 11.sp) }
-                            )
-                        }
-                    }
-                    val ssidText = web.trustedSsids.joinToString(", ")
-                    OutlinedTextField(
-                        value = ssidText,
-                        onValueChange = { raw ->
-                            val list = raw.split(',', '\n')
-                                .map { it.trim().removePrefix("\"").removeSuffix("\"") }
-                                .filter { it.isNotEmpty() }
-                            onUpdateLocalWebPrefs(web.copy(trustedSsids = list))
-                        },
-                        label = { Text("Trusted SSIDs (comma-separated)") },
-                        supportingText = {
-                            Text(
-                                buildString {
-                                    append("Exact network names. ")
-                                    if (currentSsid != null) append("Tap “Add current” for “$currentSsid”.")
-                                },
-                                fontSize = 10.sp
-                            )
-                        },
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    if (currentSsid != null) {
-                        TextButton(
-                            onClick = {
-                                val next = (web.trustedSsids + currentSsid).map { it.trim() }
-                                    .filter { it.isNotEmpty() }.distinct()
-                                onUpdateLocalWebPrefs(web.copy(trustedSsids = next))
-                            }
-                        ) {
-                            Text("Add current Wi‑Fi “$currentSsid”", fontSize = 12.sp)
-                        }
-                    }
-                    if (web.enabled) {
-                        var tick by remember { mutableIntStateOf(0) }
-                        LaunchedEffect(web.enabled, web.port, web.httpsEnabled, web.autoOffMinutes) {
-                            while (true) {
-                                kotlinx.coroutines.delay(1000)
-                                tick++
-                            }
-                        }
-                        val running = remember(tick) {
-                            com.steady.habittracker.web.LocalWebServer.isRunning()
-                        }
-                        val status = remember(tick) {
-                            com.steady.habittracker.web.LocalWebServer.statusMessage
-                        }
-                        val err = remember(tick) {
-                            com.steady.habittracker.web.LocalWebServer.lastError
-                        }
-                        val autoOffLeft = remember(tick) {
-                            com.steady.habittracker.web.LocalWebServer.autoOffRemainingLabel()
-                        }
-                        val httpUrls = remember(tick, web.port) {
-                            com.steady.habittracker.web.LocalWebServer.httpUrls().distinct()
-                        }
-                        val httpsUrls = remember(tick, web.port, web.httpsEnabled) {
-                            com.steady.habittracker.web.LocalWebServer.httpsUrls().distinct()
-                        }
-                        Text(
-                            when {
-                                running -> "● Running"
-                                err != null -> "○ Failed"
-                                else -> "○ Starting…"
-                            },
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            color = if (running) MaterialTheme.colorScheme.primary
-                            else MaterialTheme.colorScheme.error
-                        )
-                        Text(status, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        if (autoOffLeft != null && running) {
-                            Text(
-                                "Auto-off in $autoOffLeft",
-                                fontSize = 11.sp,
-                                color = MaterialTheme.colorScheme.primary
-                            )
-                        }
-                        if (web.autoStartedByWifi) {
-                            Text("Started by trusted Wi‑Fi", fontSize = 10.sp, color = MaterialTheme.colorScheme.primary)
-                        }
-                        if (err != null && !running) {
-                            Text("Error: $err", fontSize = 11.sp, color = MaterialTheme.colorScheme.error)
-                        }
-                        Spacer(Modifier.height(4.dp))
-                        Text(
-                            "HTTP — use this first (no certificate warning):",
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.SemiBold
-                        )
-                        httpUrls.take(4).forEach { u ->
-                            Text(u, fontSize = 13.sp, color = MaterialTheme.colorScheme.primary)
-                        }
-                        Text(
-                            "On this phone: http://127.0.0.1:${web.port} · From PC: phone Wi‑Fi IP. " +
-                                "Type http:// exactly (not https://). Full UI: Today · Inbox · Path · History · Habits · Focus.",
-                            fontSize = 10.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        if (httpsUrls.isNotEmpty()) {
-                            Spacer(Modifier.height(4.dp))
-                            Text(
-                                "HTTPS (self-signed, port ${web.port + 1}):",
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.SemiBold
-                            )
-                            httpsUrls.take(3).forEach { u ->
-                                Text(u, fontSize = 12.sp, color = MaterialTheme.colorScheme.primary)
-                            }
-                        }
-                        TextButton(
-                            onClick = {
-                                com.steady.habittracker.web.LocalWebService.restart(
-                                    context,
-                                    web.copy(enabled = true)
-                                )
-                                tick++
-                            }
-                        ) {
-                            Text("Restart server", fontSize = 12.sp)
-                        }
-                        OutlinedTextField(
-                            value = web.port.toString(),
-                            onValueChange = { v ->
-                                v.toIntOrNull()?.let { p ->
-                                    if (p in 1024..65534) onUpdateLocalWebPrefs(web.copy(port = p))
-                                }
-                            },
-                            label = { Text("HTTP port (HTTPS = port+1)") },
-                            singleLine = true,
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                        Row(
-                            Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Column(Modifier.weight(1f)) {
-                                Text("HTTPS (self-signed)", fontSize = 13.sp)
-                                Text("TLS on port ${web.port + 1}", fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            }
-                            Switch(
-                                checked = web.httpsEnabled,
-                                onCheckedChange = { onUpdateLocalWebPrefs(web.copy(httpsEnabled = it)) }
-                            )
+                        TextButton(onClick = { onStart(rt) }) {
+                            Text("Start", fontSize = 12.sp)
                         }
                     }
                 }
             }
         }
-        item { Spacer(Modifier.height(24.dp)) }
+    }
+}
+
+/**
+ * One expandable block/tool row: optional enable checkbox + exclusive expand.
+ * Clicking the header opens this section and collapses any other.
+ */
+@Composable
+private fun BlockAccordion(
+    title: String,
+    subtitle: String,
+    enabled: Boolean,
+    expanded: Boolean,
+    canEnable: Boolean,
+    showEnable: Boolean = true,
+    onToggleExpand: () -> Unit,
+    onEnabledChange: (Boolean) -> Unit,
+    content: @Composable ColumnScope.() -> Unit
+) {
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(
+                containerColor = when {
+                    expanded -> MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f)
+                    enabled -> MaterialTheme.colorScheme.surface
+                    else -> MaterialTheme.colorScheme.surface.copy(alpha = 0.72f)
+                }
+            ),
+            shape = RoundedCornerShape(14.dp)
+        ) {
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .clickable(onClick = onToggleExpand)
+                    .padding(horizontal = 10.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                if (showEnable) {
+                    ThemedCheckbox(
+                        checked = enabled,
+                        onCheckedChange = { onEnabledChange(it) },
+                        enabled = canEnable || enabled,
+                        modifier = Modifier.padding(end = 4.dp)
+                    )
+                }
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        title,
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 14.sp,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Text(
+                        subtitle,
+                        fontSize = 11.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Text(
+                    if (expanded) "▾" else "▸",
+                    fontSize = 18.sp,
+                    color = MaterialTheme.colorScheme.primary,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+        }
+        if (expanded) {
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(start = 4.dp, end = 4.dp, bottom = 4.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                content = content
+            )
+        }
+    }
+}
+
+/** Local web server settings (shown under Blocks → Tools). */
+@Composable
+private fun LocalWebPrefsContent(
+    web: com.steady.habittracker.data.LocalWebPrefs,
+    onUpdate: (com.steady.habittracker.data.LocalWebPrefs) -> Unit
+) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        shape = RoundedCornerShape(12.dp)
+    ) {
+        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text(
+                "Desktop dashboard for Today, Path, History, inbox, habits, focus, sleep & more. " +
+                    "Use http:// (not https://) on the HTTP port. GrapheneOS: grant Network access for this app.",
+                fontSize = 11.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            val currentSsid = remember {
+                com.steady.habittracker.web.WifiWebMonitor.currentSsid(context)
+            }
+            if (currentSsid != null) {
+                Text(
+                    "Current Wi‑Fi: $currentSsid",
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.primary
+                )
+            } else {
+                Text(
+                    "Current Wi‑Fi: unknown (grant Location / Nearby devices to read SSID)",
+                    fontSize = 10.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            OutlinedTextField(
+                value = web.pin,
+                onValueChange = { onUpdate(web.copy(pin = it.take(12))) },
+                label = { Text(if (web.autoStartOnTrustedWifi) "PIN (required, min 4)" else "Access PIN (recommended)") },
+                singleLine = true,
+                supportingText = {
+                    Text(
+                        if (web.pinIsSecure()) "PIN unlocks the web UI on your LAN"
+                        else "Set 4+ characters — required for trusted-Wi‑Fi auto-start",
+                        fontSize = 10.sp
+                    )
+                },
+                modifier = Modifier.fillMaxWidth()
+            )
+            Text("Manual auto turn-off", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                listOf(15 to "15m", 30 to "30m", 60 to "1h", 120 to "2h", 240 to "4h", 0 to "∞").forEach { (mins, label) ->
+                    FilterChip(
+                        selected = web.autoOffMinutes == mins,
+                        onClick = { onUpdate(web.copy(autoOffMinutes = mins)) },
+                        label = { Text(label, fontSize = 11.sp) }
+                    )
+                }
+            }
+            Text("Trusted Wi‑Fi", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text("Auto-start on trusted Wi‑Fi", fontSize = 13.sp)
+                    Text(
+                        if (web.pinIsSecure()) "Uses longer auto-off below"
+                        else "Set a PIN (4+) first",
+                        fontSize = 10.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Switch(
+                    checked = web.autoStartOnTrustedWifi && web.pinIsSecure(),
+                    enabled = web.pinIsSecure() && web.trustedSsids.isNotEmpty(),
+                    onCheckedChange = { onUpdate(web.copy(autoStartOnTrustedWifi = it)) }
+                )
+            }
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("Stop when leaving trusted Wi‑Fi", fontSize = 13.sp, modifier = Modifier.weight(1f))
+                Switch(
+                    checked = web.stopWhenLeavingTrustedWifi,
+                    onCheckedChange = { onUpdate(web.copy(stopWhenLeavingTrustedWifi = it)) }
+                )
+            }
+            Text("Trusted session length", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                listOf(60 to "1h", 240 to "4h", 480 to "8h", 720 to "12h", 0 to "∞").forEach { (mins, label) ->
+                    FilterChip(
+                        selected = web.trustedWifiAutoOffMinutes == mins,
+                        onClick = { onUpdate(web.copy(trustedWifiAutoOffMinutes = mins)) },
+                        label = { Text(label, fontSize = 11.sp) }
+                    )
+                }
+            }
+            val ssidText = web.trustedSsids.joinToString(", ")
+            OutlinedTextField(
+                value = ssidText,
+                onValueChange = { raw ->
+                    val list = raw.split(',', '\n')
+                        .map { it.trim().removePrefix("\"").removeSuffix("\"") }
+                        .filter { it.isNotEmpty() }
+                    onUpdate(web.copy(trustedSsids = list))
+                },
+                label = { Text("Trusted SSIDs (comma-separated)") },
+                modifier = Modifier.fillMaxWidth()
+            )
+            if (currentSsid != null) {
+                TextButton(
+                    onClick = {
+                        val next = (web.trustedSsids + currentSsid).map { it.trim() }
+                            .filter { it.isNotEmpty() }.distinct()
+                        onUpdate(web.copy(trustedSsids = next))
+                    }
+                ) {
+                    Text("Add current Wi‑Fi “$currentSsid”", fontSize = 12.sp)
+                }
+            }
+            if (web.enabled) {
+                var tick by remember { mutableIntStateOf(0) }
+                LaunchedEffect(web.enabled, web.port, web.httpsEnabled, web.autoOffMinutes) {
+                    while (true) {
+                        kotlinx.coroutines.delay(1000)
+                        tick++
+                    }
+                }
+                val running = remember(tick) {
+                    com.steady.habittracker.web.LocalWebServer.isRunning()
+                }
+                val status = remember(tick) {
+                    com.steady.habittracker.web.LocalWebServer.statusMessage
+                }
+                val err = remember(tick) {
+                    com.steady.habittracker.web.LocalWebServer.lastError
+                }
+                val autoOffLeft = remember(tick) {
+                    com.steady.habittracker.web.LocalWebServer.autoOffRemainingLabel()
+                }
+                val httpUrls = remember(tick, web.port) {
+                    com.steady.habittracker.web.LocalWebServer.httpUrls().distinct()
+                }
+                val httpsUrls = remember(tick, web.port, web.httpsEnabled) {
+                    com.steady.habittracker.web.LocalWebServer.httpsUrls().distinct()
+                }
+                Text(
+                    when {
+                        running -> "● Running"
+                        err != null -> "○ Failed"
+                        else -> "○ Starting…"
+                    },
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = if (running) MaterialTheme.colorScheme.primary
+                    else MaterialTheme.colorScheme.error
+                )
+                Text(status, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                if (autoOffLeft != null && running) {
+                    Text(
+                        "Auto-off in $autoOffLeft",
+                        fontSize = 11.sp,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
+                if (web.autoStartedByWifi) {
+                    Text("Started by trusted Wi‑Fi", fontSize = 10.sp, color = MaterialTheme.colorScheme.primary)
+                }
+                if (err != null && !running) {
+                    Text("Error: $err", fontSize = 11.sp, color = MaterialTheme.colorScheme.error)
+                }
+                httpUrls.take(4).forEach { u ->
+                    Text(u, fontSize = 13.sp, color = MaterialTheme.colorScheme.primary)
+                }
+                TextButton(
+                    onClick = {
+                        com.steady.habittracker.web.LocalWebService.restart(
+                            context,
+                            web.copy(enabled = true)
+                        )
+                        tick++
+                    }
+                ) {
+                    Text("Restart server", fontSize = 12.sp)
+                }
+                OutlinedTextField(
+                    value = web.port.toString(),
+                    onValueChange = { v ->
+                        v.toIntOrNull()?.let { p ->
+                            if (p in 1024..65534) onUpdate(web.copy(port = p))
+                        }
+                    },
+                    label = { Text("HTTP port (HTTPS = port+1)") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text("HTTPS (self-signed)", fontSize = 13.sp)
+                        Text(
+                            "TLS on port ${web.port + 1}",
+                            fontSize = 10.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Switch(
+                        checked = web.httpsEnabled,
+                        onCheckedChange = { onUpdate(web.copy(httpsEnabled = it)) }
+                    )
+                }
+            }
+        }
     }
 }
 
@@ -2675,7 +3310,7 @@ private fun ManageGroupSectionBar(
     }
 }
 
-/** Square habit tile in the 2-column Manage grid. Tap = edit; long-press = actions. */
+/** Square habit tile — matched to Today HabitSquare size/density. Tap = edit; long-press = actions. */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun ManageHabitSquare(
@@ -2706,46 +3341,46 @@ private fun ManageHabitSquare(
                     onClick = onClick,
                     onLongClick = onLongClick
                 ),
-            shape = RoundedCornerShape(16.dp),
+            shape = RoundedCornerShape(14.dp),
             color = surface,
-            tonalElevation = 1.dp
+            tonalElevation = 0.dp
         ) {
             Column(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(10.dp),
+                    .padding(8.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.Center
             ) {
                 GlyphIcon(
                     glyph = glyph,
-                    size = 28.dp,
+                    size = 26.dp,
                     tintForSimple = primary
                 )
-                Spacer(Modifier.height(8.dp))
+                Spacer(Modifier.height(6.dp))
                 BasicText(
                     text = habit.name,
                     style = TextStyle(
                         color = onSurface,
-                        fontSize = 13.sp,
+                        fontSize = 12.sp,
                         fontWeight = FontWeight.SemiBold
                     ),
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis
                 )
                 if (desc.isNotBlank()) {
-                    Spacer(Modifier.height(4.dp))
+                    Spacer(Modifier.height(2.dp))
                     BasicText(
                         text = desc,
-                        style = TextStyle(color = primary.copy(alpha = 0.9f), fontSize = 10.sp),
-                        maxLines = 2,
+                        style = TextStyle(color = onVariant, fontSize = 9.sp),
+                        maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
                 } else if (subtitle.isNotBlank()) {
-                    Spacer(Modifier.height(4.dp))
+                    Spacer(Modifier.height(2.dp))
                     BasicText(
                         text = subtitle,
-                        style = TextStyle(color = onVariant, fontSize = 10.sp),
+                        style = TextStyle(color = onVariant, fontSize = 9.sp),
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
