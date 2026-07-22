@@ -42,6 +42,51 @@ class ExtensionAndQuotesTest {
     }
 
     @Test
+    fun blockStripExcludesWearableFromTimelineButKeepsOral() {
+        assertFalse(
+            ExtensionCatalog.livesOnDayTimeline(
+                Habit("h", "Wearable Sync", groupId = "g1", extensionType = ExtensionType.GADGETBRIDGE_SYNC)
+            )
+        )
+        assertTrue(
+            ExtensionCatalog.livesOnDayTimeline(
+                Habit(
+                    "oral_brush",
+                    "Brush",
+                    groupId = "g1",
+                    extensionType = ExtensionType.ORAL_HYGIENE
+                )
+            )
+        )
+        val data = AppData(
+            groups = listOf(Group("g1", "Morning", "MORNING", 0)),
+            habits = listOf(
+                Habit("h1", "Sunlight", groupId = "g1"),
+                Habit(
+                    "h_gb",
+                    "Wearable Sync",
+                    groupId = "g1",
+                    extensionType = ExtensionType.GADGETBRIDGE_SYNC
+                ),
+                Habit(
+                    "oral_brush",
+                    "Brush",
+                    groupId = "g1",
+                    extensionType = ExtensionType.ORAL_HYGIENE
+                )
+            ),
+            schemaVersion = 15
+        )
+        val due = HabitDomain.habitsDueOn(data, java.time.LocalDate.now())
+        assertTrue(due.any { it.id == "h1" })
+        assertTrue(due.any { it.id == "oral_brush" })
+        assertFalse(due.any { it.id == "h_gb" })
+        val blocks = ExtensionCatalog.enabledBlockHabitsForToday(data)
+        assertTrue(blocks.any { it.extensionType == ExtensionType.GADGETBRIDGE_SYNC })
+        assertFalse(blocks.any { it.extensionType == ExtensionType.ORAL_HYGIENE })
+    }
+
+    @Test
     fun suggestGroupIdPrefersMorningHint() {
         val data = AppData(
             groups = listOf(

@@ -127,8 +127,33 @@ object ExtensionCatalog {
 
     fun isSpecial(habit: Habit): Boolean = habit.extensionType != ExtensionType.NONE
 
+    /**
+     * Habits that stay on the day timeline (Morning / Work / …).
+     * Oral hygiene steps are timeline habits; tool-style blocks are not.
+     */
+    fun livesOnDayTimeline(habit: Habit): Boolean = when (habit.extensionType) {
+        ExtensionType.NONE -> true
+        ExtensionType.ORAL_HYGIENE -> true
+        // Everything else is an “enabled block” strip under Today’s habits
+        else -> false
+    }
+
+    /** Manage → Blocks tools shown under Today habits, not in group grids. */
+    fun isBlockStripHabit(habit: Habit): Boolean =
+        !habit.archived && isSpecial(habit) && !livesOnDayTimeline(habit)
+
     fun activeExtensionHabits(data: AppData): List<Habit> =
         data.habits.filter { !it.archived && it.extensionType != ExtensionType.NONE }
+
+    /** One representative habit per extension type for the Today blocks strip. */
+    fun enabledBlockHabitsForToday(data: AppData): List<Habit> {
+        return activeExtensionHabits(data)
+            .filter { isBlockStripHabit(it) }
+            .groupBy { it.extensionType }
+            .values
+            .map { group -> group.minByOrNull { it.order } ?: group.first() }
+            .sortedBy { label(it.extensionType) }
+    }
 
     fun habitsOfType(data: AppData, type: ExtensionType): List<Habit> =
         data.habits.filter { !it.archived && it.extensionType == type }

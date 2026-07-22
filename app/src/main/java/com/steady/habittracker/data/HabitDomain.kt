@@ -102,9 +102,17 @@ object HabitDomain {
             false
         }
 
-    /** Active non-archived habits due on [date]. */
+    /**
+     * Active non-archived habits due on [date] for the day timeline / completion.
+     * Excludes tool-style special blocks (Wearable Sync, Screen Usage, …) which
+     * appear in Today’s “Enabled blocks” strip instead of Morning/Work grids.
+     */
     fun habitsDueOn(data: AppData, date: LocalDate = LocalDate.now()): List<Habit> =
-        data.habits.filter { !it.archived && isDueOn(it, date) }
+        data.habits.filter {
+            !it.archived &&
+                ExtensionCatalog.livesOnDayTimeline(it) &&
+                isDueOn(it, date)
+        }
 
     fun isPendingEntry(entry: HabitEntry?): Boolean =
         (entry?.value ?: 0.0) < 0.5 && entry?.skipped != true

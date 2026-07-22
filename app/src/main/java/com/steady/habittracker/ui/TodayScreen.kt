@@ -232,6 +232,9 @@ fun TodayScreen(
     val openTodos = remember(appData.captures, appData.capturePrefs) {
         appData.openTodoCaptures()
     }
+    val enabledBlocks = remember(appData.habits, appData.gadgetbridgePrefs, appData.sleepAudioPrefs) {
+        com.steady.habittracker.data.ExtensionCatalog.enabledBlockHabitsForToday(appData)
+    }
     // Per-section row models so items don't re-run domain / string work while scrolling
     val sectionRows = remember(
         sections,
@@ -785,6 +788,35 @@ fun TodayScreen(
                     }
                 }
             }
+
+            // Enabled special blocks (Wearable Sync, Screen Usage, …) — not in group grids
+            if (enabledBlocks.isNotEmpty()) {
+                item(key = "blocks_hdr", contentType = "blocks_hdr") {
+                    Text(
+                        "Enabled blocks",
+                        color = colors.primary,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.padding(start = 4.dp, top = 12.dp, bottom = 4.dp)
+                    )
+                    Text(
+                        "Tools from Manage → Blocks · not part of morning/evening grids",
+                        color = colors.onSurfaceVariant,
+                        fontSize = 10.sp,
+                        modifier = Modifier.padding(start = 4.dp, bottom = 6.dp)
+                    )
+                }
+                items(enabledBlocks, key = { "block_${it.id}" }) { habit ->
+                    EnabledBlockRow(
+                        habit = habit,
+                        appData = appData,
+                        entry = effectiveEntriesForDay[habit.id],
+                        colors = colors,
+                        onOpen = { onRequestLog(habit) },
+                        onToggle = { onToggle(habit.id) }
+                    )
+                }
+            }
         }
 
         // Floating density feedback while pinching (2–4 cols)
@@ -1154,6 +1186,69 @@ private fun TodoHabitSquare(
             BasicText(
                 text = "tap to done",
                 style = TextStyle(color = colors.primary, fontSize = 9.sp)
+            )
+        }
+    }
+}
+
+/** Tool-style special blocks under the day timeline (not Morning/Work squares). */
+@Composable
+private fun EnabledBlockRow(
+    habit: Habit,
+    appData: AppData,
+    entry: HabitEntry?,
+    colors: TodayListColors,
+    onOpen: () -> Unit,
+    onToggle: () -> Unit
+) {
+    val status = remember(habit, appData, entry) {
+        com.steady.habittracker.extensions.ExtensionManager.statusLine(habit, appData, null)
+            ?: com.steady.habittracker.data.ExtensionCatalog.label(habit.extensionType)
+    }
+    val isDone = entry != null && !entry.skipped && entry.value >= 0.5
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable {
+                // Checkbox-style blocks: one-tap toggle; others open log / side-effect
+                if (habit.type == HabitType.CHECKBOX) onToggle() else onOpen()
+            },
+        colors = CardDefaults.cardColors(
+            containerColor = if (isDone) colors.surfaceVariant.copy(alpha = 0.65f) else colors.surface
+        ),
+        shape = RoundedCornerShape(12.dp)
+    ) {
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Text(
+                habit.icon.ifBlank { "◆" },
+                fontSize = 22.sp
+            )
+            Column(Modifier.weight(1f)) {
+                Text(
+                    habit.name,
+                    fontWeight = FontWeight.SemiBold,
+                    fontSize = 14.sp,
+                    color = if (isDone) colors.onSurfaceVariant else colors.onSurface
+                )
+                Text(
+                    status,
+                    fontSize = 11.sp,
+                    color = colors.onSurfaceVariant,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            Text(
+                if (isDone) "✓" else com.steady.habittracker.data.ExtensionCatalog.label(habit.extensionType),
+                fontSize = 11.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = colors.primary
             )
         }
     }
