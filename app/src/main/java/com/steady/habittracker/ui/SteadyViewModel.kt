@@ -74,6 +74,7 @@ import com.steady.habittracker.data.GrokPreset
 import com.steady.habittracker.data.defaultLogNote
 import com.steady.habittracker.data.withCapturePrefs
 import com.steady.habittracker.data.withGadgetbridgePrefs
+import com.steady.habittracker.data.withDayStartHour
 import com.steady.habittracker.data.withTodayGridColumns
 import com.steady.habittracker.data.withUpsertedGrokPreset
 import com.steady.habittracker.data.withoutGrokPreset
@@ -145,15 +146,15 @@ class SteadyViewModel(
         lastExtensionSummary.value = ""
     }
 
-    // Today key (yyyy-MM-dd)
-    val today: String get() = repository.getToday()
+    // Logical Steady day (respects dayStartHour, default 4am)
+    val today: String get() = HabitDomain.logicalToday(appData.value)
 
     val completionRate: StateFlow<Float> = appData
-        .map { data -> repository.computeDayCompletion(data, today) }
+        .map { data -> repository.computeDayCompletion(data, HabitDomain.logicalToday(data)) }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 0f)
 
     val todayEntries: StateFlow<Map<String, HabitEntry>> = appData
-        .map { data -> data.entries[today] ?: emptyMap() }
+        .map { data -> data.entries[HabitDomain.logicalToday(data)] ?: emptyMap() }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyMap())
 
     val streak: StateFlow<Int> = appData
@@ -162,20 +163,26 @@ class SteadyViewModel(
 
     /** Live Steady points for today (derived from entries). */
     val todayPoints: StateFlow<Int> = appData
-        .map { HabitDomain.computeDayPoints(it, today) }
+        .map { HabitDomain.computeDayPoints(it, HabitDomain.logicalToday(it)) }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 0)
 
     val momentumLevel: StateFlow<Int> = appData
-        .map { HabitDomain.computeLevel(HabitDomain.effectiveLifetimePoints(it, today)) }
+        .map {
+            HabitDomain.computeLevel(
+                HabitDomain.effectiveLifetimePoints(it, HabitDomain.logicalToday(it))
+            )
+        }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 1)
 
     val lifetimePoints: StateFlow<Int> = appData
-        .map { HabitDomain.effectiveLifetimePoints(it, today) }
+        .map { HabitDomain.effectiveLifetimePoints(it, HabitDomain.logicalToday(it)) }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 0)
 
     val pointsToNextLevel: StateFlow<Int> = appData
         .map {
-            HabitDomain.pointsToNextLevel(HabitDomain.effectiveLifetimePoints(it, today))
+            HabitDomain.pointsToNextLevel(
+                HabitDomain.effectiveLifetimePoints(it, HabitDomain.logicalToday(it))
+            )
         }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), HabitDomain.POINTS_PER_LEVEL)
 
@@ -1332,6 +1339,13 @@ class SteadyViewModel(
                 repository.saveData(updated)
                 refreshWidget(updated)
             }
+        }
+    }
+
+    fun setDayStartHour(hour: Int) {
+        viewModelScope.launch {
+            val current = appData.value
+            repository.saveData(current.withDayStartHour(hour))
         }
     }
 

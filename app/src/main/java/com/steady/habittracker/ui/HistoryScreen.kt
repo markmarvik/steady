@@ -296,14 +296,24 @@ fun HistoryScreen(
                                 "Latest ${latest.date}: " +
                                     listOfNotNull(
                                         latest.steps?.let { "$it steps" },
-                                        latest.sleepMinutes?.let { "${it / 60}h ${it % 60}m sleep" },
-                                        latest.avgHeartRate?.let { "HR ${it} avg" },
-                                        latest.restingHeartRate?.let { "rest ~$it" }
+                                        latest.sleepMinutes?.let { "${it / 60}h ${it % 60}m sleep" }
                                     ).joinToString(" · "),
                                 fontSize = 12.sp,
                                 color = MaterialTheme.colorScheme.onSurface
                             )
-                            // Steps heatstrip
+                            // HR summary for latest day: min / avg / max
+                            if (latest.minHeartRate != null || latest.avgHeartRate != null ||
+                                latest.maxHeartRate != null
+                            ) {
+                                Spacer(Modifier.height(4.dp))
+                                HeartRateDayStrip(
+                                    minBpm = latest.minHeartRate,
+                                    avgBpm = latest.avgHeartRate,
+                                    maxBpm = latest.maxHeartRate,
+                                    restingBpm = latest.restingHeartRate,
+                                    accent = accent
+                                )
+                            }
                             WearableMetricHeatstrip(
                                 values = wearableRecent.asReversed().map { it.date to (it.steps?.toFloat()) },
                                 accent = accent,
@@ -313,34 +323,63 @@ fun HistoryScreen(
                                     .height(28.dp)
                             )
                             if (wearableExpanded) {
-                                Text("Daily (newest first)", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Text(
+                                    "Heart rate · min / avg / max (bpm)",
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
                                 wearableRecent.take(14).forEach { d ->
-                                    Row(
-                                        Modifier
-                                            .fillMaxWidth()
-                                            .padding(vertical = 2.dp),
-                                        horizontalArrangement = Arrangement.SpaceBetween
+                                    Card(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        colors = CardDefaults.cardColors(
+                                            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
+                                        ),
+                                        shape = RoundedCornerShape(10.dp)
                                     ) {
-                                        Text(d.date, fontSize = 12.sp)
-                                        Text(
-                                            listOfNotNull(
-                                                d.steps?.let { "$it st" },
-                                                d.sleepMinutes?.let { "${it / 60}h${it % 60}m" },
-                                                d.avgHeartRate?.let { "♥$it" },
-                                                d.maxHeartRate?.let { "max${it}" }
-                                            ).joinToString(" · ").ifBlank { "—" },
-                                            fontSize = 11.sp,
-                                            fontWeight = FontWeight.Medium,
-                                            color = accent
-                                        )
+                                        Column(
+                                            Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+                                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                                        ) {
+                                            Row(
+                                                Modifier.fillMaxWidth(),
+                                                horizontalArrangement = Arrangement.SpaceBetween
+                                            ) {
+                                                Text(
+                                                    d.date,
+                                                    fontSize = 12.sp,
+                                                    fontWeight = FontWeight.SemiBold
+                                                )
+                                                Text(
+                                                    listOfNotNull(
+                                                        d.steps?.let { "$it steps" },
+                                                        d.sleepMinutes?.let {
+                                                            "${it / 60}h ${it % 60}m sleep"
+                                                        }
+                                                    ).joinToString(" · ").ifBlank { "—" },
+                                                    fontSize = 11.sp,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                )
+                                            }
+                                            HeartRateDayStrip(
+                                                minBpm = d.minHeartRate,
+                                                avgBpm = d.avgHeartRate,
+                                                maxBpm = d.maxHeartRate,
+                                                restingBpm = d.restingHeartRate,
+                                                accent = accent
+                                            )
+                                        }
                                     }
                                 }
-                                // Mini sleep + HR rows
                                 val sleepVals = wearableRecent.asReversed().map {
                                     it.date to it.sleepMinutes?.toFloat()
                                 }
                                 if (sleepVals.any { it.second != null }) {
-                                    Text("Sleep (minutes)", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    Text(
+                                        "Sleep (minutes)",
+                                        fontSize = 11.sp,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
                                     WearableMetricHeatstrip(
                                         values = sleepVals,
                                         accent = Color(0xFF60A5FA),
@@ -350,13 +389,17 @@ fun HistoryScreen(
                                             .height(22.dp)
                                     )
                                 }
-                                val hrVals = wearableRecent.asReversed().map {
+                                val hrAvgVals = wearableRecent.asReversed().map {
                                     it.date to it.avgHeartRate?.toFloat()
                                 }
-                                if (hrVals.any { it.second != null }) {
-                                    Text("Avg heart rate", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                if (hrAvgVals.any { it.second != null }) {
+                                    Text(
+                                        "Avg HR trend",
+                                        fontSize = 11.sp,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
                                     WearableMetricHeatstrip(
-                                        values = hrVals,
+                                        values = hrAvgVals,
                                         accent = Color(0xFFF87171),
                                         empty = MaterialTheme.colorScheme.surfaceVariant,
                                         modifier = Modifier
@@ -1117,9 +1160,66 @@ private fun HabitSquareGrid(
 
 private fun formatScreenMinutes(min: Long): String {
     if (min < 0) return "n/a"
-    val h = min / 60
-    val m = min % 60
+    // Never display >24h for a single day (guards bad OS buckets)
+    val capped = min.coerceAtMost(24 * 60L)
+    val h = capped / 60
+    val m = capped % 60
     return if (h > 0) "${h}h ${m}m" else "${m}m"
+}
+
+/** Min / avg / max heart-rate strip for one day. */
+@Composable
+private fun HeartRateDayStrip(
+    minBpm: Int?,
+    avgBpm: Int?,
+    maxBpm: Int?,
+    restingBpm: Int? = null,
+    accent: Color
+) {
+    val muted = MaterialTheme.colorScheme.onSurfaceVariant
+    val surface = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f)
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            HrStatChip("Min", minBpm, Color(0xFF60A5FA), surface, Modifier.weight(1f))
+            HrStatChip("Avg", avgBpm, accent, surface, Modifier.weight(1f))
+            HrStatChip("Max", maxBpm, Color(0xFFF87171), surface, Modifier.weight(1f))
+        }
+        if (restingBpm != null) {
+            Text(
+                "Resting ~$restingBpm bpm",
+                fontSize = 10.sp,
+                color = muted
+            )
+        }
+    }
+}
+
+@Composable
+private fun HrStatChip(
+    label: String,
+    bpm: Int?,
+    color: Color,
+    surface: Color,
+    modifier: Modifier = Modifier
+) {
+    Column(
+        modifier = modifier
+            .background(surface, RoundedCornerShape(8.dp))
+            .padding(vertical = 6.dp, horizontal = 4.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Text(label, fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(
+            bpm?.toString() ?: "—",
+            fontSize = 16.sp,
+            fontWeight = FontWeight.Bold,
+            color = if (bpm != null) color else MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Text("bpm", fontSize = 9.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
 }
 
 /** #43 Compact screen-time intensity strip for the selected window. */

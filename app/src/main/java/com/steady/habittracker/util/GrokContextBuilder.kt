@@ -421,15 +421,21 @@ object GrokContextBuilder {
                 ?.readings?.get("screen_min")
                 ?.toLongOrNull()
         }.toMutableMap()
-        // Prefer live readings for recent days (more accurate for “today” / History)
+        // Prefer live readings for recent days (more accurate for “today” / History).
+        // Cap at 24h so bad UsageStats buckets never show multi-day totals as one day.
         for ((date, min) in liveMinutes) {
             if (min != null && min >= 0) {
-                val stored = byDate[date]
-                // Live wins for today; otherwise take max so we don't lose a logged total
-                if (stored == null || date == LocalDate.now().toString() || min >= stored) {
-                    byDate[date] = min
+                val capped = min.coerceAtMost(24 * 60L)
+                val stored = byDate[date]?.coerceAtMost(24 * 60L)
+                if (stored == null || date == LocalDate.now().toString() || capped >= (stored ?: -1)) {
+                    byDate[date] = capped
                 }
             }
+        }
+        // Cap any stored snapshot values too
+        for (k in byDate.keys.toList()) {
+            val v = byDate[k]
+            if (v != null && v > 24 * 60L) byDate[k] = 24 * 60L
         }
         val out = mutableListOf<Pair<String, Long?>>()
         var d = LocalDate.now()

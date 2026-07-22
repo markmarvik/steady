@@ -362,7 +362,7 @@ class AndroidHabitRepository(private val context: Context) : HabitRepository {
 
     // --- Convenience helpers used by UI / schedulers (not part of portable interface) ---
 
-    fun getToday(): String = HabitDomain.getToday()
+    fun getToday(dayStartHour: Int = 4): String = HabitDomain.getToday(dayStartHour)
 
     /** Returns sorted groups + habits in each for Today UI (non-archived only). Delegates to domain. */
     fun groupHabits(data: AppData): List<Pair<Group, List<Habit>>> = HabitDomain.groupHabits(data)

@@ -725,8 +725,14 @@ fun SteadyApp(
             val yesterdayRate = weeklyRates.getOrNull(5)?.second ?: 0f
             val trendDelta = ((completionRate - yesterdayRate) * 100).toInt()
             val trendPositive = completionRate >= yesterdayRate
-            val dateLabel = remember {
-                SimpleDateFormat("EEE, MMM d", Locale.getDefault()).format(Date())
+            val dateLabel = remember(today, appData.dayStartHour) {
+                try {
+                    val d = java.time.LocalDate.parse(today)
+                    val fmt = java.time.format.DateTimeFormatter.ofPattern("EEE, MMM d", Locale.getDefault())
+                    d.format(fmt)
+                } catch (_: Exception) {
+                    SimpleDateFormat("EEE, MMM d", Locale.getDefault()).format(Date())
+                }
             }
 
             Row(
@@ -774,7 +780,7 @@ fun SteadyApp(
 
             Spacer(Modifier.height(6.dp))
 
-            // Progress bar under title — primary entry to History (#41)
+            // Progress bar under title — opens History (History tab removed from bar)
             Card(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -917,7 +923,7 @@ fun SteadyApp(
 
             Spacer(Modifier.height(10.dp))
 
-            // Tabs: Today | Path | History | Manage (#26 Path)
+            // Tabs: Today | Path | Manage — History is via the progress bar only
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -926,7 +932,6 @@ fun SteadyApp(
             ) {
                 TabButton("Today", selectedTab == 0, modifier = Modifier.weight(1f)) { selectedTab = 0 }
                 TabButton("Path", selectedTab == 1, modifier = Modifier.weight(1f)) { selectedTab = 1 }
-                TabButton("History", selectedTab == 2, modifier = Modifier.weight(1f)) { selectedTab = 2 }
                 TabButton("Manage", selectedTab == 3, modifier = Modifier.weight(1f)) { selectedTab = 3 }
             }
 
@@ -1141,6 +1146,38 @@ fun SteadyApp(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         fontSize = 11.sp
                     )
+                    Spacer(Modifier.height(16.dp))
+                    Text(
+                        "Day starts at",
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        fontSize = 13.sp
+                    )
+                    Text(
+                        "Planner “today” rolls over at this hour (not midnight). " +
+                            "Default 4:00 AM — late-night logs stay on the previous day.",
+                        fontSize = 11.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        listOf(
+                            0 to "12am",
+                            3 to "3am",
+                            4 to "4am",
+                            5 to "5am",
+                            6 to "6am"
+                        ).forEach { (hour, label) ->
+                            FilterChip(
+                                selected = appData.dayStartHour == hour,
+                                onClick = { viewModel.setDayStartHour(hour) },
+                                label = { Text(label, fontSize = 11.sp) }
+                            )
+                        }
+                    }
                     Spacer(Modifier.height(16.dp))
                     Text(
                         "Theme packs",

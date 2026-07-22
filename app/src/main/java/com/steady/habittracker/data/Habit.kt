@@ -1143,6 +1143,11 @@ data class AppData(
      * Matches Manage-style squares with user density control.
      */
     val todayGridColumns: Int = 3,
+    /**
+     * Hour (0–23) when the planner day rolls over.
+     * Default 4 = “Steady day” runs from 04:00 → next 04:00 (not midnight).
+     */
+    val dayStartHour: Int = 4,
     /** Gadgetbridge export poll + event thresholds (v15). */
     val gadgetbridgePrefs: GadgetbridgePrefs = GadgetbridgePrefs(),
     /**
@@ -1320,6 +1325,7 @@ fun AppData.withoutCapture(id: String): AppData = withoutCapturePermanent(id)
 fun AppData.withCapturePrefs(prefs: CapturePrefs): AppData = copy(capturePrefs = prefs)
 fun AppData.withGadgetbridgePrefs(prefs: GadgetbridgePrefs): AppData = copy(gadgetbridgePrefs = prefs)
 fun AppData.withOralHygienePrefs(prefs: OralHygienePrefs): AppData = copy(oralHygienePrefs = prefs)
+fun AppData.withDayStartHour(hour: Int): AppData = copy(dayStartHour = hour.coerceIn(0, 23))
 
 /**
  * Merge wearable day rows by date (no duplicates). Prefer richer / newer rows.

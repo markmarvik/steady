@@ -706,6 +706,16 @@ class HabitDomainTest {
         assertFalse(out.goals.any { it.id == "d1" })
     }
 
+    @Test
+    fun `getToday respects dayStartHour before rollover`() {
+        val at3am = java.time.LocalDateTime.of(2026, 7, 23, 3, 30)
+        assertEquals("2026-07-22", HabitDomain.getToday(4, at3am))
+        val at5am = java.time.LocalDateTime.of(2026, 7, 23, 5, 0)
+        assertEquals("2026-07-23", HabitDomain.getToday(4, at5am))
+        // Midnight rollover when hour is 0
+        assertEquals("2026-07-23", HabitDomain.getToday(0, at3am))
+    }
+
     // --- Steady Momentum scoring (v10) ---
 
     @Test

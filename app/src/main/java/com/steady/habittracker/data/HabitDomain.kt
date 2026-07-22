@@ -951,7 +951,25 @@ object HabitDomain {
     }
 
     /** Convenience today string (yyyy-MM-dd). */
-    fun getToday(): String = LocalDate.now().toString()
+    /**
+     * Logical “Steady day” date string (yyyy-MM-dd).
+     * Before [dayStartHour] local time, still counts as yesterday
+     * (default hour 4 → new day starts at 4:00 AM).
+     */
+    fun getToday(dayStartHour: Int = 4, now: java.time.LocalDateTime = java.time.LocalDateTime.now()): String =
+        logicalDate(dayStartHour, now).toString()
+
+    fun logicalDate(
+        dayStartHour: Int = 4,
+        now: java.time.LocalDateTime = java.time.LocalDateTime.now()
+    ): LocalDate {
+        val h = dayStartHour.coerceIn(0, 23)
+        return if (now.hour < h) now.toLocalDate().minusDays(1) else now.toLocalDate()
+    }
+
+    fun logicalToday(data: AppData): String = getToday(data.dayStartHour)
+
+    fun logicalTodayDate(data: AppData): LocalDate = logicalDate(data.dayStartHour)
 
     /** Resolve current group from active schedule or legacy hint.
      * Supports overnight blocks (e.g. Sleep 23:00-07:00). */
@@ -1739,16 +1757,18 @@ fun getActiveGroups(data: AppData): List<Group> = HabitDomain.getActiveGroups(da
 fun getActiveHabitsForGroup(data: AppData, groupId: String): List<Habit> = HabitDomain.getActiveHabitsForGroup(data, groupId)
 fun getSubGroups(data: AppData, parentId: String): List<Group> = HabitDomain.getSubGroups(data, parentId)
 fun countRecentSkips(data: AppData, habitId: String, daysBack: Int = 7): Int = HabitDomain.countRecentSkips(data, habitId, daysBack)
-fun getToday(): String = HabitDomain.getToday()
+fun getToday(dayStartHour: Int = 4): String = HabitDomain.getToday(dayStartHour)
 fun resolveCurrentGroup(data: AppData, now: LocalTime = LocalTime.now()): Group? = HabitDomain.resolveCurrentGroup(data, now)
 fun moveHabit(currentHabits: List<Habit>, habitId: String, newGroupId: String, newOrder: Int): List<Habit> =
     HabitDomain.moveHabit(currentHabits, habitId, newGroupId, newOrder)
 fun isDueOn(habit: Habit, date: LocalDate): Boolean = HabitDomain.isDueOn(habit, date)
-fun habitsDueOn(data: AppData, date: LocalDate = LocalDate.now()): List<Habit> = HabitDomain.habitsDueOn(data, date)
-fun pendingGroupedForDate(data: AppData, date: LocalDate = LocalDate.now()) = HabitDomain.pendingGroupedForDate(data, date)
+fun habitsDueOn(data: AppData, date: LocalDate = HabitDomain.logicalDate(data.dayStartHour)): List<Habit> =
+    HabitDomain.habitsDueOn(data, date)
+fun pendingGroupedForDate(data: AppData, date: LocalDate = HabitDomain.logicalDate(data.dayStartHour)) =
+    HabitDomain.pendingGroupedForDate(data, date)
 fun timelineSectionsForToday(
     data: AppData,
-    date: LocalDate = LocalDate.now(),
+    date: LocalDate = HabitDomain.logicalDate(data.dayStartHour),
     now: LocalTime = LocalTime.now(),
     includeCompleted: Boolean = false
 ) = HabitDomain.timelineSectionsForToday(data, date, now, includeCompleted)

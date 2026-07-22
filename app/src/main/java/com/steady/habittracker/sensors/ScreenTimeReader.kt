@@ -11,11 +11,11 @@ import java.time.LocalTime
 import java.time.ZoneId
 
 /**
- * Daily screen-on time from UsageStats (requires PACKAGE_USAGE_STATS / usage access).
+ * Daily screen-on and per-app foreground time from UsageStats.
  *
- * Note: [UsageStatsManager.queryUsageStats] often returns empty buckets on modern Android
- * when the query window is “today only”. We prefer event-stream aggregation and fall back
- * to broader INTERVAL_BEST stats when needed.
+ * Screen-on prefers [UsageEvents.Event.SCREEN_INTERACTIVE] /
+ * [UsageEvents.Event.SCREEN_NON_INTERACTIVE] (true wall-clock screen time).
+ * Totals are always clamped to the query window so we never report >24h/day.
  */
 object ScreenTimeReader {
 
@@ -39,27 +39,31 @@ object ScreenTimeReader {
     }
 
     /**
-     * Total screen-interactive milliseconds for [date] in the default zone.
-     * Returns null if usage access is missing or query fails.
-     * Returns 0 when access is granted but nothing was recorded yet.
+     * Total screen-on milliseconds for [date] (midnight–midnight local, capped at now).
+     * Null if usage access missing; 0 if no activity.
      */
     fun screenOnMillis(context: Context, date: LocalDate = LocalDate.now()): Long? {
         if (!hasUsageAccess(context)) return null
         val usm = context.getSystemService(Context.USAGE_STATS_SERVICE) as? UsageStatsManager
             ?: return null
         val (start, end) = dayBoundsMs(date)
+        val window = (end - start).coerceAtLeast(0L)
         return try {
-            val fromEvents = sumScreenOnEvents(usm, start, end)
-            if (fromEvents > 0L) return fromEvents
-            // Fallback: aggregate package foreground times (works when events are sparse)
-            val fromStats = sumForegroundFromStats(usm, start, end)
-            fromStats ?: fromEvents
+            val fromScreen = sumScreenInteractiveEvents(usm, start, end)
+            if (fromScreen > 0L) return fromScreen.coerceAtMost(window)
+
+            // Fallback: single-stream activity resume/pause (still wall-clock, not sum of apps)
+            val fromActivity = sumActivityScreenEvents(usm, start, end)
+            if (fromActivity > 0L) return fromActivity.coerceAtMost(window)
+
+            // Last resort: stats — clamp hard (INTERVAL_BEST often overcounts)
+            val fromStats = sumForegroundFromStatsClamped(usm, start, end, window)
+            fromStats
         } catch (_: Exception) {
             null
         }
     }
 
-    /** Screen-on minutes after [afterTime] local on [date] (e.g. wind-down start). */
     fun screenOnMinutesAfter(
         context: Context,
         date: LocalDate,
@@ -73,11 +77,12 @@ object ScreenTimeReader {
         val end = date.plusDays(1).atStartOfDay(zone).toInstant().toEpochMilli()
             .coerceAtMost(System.currentTimeMillis())
         if (end <= start) return 0L
+        val window = end - start
         return try {
-            val fromEvents = sumScreenOnEvents(usm, start, end)
-            if (fromEvents > 0L) return fromEvents / 60_000L
-            val fromStats = sumForegroundFromStats(usm, start, end) ?: 0L
-            fromStats / 60_000L
+            val fromScreen = sumScreenInteractiveEvents(usm, start, end)
+            if (fromScreen > 0L) return (fromScreen.coerceAtMost(window)) / 60_000L
+            val fromActivity = sumActivityScreenEvents(usm, start, end)
+            (fromActivity.coerceAtMost(window)) / 60_000L
         } catch (_: Exception) {
             null
         }
@@ -87,9 +92,8 @@ object ScreenTimeReader {
         screenOnMillis(context, date)?.div(60_000L)
 
     /**
-     * Top apps by foreground time for [date] (#35).
-     * Returns package → minutes, sorted descending, up to [limit].
-     * If [packages] is non-empty, only those packages are included (then sorted).
+     * Top apps by **foreground** time for [date] (not “screen on”).
+     * Values are clamped per package and overall to the day window.
      */
     fun topAppsMinutes(
         context: Context,
@@ -101,43 +105,52 @@ object ScreenTimeReader {
         val usm = context.getSystemService(Context.USAGE_STATS_SERVICE) as? UsageStatsManager
             ?: return emptyList()
         val (start, end) = dayBoundsMs(date)
+        val window = (end - start).coerceAtLeast(1L)
         val filter = packages.map { it.trim() }.filter { it.isNotEmpty() }.toSet()
         return try {
-            // Events are more reliable than queryUsageStats for partial-day “today”
             val byPkg = foregroundByPackageEvents(usm, start, end)
-            val eventList = byPkg
+            var list = byPkg
                 .asSequence()
                 .filter { filter.isEmpty() || it.key in filter }
-                .map { it.key to (it.value / 60_000L) }
+                .map { it.key to (it.value.coerceAtMost(window) / 60_000L) }
                 .filter { it.second > 0 }
                 .sortedByDescending { it.second }
                 .take(limit.coerceAtLeast(1))
                 .toList()
-            if (eventList.isNotEmpty()) return eventList
+            if (list.isNotEmpty()) return list
 
-            // Fallback: INTERVAL_BEST / DAILY stats over the window
-            val stats = usm.queryUsageStats(UsageStatsManager.INTERVAL_BEST, start, end)
-                ?: usm.queryUsageStats(UsageStatsManager.INTERVAL_DAILY, start, end)
+            val stats = usm.queryUsageStats(UsageStatsManager.INTERVAL_DAILY, start, end)
+                ?: usm.queryUsageStats(UsageStatsManager.INTERVAL_BEST, start, end)
                 ?: return emptyList()
-            stats
+            list = stats
                 .asSequence()
                 .filter { it.totalTimeInForeground > 0 }
                 .filter { filter.isEmpty() || it.packageName in filter }
-                .map { it.packageName to (it.totalTimeInForeground / 60_000L) }
+                // Only count buckets that overlap this day
+                .filter { s ->
+                    val last = s.lastTimeUsed
+                    last == 0L || (last in start until end) ||
+                        (s.firstTimeStamp in start until end)
+                }
+                .map {
+                    it.packageName to
+                        (it.totalTimeInForeground.coerceAtMost(window) / 60_000L)
+                }
                 .filter { it.second > 0 }
                 .sortedByDescending { it.second }
                 .take(limit.coerceAtLeast(1))
                 .toList()
+            list
         } catch (_: Exception) {
             emptyList()
         }
     }
 
-    /** Human label for UI previews. */
     fun formatMinutes(min: Long?): String {
         if (min == null) return "usage access needed"
-        val h = min / 60
-        val m = min % 60
+        val capped = min.coerceAtMost(24 * 60L)
+        val h = capped / 60
+        val m = capped % 60
         return if (h > 0) "${h}h ${m}m" else "${m}m"
     }
 
@@ -149,32 +162,79 @@ object ScreenTimeReader {
         return start to end
     }
 
-    private fun sumScreenOnEvents(usm: UsageStatsManager, start: Long, end: Long): Long {
+    /**
+     * True wall-clock screen-on via SCREEN_INTERACTIVE / SCREEN_NON_INTERACTIVE (API 29+).
+     * Constants: INTERACTIVE=15, NON_INTERACTIVE=16.
+     */
+    private fun sumScreenInteractiveEvents(usm: UsageStatsManager, start: Long, end: Long): Long {
+        if (end <= start) return 0L
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return 0L
+        val events = usm.queryEvents(start, end)
+        val event = UsageEvents.Event()
+        var total = 0L
+        var interactiveSince = -1L
+        // If we never see NON_INTERACTIVE first, assume screen already on at [start]
+        // only after first INTERACTIVE in window — safer than assuming always on.
+        while (events.hasNextEvent()) {
+            events.getNextEvent(event)
+            when (event.eventType) {
+                UsageEvents.Event.SCREEN_INTERACTIVE -> {
+                    if (interactiveSince < 0) {
+                        interactiveSince = event.timeStamp.coerceAtLeast(start)
+                    }
+                }
+                UsageEvents.Event.SCREEN_NON_INTERACTIVE -> {
+                    if (interactiveSince >= 0) {
+                        val t = event.timeStamp.coerceAtMost(end)
+                        if (t > interactiveSince) total += t - interactiveSince
+                        interactiveSince = -1L
+                    }
+                }
+            }
+        }
+        if (interactiveSince >= 0 && end > interactiveSince) {
+            total += end - interactiveSince
+        }
+        return total.coerceAtLeast(0L)
+    }
+
+    /**
+     * Fallback wall-clock estimate from a single activity stream
+     * (not summing packages — that double-counts multi-app use).
+     */
+    private fun sumActivityScreenEvents(usm: UsageStatsManager, start: Long, end: Long): Long {
         if (end <= start) return 0L
         val events = usm.queryEvents(start, end)
         val event = UsageEvents.Event()
         var total = 0L
-        var lastResume = -1L
+        var depth = 0
+        var openSince = -1L
         while (events.hasNextEvent()) {
             events.getNextEvent(event)
             when (event.eventType) {
                 UsageEvents.Event.ACTIVITY_RESUMED,
                 UsageEvents.Event.MOVE_TO_FOREGROUND -> {
-                    lastResume = event.timeStamp.coerceAtLeast(start)
+                    if (depth == 0) {
+                        openSince = event.timeStamp.coerceAtLeast(start)
+                    }
+                    depth++
                 }
                 UsageEvents.Event.ACTIVITY_PAUSED,
                 UsageEvents.Event.MOVE_TO_BACKGROUND,
                 UsageEvents.Event.ACTIVITY_STOPPED -> {
-                    if (lastResume >= 0) {
-                        val t = event.timeStamp.coerceAtMost(end)
-                        if (t > lastResume) total += t - lastResume
-                        lastResume = -1L
+                    if (depth > 0) {
+                        depth--
+                        if (depth == 0 && openSince >= 0) {
+                            val t = event.timeStamp.coerceAtMost(end)
+                            if (t > openSince) total += t - openSince
+                            openSince = -1L
+                        }
                     }
                 }
             }
         }
-        if (lastResume >= 0 && end > lastResume) {
-            total += end - lastResume
+        if (depth > 0 && openSince >= 0 && end > openSince) {
+            total += end - openSince
         }
         return total.coerceAtLeast(0L)
     }
@@ -188,60 +248,61 @@ object ScreenTimeReader {
         val events = usm.queryEvents(start, end)
         val event = UsageEvents.Event()
         val totals = HashMap<String, Long>()
-        var activePkg: String? = null
-        var lastResume = -1L
+        // Per-package depth so multi-activity apps don't break
+        val depth = HashMap<String, Int>()
+        val openSince = HashMap<String, Long>()
         while (events.hasNextEvent()) {
             events.getNextEvent(event)
             val pkg = event.packageName ?: continue
             when (event.eventType) {
                 UsageEvents.Event.ACTIVITY_RESUMED,
                 UsageEvents.Event.MOVE_TO_FOREGROUND -> {
-                    // Close previous session if any
-                    if (activePkg != null && lastResume >= 0) {
-                        val t = event.timeStamp.coerceAtMost(end)
-                        if (t > lastResume) {
-                            totals[activePkg!!] = (totals[activePkg!!] ?: 0L) + (t - lastResume)
-                        }
-                    }
-                    activePkg = pkg
-                    lastResume = event.timeStamp.coerceAtLeast(start)
+                    val d = (depth[pkg] ?: 0)
+                    if (d == 0) openSince[pkg] = event.timeStamp.coerceAtLeast(start)
+                    depth[pkg] = d + 1
                 }
                 UsageEvents.Event.ACTIVITY_PAUSED,
                 UsageEvents.Event.MOVE_TO_BACKGROUND,
                 UsageEvents.Event.ACTIVITY_STOPPED -> {
-                    if (activePkg != null && lastResume >= 0 &&
-                        (activePkg == pkg || event.eventType == UsageEvents.Event.MOVE_TO_BACKGROUND)
-                    ) {
+                    val d = depth[pkg] ?: 0
+                    if (d <= 0) continue
+                    val nd = d - 1
+                    depth[pkg] = nd
+                    if (nd == 0) {
+                        val since = openSince.remove(pkg) ?: continue
                         val t = event.timeStamp.coerceAtMost(end)
-                        if (t > lastResume) {
-                            totals[activePkg!!] = (totals[activePkg!!] ?: 0L) + (t - lastResume)
-                        }
-                        if (activePkg == pkg) {
-                            activePkg = null
-                            lastResume = -1L
+                        if (t > since) {
+                            totals[pkg] = (totals[pkg] ?: 0L) + (t - since)
                         }
                     }
                 }
             }
         }
-        if (activePkg != null && lastResume >= 0 && end > lastResume) {
-            totals[activePkg!!] = (totals[activePkg!!] ?: 0L) + (end - lastResume)
+        for ((pkg, since) in openSince) {
+            if (end > since) {
+                totals[pkg] = (totals[pkg] ?: 0L) + (end - since)
+            }
         }
         return totals
     }
 
-    /** Sum totalTimeInForeground across packages for [start,end]. */
-    private fun sumForegroundFromStats(usm: UsageStatsManager, start: Long, end: Long): Long? {
+    private fun sumForegroundFromStatsClamped(
+        usm: UsageStatsManager,
+        start: Long,
+        end: Long,
+        windowMs: Long
+    ): Long {
         if (end <= start) return 0L
-        val stats = usm.queryUsageStats(UsageStatsManager.INTERVAL_BEST, start, end)
-            ?: usm.queryUsageStats(UsageStatsManager.INTERVAL_DAILY, start, end)
-            ?: return null
-        // queryUsageStats may return multi-day buckets — clamp with first/last time when available
+        // Prefer DAILY interval for single-day queries
+        val stats = usm.queryUsageStats(UsageStatsManager.INTERVAL_DAILY, start, end)
+            ?: usm.queryUsageStats(UsageStatsManager.INTERVAL_BEST, start, end)
+            ?: return 0L
         var total = 0L
         for (s in stats) {
             val t = s.totalTimeInForeground
             if (t > 0) total += t
         }
-        return total.coerceAtLeast(0L)
+        // Sum of package FG times can exceed wall clock (overlapping apps / multi-day buckets)
+        return total.coerceIn(0L, windowMs)
     }
 }
