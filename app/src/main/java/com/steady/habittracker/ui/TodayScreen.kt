@@ -80,7 +80,9 @@ fun TodayScreen(
     todayEntries: Map<String, HabitEntry>,
     onToggle: (String) -> Unit,
     onLogEntry: (habitId: String, value: Double, note: String, date: String) -> Unit,  // support backfill date for metrics
-    onRequestLog: (Habit) -> Unit = { h -> onLogEntry(h.id, 1.0, "", java.time.LocalDate.now().toString()) },  // preferred for dialog popup + keyboard
+    onRequestLog: (Habit) -> Unit = { h ->
+        onLogEntry(h.id, 1.0, "", HabitDomain.logicalToday(appData))
+    },
     onSkip: (String) -> Unit,
     onShowSkipPrompt: (habitId: String) -> Unit = {},
     onQuickCapture: (title: String, note: String, tags: List<String>) -> Unit = { _, _, _ -> },
@@ -152,38 +154,47 @@ fun TodayScreen(
     // Show completed tiles (grayed + streak flame). Session-persisted across config changes.
     var showDoneHabits by rememberSaveable { mutableStateOf(false) }
 
-    // Stable keys for domain work — avoid full AppData identity thrash when possible
-    val dateKey = remember { LocalDate.now().toString() }
+    // Logical Steady day (respects dayStartHour, default 4am) — must match ViewModel.today / log keys
+    val dateKey = HabitDomain.logicalToday(appData)
+    val logicalDate = HabitDomain.logicalTodayDate(appData)
+    // Merge live todayEntries so filtering sees the same map as the tiles (no calendar-vs-logical drift)
+    val effectiveEntriesForDay = remember(appData.entries, todayEntries, dateKey) {
+        val base = appData.entries[dateKey].orEmpty()
+        if (todayEntries.isEmpty()) base else base + todayEntries
+    }
+    val dataForTimeline = remember(appData, effectiveEntriesForDay, dateKey) {
+        appData.copy(entries = appData.entries + (dateKey to effectiveEntriesForDay))
+    }
     val sections = remember(
-        appData.habits,
-        appData.groups,
-        appData.schedules,
-        appData.activeScheduleId,
-        appData.sleep,
-        appData.entries[dateKey],
-        todayEntries,
-        showDoneHabits
+        dataForTimeline.habits,
+        dataForTimeline.groups,
+        dataForTimeline.schedules,
+        dataForTimeline.activeScheduleId,
+        dataForTimeline.sleep,
+        effectiveEntriesForDay,
+        showDoneHabits,
+        dateKey
     ) {
         HabitDomain.timelineSectionsForToday(
-            appData,
-            LocalDate.now(),
+            dataForTimeline,
+            logicalDate,
             LocalTime.now(),
             includeCompleted = showDoneHabits
         )
     }
     // Day cue always based on pending-only view so "now / next" stays action-oriented
     val cue = remember(
-        appData.habits,
-        appData.groups,
-        appData.schedules,
-        appData.activeScheduleId,
-        appData.sleep,
-        appData.entries[dateKey],
-        todayEntries
+        dataForTimeline.habits,
+        dataForTimeline.groups,
+        dataForTimeline.schedules,
+        dataForTimeline.activeScheduleId,
+        dataForTimeline.sleep,
+        effectiveEntriesForDay,
+        dateKey
     ) {
         HabitDomain.dayProgressionCue(
-            appData,
-            LocalDate.now(),
+            dataForTimeline,
+            logicalDate,
             LocalTime.now()
         )
     }
@@ -200,8 +211,8 @@ fun TodayScreen(
         AutoLogEngine.pendingSuggestions(appData, dateKey)
     }
     val habitNameById = remember(appData.habits) { appData.habits.associate { it.id to it.name } }
-    val todayRoutines = remember(appData.routines, appData.workoutSessions, dateKey) {
-        HabitDomain.routinesDueOn(appData, LocalDate.now())
+    val todayRoutines = remember(appData.routines, appData.workoutSessions, dateKey, logicalDate) {
+        HabitDomain.routinesDueOn(appData, logicalDate)
     }
     val workoutDays = remember(appData.workoutSessions) { HabitDomain.workoutDaysInWindow(appData, 7) }
     val routineDoneIds = remember(appData.workoutSessions, dateKey) {
@@ -210,10 +221,10 @@ fun TodayScreen(
         }.toSet()
     }
     // Done count for the toggle label (due today and finished)
-    val doneTodayCount = remember(appData.habits, appData.entries[dateKey], todayEntries, dateKey) {
-        val due = HabitDomain.habitsDueOn(appData, LocalDate.now())
+    val doneTodayCount = remember(appData.habits, effectiveEntriesForDay, dateKey, logicalDate) {
+        val due = HabitDomain.habitsDueOn(appData, logicalDate)
         due.count { h ->
-            val e = todayEntries[h.id] ?: appData.entries[dateKey]?.get(h.id)
+            val e = effectiveEntriesForDay[h.id]
             e != null && !e.skipped && e.value >= 0.5
         }
     }
@@ -222,10 +233,18 @@ fun TodayScreen(
         appData.openTodoCaptures()
     }
     // Per-section row models so items don't re-run domain / string work while scrolling
-    val sectionRows = remember(sections, todayEntries, nameById, tagLabels, appData.entries, androidContext) {
+    val sectionRows = remember(
+        sections,
+        effectiveEntriesForDay,
+        nameById,
+        tagLabels,
+        appData,
+        androidContext,
+        showDoneHabits
+    ) {
         sections.map { section ->
             val rows = section.habits.map { habit ->
-                val entry = todayEntries[habit.id]
+                val entry = effectiveEntriesForDay[habit.id] ?: todayEntries[habit.id]
                 val isSimpleTapAdd = habit.type == HabitType.COUNTER &&
                     (
                         (habit.target ?: 0.0) <= 2.0 ||
@@ -233,7 +252,7 @@ fun TodayScreen(
                             habit.name.contains("supp", ignoreCase = true) ||
                             habit.name.contains("magnesium", ignoreCase = true)
                         )
-                val isDone = (entry?.value ?: 0.0) >= 0.5
+                val isDone = entry != null && !entry.skipped && entry.value >= 0.5
                 val isSkipped = entry?.skipped == true
                 val title = if (!habit.canSkip) "${habit.name} (essential)" else habit.name
                 val desc = habit.effectiveDescription()
@@ -684,6 +703,7 @@ fun TodayScreen(
                                 onRequestLog = onRequestLog,
                                 onSkip = onSkip,
                                 onShowSkipPrompt = onShowSkipPrompt,
+                                logicalToday = dateKey,
                                 modifier = Modifier.weight(1f)
                             )
                         }
@@ -1150,6 +1170,8 @@ private fun HabitSquare(
     onRequestLog: (Habit) -> Unit,
     onSkip: (String) -> Unit,
     onShowSkipPrompt: (habitId: String) -> Unit,
+    /** Logical Steady day (yyyy-MM-dd) — must match log keys / dayStartHour. */
+    logicalToday: String,
     modifier: Modifier = Modifier
 ) {
     val haptics = rememberSteadyHaptics()
@@ -1223,7 +1245,7 @@ private fun HabitSquare(
                             habit.id,
                             habit.target ?: 1.0,
                             habit.defaultLogNote(),
-                            LocalDate.now().toString()
+                            logicalToday
                         )
                     } else {
                         haptics(SteadyHaptics.Kind.TICK)
