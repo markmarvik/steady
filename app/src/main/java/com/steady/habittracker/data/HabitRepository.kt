@@ -93,7 +93,8 @@ class AndroidHabitRepository(private val context: Context) : HabitRepository {
     }
 
     /**
-     * Migrate older schemas to v13 (extensions, local web, sensor snapshots).
+     * Migrate older schemas to v14 (Grok presets + Today grid density).
+     * v13: extensions, local web, sensor snapshots.
      * v12: sleep-audio nights.
      * v11: auto-log sources + suggestions.
      * v10: Momentum score + notification prefs.
@@ -103,34 +104,39 @@ class AndroidHabitRepository(private val context: Context) : HabitRepository {
      */
     fun migrateIfNeeded(data: AppData): AppData {
         // Empty habits are valid (clean slate / first-run builder). Only require groups + tags structure.
-        if (data.schemaVersion >= 13 && data.groups.isNotEmpty() && data.tags.isNotEmpty()) {
+        if (data.schemaVersion >= 14 && data.groups.isNotEmpty() && data.tags.isNotEmpty()) {
             return HabitDomain.withFinalizedScoreHistory(data.withJournalCapturesArchived())
+        }
+        if (data.schemaVersion >= 13 && data.groups.isNotEmpty() && data.tags.isNotEmpty()) {
+            return HabitDomain.withFinalizedScoreHistory(
+                data.copy(schemaVersion = 14).withJournalCapturesArchived()
+            )
         }
         if (data.schemaVersion >= 12 && data.groups.isNotEmpty() && data.tags.isNotEmpty()) {
             return HabitDomain.withFinalizedScoreHistory(
-                data.copy(schemaVersion = 13).withJournalCapturesArchived()
+                data.copy(schemaVersion = 14).withJournalCapturesArchived()
             )
         }
         if (data.schemaVersion >= 11 && data.groups.isNotEmpty() && data.tags.isNotEmpty()) {
             return HabitDomain.withFinalizedScoreHistory(
-                data.copy(schemaVersion = 13).withJournalCapturesArchived()
+                data.copy(schemaVersion = 14).withJournalCapturesArchived()
             )
         }
         if (data.schemaVersion >= 10 && data.groups.isNotEmpty() && data.tags.isNotEmpty()) {
             return HabitDomain.withFinalizedScoreHistory(
-                data.copy(schemaVersion = 13).withJournalCapturesArchived()
+                data.copy(schemaVersion = 14).withJournalCapturesArchived()
             )
         }
         if (data.schemaVersion >= 8 && data.groups.isNotEmpty() && data.tags.isNotEmpty()) {
             // Soft bump: score + notificationPrefs + auto-log already defaulted on decode
             return HabitDomain.withFinalizedScoreHistory(
-                data.copy(schemaVersion = 13).withJournalCapturesArchived()
+                data.copy(schemaVersion = 14).withJournalCapturesArchived()
             )
         }
         if (data.schemaVersion >= 6 && data.groups.isNotEmpty() && data.tags.isNotEmpty()) {
             // Soft bump: ensure routines/goals lists exist (already defaulted on decode)
             return HabitDomain.withFinalizedScoreHistory(
-                data.copy(schemaVersion = 13).withJournalCapturesArchived()
+                data.copy(schemaVersion = 14).withJournalCapturesArchived()
             )
         }
         // Start from current or fresh skeleton (do not re-seed habits when user has none)
@@ -221,7 +227,7 @@ class AndroidHabitRepository(private val context: Context) : HabitRepository {
 
         return HabitDomain.withFinalizedScoreHistory(
             withSleep.copy(
-                schemaVersion = 13,
+                schemaVersion = 14,
                 onboarded = d.onboarded || d.schemaVersion >= 1,
                 colorScheme = if (d.colorScheme.isNotBlank()) d.colorScheme else "default",
                 backgroundMode = if (d.backgroundMode.isNotBlank()) d.backgroundMode else "dark",
@@ -322,7 +328,7 @@ class AndroidHabitRepository(private val context: Context) : HabitRepository {
             habits = emptyList(),
             entries = emptyMap(),
             reminders = reminders,
-            schemaVersion = 13,
+            schemaVersion = 14,
             onboarded = false,
             colorScheme = "default",
             backgroundMode = "dark",

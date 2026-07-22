@@ -73,6 +73,7 @@ fun TodayScreen(
     onDeleteCapture: (id: String) -> Unit = {},
     onReopenCapture: (id: String) -> Unit = {},
     onChatWithGrok: () -> Unit = {},
+    onSetTodayGridColumns: (Int) -> Unit = {},
     // manual metric logging support (#19)
     onCreateMetric: (name: String) -> Unit = {},
     onLogMetric: (habitId: String, value: Double, note: String, date: String) -> Unit = { _, _, _, _ -> },
@@ -392,6 +393,42 @@ fun TodayScreen(
                 )
             }
         }
+        // Density: 2 / 3 / 4 columns of habit squares
+        val gridCols = appData.todayGridColumns.coerceIn(2, 4)
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(bottom = 6.dp),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                "Grid",
+                fontSize = 11.sp,
+                color = colors.onSurfaceVariant
+            )
+            listOf(2, 3, 4).forEach { n ->
+                Surface(
+                    onClick = { onSetTodayGridColumns(n) },
+                    shape = RoundedCornerShape(8.dp),
+                    color = if (gridCols == n) colors.primary.copy(alpha = 0.2f) else colors.surfaceVariant
+                ) {
+                    Text(
+                        "${n}×",
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                        fontSize = 11.sp,
+                        fontWeight = if (gridCols == n) FontWeight.Bold else FontWeight.Medium,
+                        color = if (gridCols == n) colors.primary else colors.onSurface
+                    )
+                }
+            }
+            Text(
+                "more columns = denser",
+                fontSize = 10.sp,
+                color = colors.onSurfaceVariant,
+                modifier = Modifier.padding(start = 4.dp)
+            )
+        }
 
         LazyColumn(
             state = listState,
@@ -621,11 +658,12 @@ fun TodayScreen(
                 item(key = "sec_${bundle.section.group.id}", contentType = "sec") {
                     TimelineSectionHeader(section = bundle.section, colors = colors)
                 }
-                // #46 Square habit grid (3 columns) so more fit on screen
-                val chunks = bundle.rows.chunked(3)
+                // Square habit grid — column count from appData.todayGridColumns (2–4)
+                val cols = appData.todayGridColumns.coerceIn(2, 4)
+                val chunks = bundle.rows.chunked(cols)
                 items(
                     chunks.size,
-                    key = { idx -> "grid_${bundle.section.group.id}_$idx" },
+                    key = { idx -> "grid_${bundle.section.group.id}_${cols}_$idx" },
                     contentType = { "habit_row" }
                 ) { idx ->
                     val chunk = chunks[idx]
@@ -645,8 +683,7 @@ fun TodayScreen(
                                 modifier = Modifier.weight(1f)
                             )
                         }
-                        // Pad incomplete last row so squares stay equal width
-                        repeat(3 - chunk.size) {
+                        repeat(cols - chunk.size) {
                             Spacer(Modifier.weight(1f))
                         }
                     }

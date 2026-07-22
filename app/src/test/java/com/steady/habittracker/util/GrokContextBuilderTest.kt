@@ -147,4 +147,28 @@ class GrokContextBuilderTest {
         assertTrue(metrics.isNotEmpty())
         assertTrue(metrics.zipWithNext().all { (a, b) -> a.score >= b.score })
     }
+
+    @Test
+    fun presetRoundTripPreservesToolsAndTags() {
+        val sel = GrokShareSelection(
+            includeOverview = false,
+            includeMomentum = true,
+            includeTagAverages = false,
+            includeHabitDetails = true,
+            includeRecentLogs = true,
+            captureTags = setOf(CaptureTags.IDEAS, CaptureTags.NOTES),
+            captureScope = CaptureTimeScope.TODAY,
+            habitIds = setOf("h1"),
+            userPrompt = "Weekly focus?"
+        )
+        val preset = sel.toPreset("Weekly")
+        val back = GrokShareSelection.fromPreset(preset)
+        assertTrue(back.includeMomentum)
+        assertFalse(back.includeOverview)
+        assertTrue(back.captureTags.contains(CaptureTags.IDEAS))
+        assertTrue(back.captureScope == CaptureTimeScope.TODAY)
+        assertTrue(back.userPrompt.contains("Weekly focus"))
+        assertTrue(back.habitIds.contains("h1"))
+        assertTrue(preset.name == "Weekly")
+    }
 }

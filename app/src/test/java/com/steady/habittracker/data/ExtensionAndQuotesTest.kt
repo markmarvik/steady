@@ -119,10 +119,12 @@ class ExtensionAndQuotesTest {
     }
 
     @Test
-    fun appDataSchemaV13() {
-        assertEquals(13, AppData().schemaVersion)
+    fun appDataSchemaV14() {
+        assertEquals(14, AppData().schemaVersion)
         assertNotNull(AppData().localWebPrefs)
         assertNotNull(AppData().pomodoroPrefs)
+        assertTrue(AppData().grokPresets.isEmpty())
+        assertEquals(3, AppData().todayGridColumns)
     }
 
     @Test

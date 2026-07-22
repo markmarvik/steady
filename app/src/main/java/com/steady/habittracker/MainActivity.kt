@@ -600,7 +600,10 @@ fun SteadyApp(
                     onSaveGrokReply = { title, note, tags ->
                         viewModel.addCapture(title, note, tags)
                         Toast.makeText(context, "Grok reply saved to notes", Toast.LENGTH_SHORT).show()
-                    }
+                    },
+                    onSaveGrokPreset = viewModel::saveGrokPreset,
+                    onDeleteGrokPreset = viewModel::deleteGrokPreset,
+                    onMarkLastGrokPreset = viewModel::setLastGrokPresetId
                 )
             }
         }
@@ -859,6 +862,7 @@ fun SteadyApp(
                         onDeleteCapture = viewModel::deleteCapture,
                         onReopenCapture = viewModel::reopenCaptureToInbox,
                         onChatWithGrok = { showAskGrok = true },
+                        onSetTodayGridColumns = viewModel::setTodayGridColumns,
                         onCreateMetric = { name -> viewModel.addMetricHabit(name) },
                         onLogMetric = viewModel::logEntry,
                         onStartRoutine = { rt -> activeWorkoutRoutine = rt },

@@ -38,9 +38,11 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import android.widget.Toast
 import com.steady.habittracker.data.AppData
 import com.steady.habittracker.data.CaptureTags
 import com.steady.habittracker.data.DisplayIcon
+import com.steady.habittracker.data.GrokPreset
 import com.steady.habittracker.util.CaptureTimeScope
 import com.steady.habittracker.util.GrokContextBuilder
 import com.steady.habittracker.util.GrokLauncher
@@ -52,44 +54,131 @@ import java.util.Locale
 /**
  * Full-screen composer: multi-select note categories + time scope + stats → Chat with Grok.
  * Supports pasting Grok's reply back into Steady as a note (#39 / #45).
+ * Save / load command presets so copy+open uses your usual setup.
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun AskGrokScreen(
     appData: AppData,
     onBack: () -> Unit,
-    onSaveGrokReply: (title: String, note: String, tags: List<String>) -> Unit = { _, _, _ -> }
+    onSaveGrokReply: (title: String, note: String, tags: List<String>) -> Unit = { _, _, _ -> },
+    onSaveGrokPreset: (GrokPreset) -> Unit = {},
+    onDeleteGrokPreset: (String) -> Unit = {},
+    onMarkLastGrokPreset: (String?) -> Unit = {}
 ) {
     val context = LocalContext.current
     val accent = MaterialTheme.colorScheme.primary
     val dateFmt = remember { SimpleDateFormat("MMM d", Locale.getDefault()) }
 
-    var includeOverview by remember { mutableStateOf(true) }
-    var includeMomentum by remember { mutableStateOf(true) }
-    var includeTagAverages by remember { mutableStateOf(true) }
-    var includeHabitDetails by remember { mutableStateOf(false) }
-    var includeSleep by remember { mutableStateOf(appData.sleepNights.isNotEmpty()) }
-    var includeWorkouts by remember { mutableStateOf(appData.workoutSessions.isNotEmpty()) }
-    var includePathGoals by remember { mutableStateOf(appData.goals.any { !it.archived }) }
-    var includeRecentLogs by remember { mutableStateOf(true) }
-    var includeScreenUsage by remember {
-        mutableStateOf(GrokContextBuilder.hasScreenUsageBlock(appData))
+    val initialPreset = remember(appData.grokPresets, appData.lastGrokPresetId) {
+        appData.grokPresets.find { it.id == appData.lastGrokPresetId }
+            ?: appData.grokPresets.firstOrNull()
+    }
+    val initialSel = remember(initialPreset) {
+        initialPreset?.let { GrokShareSelection.fromPreset(it) }
     }
 
-    var userPrompt by remember { mutableStateOf(GrokShareSelection.DEFAULT_PROMPT) }
-    var selectedCaptures by remember { mutableStateOf(setOf<String>()) }
-    var selectedHabits by remember { mutableStateOf(setOf<String>()) }
-    // Multi-select categories (#39) — default Ideas + Notes
-    var selectedNoteTags by remember {
-        mutableStateOf(setOf(CaptureTags.IDEAS, CaptureTags.NOTES))
+    var includeOverview by remember {
+        mutableStateOf(initialSel?.includeOverview ?: true)
     }
-    var captureScope by remember { mutableStateOf(CaptureTimeScope.LAST_7) }
+    var includeMomentum by remember {
+        mutableStateOf(initialSel?.includeMomentum ?: true)
+    }
+    var includeTagAverages by remember {
+        mutableStateOf(initialSel?.includeTagAverages ?: true)
+    }
+    var includeHabitDetails by remember {
+        mutableStateOf(initialSel?.includeHabitDetails ?: false)
+    }
+    var includeSleep by remember {
+        mutableStateOf(initialSel?.includeSleep ?: appData.sleepNights.isNotEmpty())
+    }
+    var includeWorkouts by remember {
+        mutableStateOf(initialSel?.includeWorkouts ?: appData.workoutSessions.isNotEmpty())
+    }
+    var includePathGoals by remember {
+        mutableStateOf(initialSel?.includePathGoals ?: appData.goals.any { !it.archived })
+    }
+    var includeRecentLogs by remember {
+        mutableStateOf(initialSel?.includeRecentLogs ?: true)
+    }
+    var includeScreenUsage by remember {
+        mutableStateOf(
+            initialSel?.includeScreenUsage
+                ?: GrokContextBuilder.hasScreenUsageBlock(appData)
+        )
+    }
+
+    var userPrompt by remember {
+        mutableStateOf(initialSel?.userPrompt ?: GrokShareSelection.DEFAULT_PROMPT)
+    }
+    var selectedCaptures by remember { mutableStateOf(setOf<String>()) }
+    var selectedHabits by remember {
+        mutableStateOf(initialSel?.habitIds ?: emptySet())
+    }
+    var selectedNoteTags by remember {
+        mutableStateOf(
+            initialSel?.captureTags?.takeIf { it.isNotEmpty() }
+                ?: setOf(CaptureTags.IDEAS, CaptureTags.NOTES)
+        )
+    }
+    var captureScope by remember {
+        mutableStateOf(initialSel?.captureScope ?: CaptureTimeScope.LAST_7)
+    }
     var pickIndividual by remember { mutableStateOf(false) }
     var messageOverride by remember { mutableStateOf<String?>(null) }
     var showPreview by remember { mutableStateOf(true) }
     var showPasteReply by remember { mutableStateOf(false) }
     var pasteBody by remember { mutableStateOf("") }
     var pasteTitle by remember { mutableStateOf("Grok reply") }
+    var showSavePreset by remember { mutableStateOf(false) }
+    var presetName by remember { mutableStateOf("") }
+    var activePresetId by remember { mutableStateOf(initialPreset?.id) }
+    var savePresetAfterSend by remember { mutableStateOf(false) }
+
+    fun applyPreset(preset: GrokPreset) {
+        val sel = GrokShareSelection.fromPreset(preset)
+        includeOverview = sel.includeOverview
+        includeMomentum = sel.includeMomentum
+        includeTagAverages = sel.includeTagAverages
+        includeHabitDetails = sel.includeHabitDetails
+        includeSleep = sel.includeSleep
+        includeWorkouts = sel.includeWorkouts
+        includePathGoals = sel.includePathGoals
+        includeRecentLogs = sel.includeRecentLogs
+        includeScreenUsage = sel.includeScreenUsage
+        selectedNoteTags = sel.captureTags
+        captureScope = sel.captureScope
+        selectedHabits = sel.habitIds
+        userPrompt = sel.userPrompt
+        pickIndividual = false
+        selectedCaptures = emptySet()
+        messageOverride = null
+        activePresetId = preset.id
+        onMarkLastGrokPreset(preset.id)
+    }
+
+    fun currentSelectionForPreset(): GrokShareSelection = GrokShareSelection(
+        includeOverview = includeOverview,
+        includeMomentum = includeMomentum,
+        includeTagAverages = includeTagAverages,
+        includeHabitDetails = includeHabitDetails,
+        includeSleep = includeSleep,
+        includeWorkouts = includeWorkouts,
+        includePathGoals = includePathGoals,
+        includeRecentLogs = includeRecentLogs,
+        includeScreenUsage = includeScreenUsage,
+        captureIds = emptySet(),
+        captureTags = selectedNoteTags,
+        captureScope = captureScope,
+        habitIds = selectedHabits,
+        userPrompt = if (messageOverride != null) {
+            // Keep structured tools; user edited body is one-shot unless they edit prompt field
+            userPrompt
+        } else {
+            userPrompt
+        }
+    )
 
     val habits = remember(appData) { GrokContextBuilder.selectableHabits(appData) }
     val scopedCaptures = remember(appData, selectedNoteTags, captureScope) {
@@ -145,6 +234,47 @@ fun AskGrokScreen(
     val autoCaptureCount = if (pickIndividual) selectedCaptures.size else scopedCaptures.size
     val charCount = displayMessage.length
     val grokInstalled = remember { GrokLauncher.isGrokInstalled(context) }
+
+    if (showSavePreset) {
+        AlertDialog(
+            onDismissRequest = { showSavePreset = false },
+            title = { Text("Save Grok preset") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        "Saves your question, note tags, time scope, and which tools are on. " +
+                            "Live data is always rebuilt when you use the preset.",
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    OutlinedTextField(
+                        value = presetName,
+                        onValueChange = { presetName = it },
+                        label = { Text("Preset name") },
+                        placeholder = { Text("e.g. Weekly review") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        val name = presetName.trim().ifBlank { "Grok preset" }
+                        val preset = currentSelectionForPreset().toPreset(name)
+                        onSaveGrokPreset(preset)
+                        activePresetId = preset.id
+                        showSavePreset = false
+                        presetName = ""
+                        Toast.makeText(context, "Preset saved: $name", Toast.LENGTH_SHORT).show()
+                    }
+                ) { Text("Save") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showSavePreset = false }) { Text("Cancel") }
+            }
+        )
+    }
 
     if (showPasteReply) {
         AlertDialog(
@@ -235,6 +365,86 @@ fun AskGrokScreen(
             modifier = Modifier.weight(1f),
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
+            item {
+                SectionLabel("Presets")
+                Text(
+                    "Save this command setup and reuse it when you copy or open Grok.",
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(Modifier.height(6.dp))
+                if (appData.grokPresets.isEmpty()) {
+                    Text(
+                        "No presets yet — configure below, then Save preset.",
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                } else {
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        appData.grokPresets.forEach { preset ->
+                            FilterChip(
+                                selected = activePresetId == preset.id,
+                                onClick = { applyPreset(preset) },
+                                label = { Text(preset.name, fontSize = 11.sp) }
+                            )
+                        }
+                    }
+                    val active = appData.grokPresets.find { it.id == activePresetId }
+                    if (active != null) {
+                        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                            TextButton(
+                                onClick = {
+                                    val updated = currentSelectionForPreset().toPreset(
+                                        name = active.name,
+                                        id = active.id
+                                    )
+                                    onSaveGrokPreset(updated)
+                                    Toast.makeText(
+                                        context,
+                                        "Updated “${active.name}”",
+                                        Toast.LENGTH_SHORT
+                                    ).show()
+                                }
+                            ) { Text("Update preset", fontSize = 11.sp) }
+                            TextButton(
+                                onClick = {
+                                    onDeleteGrokPreset(active.id)
+                                    activePresetId = null
+                                }
+                            ) { Text("Delete", fontSize = 11.sp) }
+                        }
+                    }
+                }
+                TextButton(onClick = {
+                    presetName = activePresetId
+                        ?.let { id -> appData.grokPresets.find { it.id == id }?.name }
+                        .orEmpty()
+                    showSavePreset = true
+                }) {
+                    Text("Save as new preset…", fontSize = 12.sp, color = accent)
+                }
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { savePresetAfterSend = !savePresetAfterSend }
+                ) {
+                    Checkbox(
+                        checked = savePresetAfterSend,
+                        onCheckedChange = { savePresetAfterSend = it }
+                    )
+                    Text(
+                        "When copying / opening, offer to save current setup as a preset",
+                        fontSize = 11.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+            }
+
             item {
                 SectionLabel("Your question")
                 OutlinedTextField(
@@ -548,8 +758,17 @@ fun AskGrokScreen(
                 .padding(top = 8.dp, bottom = 4.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
+            fun maybePromptSavePreset() {
+                if (savePresetAfterSend) {
+                    presetName = ""
+                    showSavePreset = true
+                }
+            }
             Button(
-                onClick = { GrokLauncher.sendToGrok(context, displayMessage) },
+                onClick = {
+                    GrokLauncher.sendToGrok(context, displayMessage)
+                    maybePromptSavePreset()
+                },
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(12.dp)
             ) {
@@ -559,11 +778,24 @@ fun AskGrokScreen(
                 )
             }
             OutlinedButton(
-                onClick = { GrokLauncher.copyOnly(context, displayMessage) },
+                onClick = {
+                    GrokLauncher.copyOnly(context, displayMessage)
+                    maybePromptSavePreset()
+                },
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(12.dp)
             ) {
                 Text("Copy message")
+            }
+            OutlinedButton(
+                onClick = {
+                    presetName = ""
+                    showSavePreset = true
+                },
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Text("Save as Grok preset")
             }
         }
     }

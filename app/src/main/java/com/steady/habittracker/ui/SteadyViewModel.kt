@@ -67,8 +67,13 @@ import com.steady.habittracker.data.withSleepAudioPrefs
 import com.steady.habittracker.data.withLocalWebPrefs
 import com.steady.habittracker.data.withPomodoroPrefs
 import com.steady.habittracker.data.CapturePrefs
+import com.steady.habittracker.data.GrokPreset
 import com.steady.habittracker.data.defaultLogNote
 import com.steady.habittracker.data.withCapturePrefs
+import com.steady.habittracker.data.withTodayGridColumns
+import com.steady.habittracker.data.withUpsertedGrokPreset
+import com.steady.habittracker.data.withoutGrokPreset
+import com.steady.habittracker.data.withGrokPresets
 import com.steady.habittracker.sensors.AutoLogEngine
 import com.steady.habittracker.sensors.AutoLogWorker
 import com.steady.habittracker.sleepaudio.SleepAudioScheduler
@@ -1145,6 +1150,34 @@ class SteadyViewModel(
         viewModelScope.launch {
             val current = appData.value
             repository.saveData(current.withoutCapture(id))
+        }
+    }
+
+    fun saveGrokPreset(preset: GrokPreset) {
+        viewModelScope.launch {
+            val current = appData.value
+            repository.saveData(current.withUpsertedGrokPreset(preset))
+        }
+    }
+
+    fun deleteGrokPreset(id: String) {
+        viewModelScope.launch {
+            val current = appData.value
+            repository.saveData(current.withoutGrokPreset(id))
+        }
+    }
+
+    fun setLastGrokPresetId(id: String?) {
+        viewModelScope.launch {
+            val current = appData.value
+            repository.saveData(current.withGrokPresets(current.grokPresets, lastId = id))
+        }
+    }
+
+    fun setTodayGridColumns(columns: Int) {
+        viewModelScope.launch {
+            val current = appData.value
+            repository.saveData(current.withTodayGridColumns(columns))
         }
     }
 

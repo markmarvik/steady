@@ -5,16 +5,17 @@ import com.steady.habittracker.data.CaptureItem
 import com.steady.habittracker.data.CaptureTags
 import com.steady.habittracker.data.DisplayIcon
 import com.steady.habittracker.data.ExtensionType
+import com.steady.habittracker.data.GrokPreset
 import com.steady.habittracker.data.Habit
 import com.steady.habittracker.data.HabitDomain
 import com.steady.habittracker.data.HabitType
 import com.steady.habittracker.data.SensorSnapshot
 import java.text.SimpleDateFormat
-import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
 import java.util.Date
 import java.util.Locale
+import java.util.UUID
 import java.util.concurrent.TimeUnit
 
 /** How far back to pull notes / captures for Grok context. */
@@ -57,7 +58,50 @@ data class GrokShareSelection(
         const val DEFAULT_PROMPT =
             "Looking at my Steady data below, what patterns stand out and what " +
                 "should I focus on next week to stay consistent?"
+
+        fun fromPreset(preset: GrokPreset): GrokShareSelection {
+            val scope = try {
+                CaptureTimeScope.valueOf(preset.captureScope)
+            } catch (_: Exception) {
+                CaptureTimeScope.LAST_7
+            }
+            return GrokShareSelection(
+                includeOverview = preset.includeOverview,
+                includeMomentum = preset.includeMomentum,
+                includeTagAverages = preset.includeTagAverages,
+                includeHabitDetails = preset.includeHabitDetails,
+                includeSleep = preset.includeSleep,
+                includeWorkouts = preset.includeWorkouts,
+                includePathGoals = preset.includePathGoals,
+                includeRecentLogs = preset.includeRecentLogs,
+                includeScreenUsage = preset.includeScreenUsage,
+                captureTags = preset.captureTags.toSet(),
+                captureScope = scope,
+                habitIds = preset.habitIds.toSet(),
+                userPrompt = preset.userPrompt.ifBlank { DEFAULT_PROMPT }
+            )
+        }
     }
+
+    fun toPreset(name: String, id: String = "gp_${UUID.randomUUID().toString().take(8)}"): GrokPreset =
+        GrokPreset(
+            id = id,
+            name = name.trim().ifBlank { "Preset" },
+            userPrompt = userPrompt,
+            includeOverview = includeOverview,
+            includeMomentum = includeMomentum,
+            includeTagAverages = includeTagAverages,
+            includeHabitDetails = includeHabitDetails,
+            includeSleep = includeSleep,
+            includeWorkouts = includeWorkouts,
+            includePathGoals = includePathGoals,
+            includeRecentLogs = includeRecentLogs,
+            includeScreenUsage = includeScreenUsage,
+            captureTags = captureTags.toList(),
+            captureScope = captureScope.name,
+            habitIds = habitIds.toList(),
+            createdAt = System.currentTimeMillis()
+        )
 }
 
 /**

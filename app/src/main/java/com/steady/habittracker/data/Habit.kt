@@ -14,9 +14,37 @@ import kotlinx.serialization.Serializable
  * - AutoSource / AutoLogMode / AutoSuggestion: on-device sensor & external auto-logging (v11).
  * - SleepAudio: OGG night recording, loud/snore events, multi-day retention (v12).
  * - ExtensionType / ExtensionConfig / habit reminders / sensor snapshots / local web + pomodoro (v13, #33–#38).
+ * - GrokPreset + todayGridColumns (v14): save Chat with Grok command presets; Today square density.
  * - archived + canSkip, parentId, skip/loggedAt, themes, schedules (v5).
  * All @Serializable for DataStore JSON (portable).
  */
+
+/**
+ * Saved Chat with Grok configuration — tools, note tags, time scope, and the question prompt.
+ * Applied when loading a preset; message body is rebuilt from live data each time.
+ */
+@Serializable
+data class GrokPreset(
+    val id: String,
+    val name: String,
+    val userPrompt: String = "",
+    val includeOverview: Boolean = true,
+    val includeMomentum: Boolean = true,
+    val includeTagAverages: Boolean = true,
+    val includeHabitDetails: Boolean = false,
+    val includeSleep: Boolean = false,
+    val includeWorkouts: Boolean = false,
+    val includePathGoals: Boolean = false,
+    val includeRecentLogs: Boolean = true,
+    val includeScreenUsage: Boolean = false,
+    /** Capture tag names (Ideas, Notes, …). */
+    val captureTags: List<String> = listOf("Ideas", "Notes"),
+    /** CaptureTimeScope name: TODAY, LAST_3, LAST_7, LAST_14, LAST_30, ALL. */
+    val captureScope: String = "LAST_7",
+    /** Optional sticky habit ids for habit-details section. */
+    val habitIds: List<String> = emptyList(),
+    val createdAt: Long = 0L
+)
 
 /**
  * Supported habit logging types. CHECKBOX is the simple done/not-done.
@@ -818,7 +846,7 @@ data class AppData(
     // date (yyyy-MM-dd) -> habitId -> entry
     val entries: Map<String, Map<String, HabitEntry>> = emptyMap(),
     val reminders: List<Reminder> = emptyList(),
-    val schemaVersion: Int = 13,
+    val schemaVersion: Int = 14,
     val onboarded: Boolean = false,
     val colorScheme: String = "default",   // accent id from accentSchemes() (green, rose, blush, …)
     val backgroundMode: String = "dark",   // id from backgroundModes() (dark, amoled, light, forest, …)
@@ -861,7 +889,16 @@ data class AppData(
     /** Local LAN web UI (#38). */
     val localWebPrefs: LocalWebPrefs = LocalWebPrefs(),
     /** Pomodoro defaults / active session (#38). */
-    val pomodoroPrefs: PomodoroPrefs = PomodoroPrefs()
+    val pomodoroPrefs: PomodoroPrefs = PomodoroPrefs(),
+    /** Saved Chat with Grok command presets (v14). */
+    val grokPresets: List<GrokPreset> = emptyList(),
+    /** Last applied Grok preset id (for quick reload). */
+    val lastGrokPresetId: String? = null,
+    /**
+     * Today habit square columns (2–4). More columns = denser grid.
+     * Matches Manage-style squares with user density control.
+     */
+    val todayGridColumns: Int = 3
 )
 
 /**
@@ -1027,6 +1064,26 @@ fun AppData.withUpdatedCapture(updated: CaptureItem): AppData =
     copy(captures = captures.map { if (it.id == updated.id) updated else it })
 fun AppData.withoutCapture(id: String): AppData = copy(captures = captures.filter { it.id != id })
 fun AppData.withCapturePrefs(prefs: CapturePrefs): AppData = copy(capturePrefs = prefs)
+
+fun AppData.withGrokPresets(presets: List<GrokPreset>, lastId: String? = lastGrokPresetId): AppData =
+    copy(grokPresets = presets, lastGrokPresetId = lastId)
+
+fun AppData.withUpsertedGrokPreset(preset: GrokPreset): AppData {
+    val others = grokPresets.filterNot { it.id == preset.id }
+    return copy(
+        grokPresets = (listOf(preset) + others).take(40),
+        lastGrokPresetId = preset.id
+    )
+}
+
+fun AppData.withoutGrokPreset(id: String): AppData =
+    copy(
+        grokPresets = grokPresets.filterNot { it.id == id },
+        lastGrokPresetId = if (lastGrokPresetId == id) null else lastGrokPresetId
+    )
+
+fun AppData.withTodayGridColumns(columns: Int): AppData =
+    copy(todayGridColumns = columns.coerceIn(2, 4))
 
 /**
  * Auto-archive open captures that are not inbox-worthy (memories, gratitude, …)
