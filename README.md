@@ -71,7 +71,7 @@ Four focused sub-tabs:
 | **Habits** | Flat catalog: create, edit, archive habits; **tags** for History; **exercise routines** |
 | **Groups** | Timeline groups (Morning, Focus, Bedtime…); **attach existing habits**, order, move primary |
 | **Blocks** | Special extensions: snore watch, sensor snapshot, screen usage, check-ins, Pomodoro, **local web UI** |
-| **Planner** | Sleep spine + **24h timeline**, **reminders** (aligned to schedule), **backup** export |
+| **Time** | Sleep spine + **24h timeline**, **reminders**, sensors / auto-log, sleep audio, **backup** |
 
 ### Momentum (scoring)
 - **Steady points** for due habits completed today (base + target/quality bonuses)
@@ -85,7 +85,7 @@ Four focused sub-tabs:
 - **Bedtime light** (lux) · dark-room check
 - **Ambient noise** (mic, short samples)
 - **Phone steps** (optional) · **Gadgetbridge / external steps** via broadcast
-- Manage → Planner → Auto-log permissions; edit habit → Auto-log source
+- Manage → Time → Sensors; edit habit → Auto-log source
 
 ### Sleep audio / snore watch (Special habit block extension)
 - **Implemented as special habit blocks** (see Design Philosophy / #33):
@@ -130,7 +130,7 @@ Four focused sub-tabs:
 1. **First run** — short onboarding; starter high-ROI habits are preloaded.
 2. **Today** — tap to log; expand the header for weekly trends and per-group averages.
 3. **Path** — run **Start Dreamline** to define dreams; check in with **Am I on path?**
-4. **Manage → Planner** — set wake/bed, edit the 24h timeline, enable reminders.
+4. **Manage → Time** — set wake/bed, edit the 24h timeline, enable reminders.
 5. **Manage → Habits / Groups** — catalog habits and timeline membership.
 6. **Manage → Blocks** — add special extensions and enable LAN web / quotes / check-ins.
 7. **Settings (gear)** — theme + help/tour.

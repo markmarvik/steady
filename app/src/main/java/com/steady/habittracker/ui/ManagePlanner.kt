@@ -126,9 +126,9 @@ fun DailyPlannerCard(
         shape = RoundedCornerShape(12.dp)
     ) {
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("Daily Planner", color = MaterialTheme.colorScheme.primary, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+            Text("Sleep & timeline", color = MaterialTheme.colorScheme.primary, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
             Text(
-                "Sleep anchors the day · timeline places groups on the clock",
+                "Wake / bed set the day spine · blocks place groups on the 24h clock",
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 fontSize = 10.sp
             )
@@ -524,7 +524,7 @@ fun RemindersCard(
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Text("Reminders", color = MaterialTheme.colorScheme.primary, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
             Text(
-                "Times follow your Daily Planner schedule",
+                "Times follow your Time → Day schedule",
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 fontSize = 10.sp
             )

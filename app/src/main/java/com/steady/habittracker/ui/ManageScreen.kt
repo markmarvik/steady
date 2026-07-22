@@ -59,7 +59,7 @@ import java.time.LocalDate
  * Manage = three focused areas:
  * - Habits: groups as wide section headers + habits as a 2-column square grid
  * - Blocks: special habit extensions (#33, #37)
- * - Planner: sleep/schedule, reminders, backup
+ * - Time: sleep/schedule, reminders, sensors, backup
  */
 @Composable
 fun ManageScreen(
@@ -119,8 +119,9 @@ fun ManageScreen(
     schedules: List<Schedule> = emptyList(),
     activeScheduleId: String? = null
 ) {
-    // 0 Habits (groups + habits) · 1 Blocks · 2 Planner
+    // 0 Habits · 1 Blocks · 2 Time (schedule / reminders / sensors / backup)
     var manageTab by remember { mutableIntStateOf(0) }
+    var timeSection by remember { mutableIntStateOf(0) } // which Time sub-panel is expanded
     var showAddGroup by remember { mutableStateOf(false) }
     /** Create a new habit (optional initial group id from a section header). */
     var showCreateHabit by remember { mutableStateOf(false) }
@@ -225,7 +226,7 @@ fun ManageScreen(
         ) {
             TabButton("Habits", manageTab == 0, modifier = Modifier.weight(1f)) { manageTab = 0 }
             TabButton("Blocks", manageTab == 1, modifier = Modifier.weight(1f)) { manageTab = 1 }
-            TabButton("Planner", manageTab == 2, modifier = Modifier.weight(1f)) { manageTab = 2 }
+            TabButton("Time", manageTab == 2, modifier = Modifier.weight(1f)) { manageTab = 2 }
         }
 
         Spacer(Modifier.height(8.dp))
@@ -639,87 +640,130 @@ fun ManageScreen(
             }
 
             else -> {
-                // ——— Planner: schedule + reminders + backup ———
+                // ——— Time: day schedule, reminders, sensors, backup (collapsible panels) ———
                 LazyColumn(
                     modifier = Modifier.weight(1f),
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     item {
-                        DailyPlannerCard(
-                            appData = appData,
-                            groups = activeGroups,
-                            schedules = schedules,
-                            activeScheduleId = activeScheduleId,
-                            isEditingSchedule = isEditingSchedule,
-                            editBlocks = editBlocks,
-                            onEditBlocksChange = { editBlocks = it },
-                            onToggleEditing = {
-                                if (!isEditingSchedule) {
-                                    editBlocks = schedules.firstOrNull { it.id == activeScheduleId }?.timeBlocks
-                                        ?: emptyList()
+                        Text(
+                            "When your day happens",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            fontSize = 12.sp,
+                            modifier = Modifier.padding(bottom = 2.dp)
+                        )
+                    }
+                    item {
+                        TimePanel(
+                            title = "Day schedule",
+                            subtitle = "Sleep anchors · 24h timeline · group blocks",
+                            expanded = timeSection == 0,
+                            onToggle = { timeSection = if (timeSection == 0) -1 else 0 }
+                        ) {
+                            DailyPlannerCard(
+                                appData = appData,
+                                groups = activeGroups,
+                                schedules = schedules,
+                                activeScheduleId = activeScheduleId,
+                                isEditingSchedule = isEditingSchedule,
+                                editBlocks = editBlocks,
+                                onEditBlocksChange = { editBlocks = it },
+                                onToggleEditing = {
+                                    if (!isEditingSchedule) {
+                                        editBlocks = schedules.firstOrNull { it.id == activeScheduleId }?.timeBlocks
+                                            ?: emptyList()
+                                    }
+                                    isEditingSchedule = !isEditingSchedule
+                                },
+                                onCloseEditing = { isEditingSchedule = false },
+                                onApplySleep = onApplySleepSchedule,
+                                onSetActiveSchedule = onSetActiveSchedule,
+                                onUpdateScheduleBlocks = onUpdateScheduleBlocks,
+                                onApplySchedulePreset = onApplySchedulePreset
+                            )
+                        }
+                    }
+                    item {
+                        TimePanel(
+                            title = "Reminders",
+                            subtitle = "Notifications timed to your schedule",
+                            expanded = timeSection == 1,
+                            onToggle = { timeSection = if (timeSection == 1) -1 else 1 }
+                        ) {
+                            RemindersCard(
+                                appData = appData,
+                                onToggleMaster = onSetRemindersMasterEnabled,
+                                onToggleReminder = onToggleReminder,
+                                onEditReminder = { rem ->
+                                    reminderDialogGroup = rem.groupId?.let { gid ->
+                                        appData.groups.find { it.id == gid }
+                                    }
+                                    showReminderDialog = true
+                                },
+                                onAlignToSchedule = onAlignRemindersToSchedule,
+                                onUpdateNotificationPrefs = onUpdateNotificationPrefs
+                            )
+                        }
+                    }
+                    item {
+                        TimePanel(
+                            title = "Sensors & auto-log",
+                            subtitle = "Screen, light, noise, steps — permissions here",
+                            expanded = timeSection == 2,
+                            onToggle = { timeSection = if (timeSection == 2) -1 else 2 }
+                        ) {
+                            AutoLogCard(
+                                appData = appData,
+                                onToggleMaster = onSetAutoLogMasterEnabled,
+                                onSyncNow = onRunAutoLogNow
+                            )
+                        }
+                    }
+                    item {
+                        TimePanel(
+                            title = "Sleep audio",
+                            subtitle = "Overnight snore / loud-event capture",
+                            expanded = timeSection == 3,
+                            onToggle = { timeSection = if (timeSection == 3) -1 else 3 }
+                        ) {
+                            SleepAudioCard(
+                                appData = appData,
+                                onUpdatePrefs = onUpdateSleepAudioPrefs,
+                                onStartNow = onStartSleepAudio,
+                                onStopNow = onStopSleepAudio
+                            )
+                        }
+                    }
+                    item {
+                        TimePanel(
+                            title = "Backup",
+                            subtitle = "Export / import full Steady JSON",
+                            expanded = timeSection == 4,
+                            onToggle = { timeSection = if (timeSection == 4) -1 else 4 }
+                        ) {
+                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Text(
+                                    "Includes habits, logs, Momentum, reminders, Path, and settings. Import replaces current data.",
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    fontSize = 11.sp
+                                )
+                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    Button(
+                                        onClick = onExportCsv,
+                                        colors = ButtonDefaults.buttonColors(
+                                            containerColor = MaterialTheme.colorScheme.primary
+                                        )
+                                    ) {
+                                        Text("Export")
+                                    }
+                                    OutlinedButton(onClick = onImportCsv) {
+                                        Text("Import")
+                                    }
                                 }
-                                isEditingSchedule = !isEditingSchedule
-                            },
-                            onCloseEditing = { isEditingSchedule = false },
-                            onApplySleep = onApplySleepSchedule,
-                            onSetActiveSchedule = onSetActiveSchedule,
-                            onUpdateScheduleBlocks = onUpdateScheduleBlocks,
-                            onApplySchedulePreset = onApplySchedulePreset
-                        )
-                    }
-                    item {
-                        RemindersCard(
-                            appData = appData,
-                            onToggleMaster = onSetRemindersMasterEnabled,
-                            onToggleReminder = onToggleReminder,
-                            onEditReminder = { rem ->
-                                reminderDialogGroup = rem.groupId?.let { gid ->
-                                    appData.groups.find { it.id == gid }
-                                }
-                                showReminderDialog = true
-                            },
-                            onAlignToSchedule = onAlignRemindersToSchedule,
-                            onUpdateNotificationPrefs = onUpdateNotificationPrefs
-                        )
-                    }
-                    item {
-                        AutoLogCard(
-                            appData = appData,
-                            onToggleMaster = onSetAutoLogMasterEnabled,
-                            onSyncNow = onRunAutoLogNow
-                        )
-                    }
-                    item {
-                        SleepAudioCard(
-                            appData = appData,
-                            onUpdatePrefs = onUpdateSleepAudioPrefs,
-                            onStartNow = onStartSleepAudio,
-                            onStopNow = onStopSleepAudio
-                        )
-                    }
-                    item {
-                        Spacer(Modifier.height(4.dp))
-                        Text("Backup", color = MaterialTheme.colorScheme.primary, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-                        Spacer(Modifier.height(6.dp))
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Button(
-                                onClick = onExportCsv,
-                                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
-                            ) {
-                                Text("Export Backup")
-                            }
-                            OutlinedButton(onClick = onImportCsv) {
-                                Text("Import Backup")
                             }
                         }
-                        Text(
-                            "Full JSON backup: habits, logs, Momentum score, reminders, Path, settings. Import replaces current data.",
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            fontSize = 10.sp,
-                            modifier = Modifier.padding(top = 4.dp)
-                        )
                     }
-                    item { Spacer(Modifier.height(12.dp)) }
+                    item { Spacer(Modifier.height(16.dp)) }
                 }
             }
         }
@@ -1566,7 +1610,7 @@ private fun EditHabitDialog(
                 Spacer(Modifier.height(12.dp))
                 Text("Auto-log (sensors)", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
                 Text(
-                    "On-device only. Grant permissions in Planner if needed.",
+                    "On-device only. Grant permissions in Time → Sensors if needed.",
                     fontSize = 10.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -2118,7 +2162,7 @@ private fun BlocksConfigSection(
                 fontSize = 14.sp
             )
             Text(
-                "Extensions appear on Today & the widget like normal habits. Add a template to a suggested group, then schedule it in Planner.",
+                "Extensions appear on Today & the widget like normal habits. Add a template to a suggested group, then place it on the timeline in Time.",
                 fontSize = 11.sp,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -2808,4 +2852,57 @@ private fun normalizeTime(hhmm: String): String {
     val h = (p.getOrNull(0)?.toIntOrNull() ?: 0).coerceIn(0, 23)
     val m = (p.getOrNull(1)?.toIntOrNull() ?: 0).coerceIn(0, 59)
     return "%02d:%02d".format(h, m)
+}
+
+/** Collapsible panel for Manage → Time (one section open at a time keeps the tab scannable). */
+@Composable
+private fun TimePanel(
+    title: String,
+    subtitle: String,
+    expanded: Boolean,
+    onToggle: () -> Unit,
+    content: @Composable () -> Unit
+) {
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable(onClick = onToggle),
+            colors = CardDefaults.cardColors(
+                containerColor = if (expanded)
+                    MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f)
+                else
+                    MaterialTheme.colorScheme.surface
+            ),
+            shape = RoundedCornerShape(14.dp)
+        ) {
+            Row(
+                Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        title,
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 15.sp,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Text(
+                        subtitle,
+                        fontSize = 11.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Text(
+                    if (expanded) "▾" else "▸",
+                    fontSize = 18.sp,
+                    color = MaterialTheme.colorScheme.primary,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+        }
+        if (expanded) {
+            content()
+        }
+    }
 }
