@@ -133,7 +133,12 @@ enum class ExtensionType {
      * Minimal phone-use guard in morning and/or bedtime routines
      * (track / park phone before sleep & delay first use in the morning).
      */
-    SLEEP_PHONE
+    SLEEP_PHONE,
+    /**
+     * Deep Work session block — intentional focus block with timer + intent note.
+     * Lives on the day timeline (Work / Focus), not the tool strip.
+     */
+    DEEP_WORK
 }
 
 /** Notification / habit reminder intensity (#30). */
@@ -464,6 +469,64 @@ data class PomodoroPrefs(
     /** Running session start epoch ms; 0 = idle. */
     val sessionStartedAt: Long = 0L,
     val sessionIsBreak: Boolean = false
+)
+
+/**
+ * Deep Work defaults + at most one active session.
+ * Session is app-level so the widget/Today share the same clock.
+ */
+@Serializable
+data class DeepWorkPrefs(
+    val defaultMinutes: Int = 90,
+    val pointValue: Int = 15,
+    val suggestIntent: Boolean = true,
+    /** Running session start epoch ms; 0 = idle. */
+    val sessionStartedAt: Long = 0L,
+    val sessionPlannedMinutes: Int = 0,
+    val sessionIntent: String = "",
+    val sessionHabitId: String? = null,
+    val lastCompletedAt: Long = 0L,
+    val lastCompletedMinutes: Int = 0,
+    val lastIntent: String = ""
+) {
+    fun isSessionActive(): Boolean = sessionStartedAt > 0L
+
+    fun effectiveDefaultMinutes(): Int = defaultMinutes.coerceIn(15, 240)
+
+    fun elapsedMinutes(nowMs: Long = System.currentTimeMillis()): Int {
+        if (!isSessionActive()) return 0
+        return ((nowMs - sessionStartedAt).coerceAtLeast(0L) / 60_000L).toInt()
+    }
+
+    fun remainingMinutes(nowMs: Long = System.currentTimeMillis()): Int {
+        val planned = sessionPlannedMinutes.coerceAtLeast(1)
+        return (planned - elapsedMinutes(nowMs)).coerceAtLeast(0)
+    }
+
+    fun clearSession(): DeepWorkPrefs = copy(
+        sessionStartedAt = 0L,
+        sessionPlannedMinutes = 0,
+        sessionIntent = "",
+        sessionHabitId = null
+    )
+}
+
+/**
+ * One Most Important Task for a logical Steady day (max 3 open per day).
+ * Independent of habit logs; can link back to a Todo capture.
+ */
+@Serializable
+data class MitItem(
+    val id: String,
+    val title: String,
+    /** Logical day yyyy-MM-dd (respects dayStartHour). */
+    val date: String,
+    val done: Boolean = false,
+    val captureId: String? = null,
+    val order: Int = 0,
+    /** Previous logical day this was carried from, if any. */
+    val carriedFrom: String? = null,
+    val completedAt: Long = 0L
 )
 
 /** Preset tags for quick capture / ESM (#30, #36). */
@@ -1238,6 +1301,13 @@ data class AppData(
     val localWebPrefs: LocalWebPrefs = LocalWebPrefs(),
     /** Pomodoro defaults / active session (#38). */
     val pomodoroPrefs: PomodoroPrefs = PomodoroPrefs(),
+    /** Deep Work defaults + active session. */
+    val deepWorkPrefs: DeepWorkPrefs = DeepWorkPrefs(),
+    /**
+     * Daily Most Important Tasks (≤3 open per logical day).
+     * Kept as a flat list; helpers filter by date.
+     */
+    val mits: List<MitItem> = emptyList(),
     /** Saved Chat with Grok command presets (v14). */
     val grokPresets: List<GrokPreset> = emptyList(),
     /** Last applied Grok preset id (for quick reload). */
@@ -1640,6 +1710,8 @@ fun AppData.withAddedSensorSnapshot(snap: SensorSnapshot): AppData =
     copy(sensorSnapshots = (listOf(snap) + sensorSnapshots).take(200))
 fun AppData.withLocalWebPrefs(prefs: LocalWebPrefs): AppData = copy(localWebPrefs = prefs)
 fun AppData.withPomodoroPrefs(prefs: PomodoroPrefs): AppData = copy(pomodoroPrefs = prefs)
+fun AppData.withDeepWorkPrefs(prefs: DeepWorkPrefs): AppData = copy(deepWorkPrefs = prefs)
+fun AppData.withMits(mits: List<MitItem>): AppData = copy(mits = mits.take(200))
 
 fun AppData.withUpsertedAutoSuggestion(suggestion: AutoSuggestion): AppData {
     val others = autoSuggestions.filterNot {

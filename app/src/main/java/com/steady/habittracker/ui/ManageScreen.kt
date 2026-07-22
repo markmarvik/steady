@@ -106,6 +106,9 @@ fun ManageScreen(
     onUpdateSleepPhonePrefs: (com.steady.habittracker.data.SleepPhonePrefs) -> Unit = {},
     onEnableSleepPhoneBlock: () -> Unit = {},
     onDisableSleepPhoneBlock: () -> Unit = {},
+    onUpdateDeepWorkPrefs: (com.steady.habittracker.data.DeepWorkPrefs) -> Unit = {},
+    onEnableDeepWorkBlock: () -> Unit = {},
+    onDisableDeepWorkBlock: () -> Unit = {},
     onAlignRemindersToSchedule: () -> Unit = {},
     onArchiveGroup: (String) -> Unit = {},
     onExportCsv: () -> Unit = {},
@@ -668,6 +671,9 @@ fun ManageScreen(
                     onUpdateSleepPhonePrefs = onUpdateSleepPhonePrefs,
                     onEnableSleepPhoneBlock = onEnableSleepPhoneBlock,
                     onDisableSleepPhoneBlock = onDisableSleepPhoneBlock,
+                    onUpdateDeepWorkPrefs = onUpdateDeepWorkPrefs,
+                    onEnableDeepWorkBlock = onEnableDeepWorkBlock,
+                    onDisableDeepWorkBlock = onDisableDeepWorkBlock,
                     onLoadBlueprintRoutines = onLoadBlueprintRoutines,
                     onSaveRoutine = onSaveRoutine,
                     onStartRoutine = onStartRoutine
@@ -2219,6 +2225,9 @@ private fun BlocksConfigSection(
     onUpdateSleepPhonePrefs: (com.steady.habittracker.data.SleepPhonePrefs) -> Unit = {},
     onEnableSleepPhoneBlock: () -> Unit = {},
     onDisableSleepPhoneBlock: () -> Unit = {},
+    onUpdateDeepWorkPrefs: (com.steady.habittracker.data.DeepWorkPrefs) -> Unit = {},
+    onEnableDeepWorkBlock: () -> Unit = {},
+    onDisableDeepWorkBlock: () -> Unit = {},
     onLoadBlueprintRoutines: () -> Unit = {},
     onSaveRoutine: (com.steady.habittracker.data.ExerciseRoutine) -> Unit = {},
     onStartRoutine: (com.steady.habittracker.data.ExerciseRoutine) -> Unit = {}
@@ -2271,6 +2280,10 @@ private fun BlocksConfigSection(
                 com.steady.habittracker.data.OralHygieneBlock.isEnabled(appData)
             com.steady.habittracker.data.ExtensionType.SLEEP_PHONE ->
                 com.steady.habittracker.data.SleepPhoneBlock.isEnabled(appData)
+            com.steady.habittracker.data.ExtensionType.DEEP_WORK ->
+                appData.habits.any {
+                    !it.archived && it.extensionType == com.steady.habittracker.data.ExtensionType.DEEP_WORK
+                }
             else -> appData.habits.any { !it.archived && it.extensionType == type }
         }
 
@@ -2294,6 +2307,16 @@ private fun BlocksConfigSection(
                 expandedKey = type.name
             } else {
                 onDisableSleepPhoneBlock()
+                if (expandedKey == type.name) expandedKey = null
+            }
+            return
+        }
+        if (type == com.steady.habittracker.data.ExtensionType.DEEP_WORK) {
+            if (enabled) {
+                onEnableDeepWorkBlock()
+                expandedKey = type.name
+            } else {
+                onDisableDeepWorkBlock()
                 if (expandedKey == type.name) expandedKey = null
             }
             return
@@ -2537,6 +2560,13 @@ private fun BlocksConfigSection(
                                 onUpdate = onUpdateSleepPhonePrefs
                             )
                         }
+                        com.steady.habittracker.data.ExtensionType.DEEP_WORK -> {
+                            DeepWorkBlockPanel(
+                                prefs = appData.deepWorkPrefs,
+                                activeHabits = active,
+                                onUpdate = onUpdateDeepWorkPrefs
+                            )
+                        }
                         else -> Unit
                     }
 
@@ -2544,7 +2574,8 @@ private fun BlocksConfigSection(
                     val managedBlock =
                         type == com.steady.habittracker.data.ExtensionType.ORAL_HYGIENE ||
                             type == com.steady.habittracker.data.ExtensionType.GADGETBRIDGE_SYNC ||
-                            type == com.steady.habittracker.data.ExtensionType.SLEEP_PHONE
+                            type == com.steady.habittracker.data.ExtensionType.SLEEP_PHONE ||
+                            type == com.steady.habittracker.data.ExtensionType.DEEP_WORK
                     if (!managedBlock) {
                         if (active.isNotEmpty()) {
                             Text(
@@ -2778,6 +2809,7 @@ private fun BlockPermissionPanel(type: com.steady.habittracker.data.ExtensionTyp
         com.steady.habittracker.data.ExtensionType.WORKOUT_SESSION -> emptyList()
         com.steady.habittracker.data.ExtensionType.ORAL_HYGIENE -> emptyList()
         com.steady.habittracker.data.ExtensionType.SLEEP_PHONE -> emptyList()
+        com.steady.habittracker.data.ExtensionType.DEEP_WORK -> emptyList()
         com.steady.habittracker.data.ExtensionType.GADGETBRIDGE_SYNC -> listOf(
             Need("Notifications (special wearable events)", notifOk) {
                 if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
@@ -4144,6 +4176,69 @@ private fun OralStepSwitch(
     ) {
         Text(label, fontSize = 13.sp)
         Switch(checked = checked, onCheckedChange = onCheckedChange)
+    }
+}
+
+@Composable
+private fun DeepWorkBlockPanel(
+    prefs: com.steady.habittracker.data.DeepWorkPrefs,
+    activeHabits: List<Habit>,
+    onUpdate: (com.steady.habittracker.data.DeepWorkPrefs) -> Unit
+) {
+    fun set(p: com.steady.habittracker.data.DeepWorkPrefs) = onUpdate(p)
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        shape = RoundedCornerShape(12.dp)
+    ) {
+        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(
+                "Deep Work",
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.primary,
+                fontSize = 13.sp
+            )
+            Text(
+                "Tap the block on Today to start a session; tap again to finish and log minutes. " +
+                    "Optional intent is stored on the note.",
+                fontSize = 11.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Text("Default length", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                listOf(50, 90, 120).forEach { m ->
+                    FilterChip(
+                        selected = prefs.defaultMinutes == m,
+                        onClick = { set(prefs.copy(defaultMinutes = m)) },
+                        label = { Text("${m}m", fontSize = 11.sp) }
+                    )
+                }
+            }
+            Text("Points when finished", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                listOf(10, 15, 20, 25).forEach { pts ->
+                    FilterChip(
+                        selected = prefs.pointValue == pts,
+                        onClick = { set(prefs.copy(pointValue = pts)) },
+                        label = { Text("$pts", fontSize = 11.sp) }
+                    )
+                }
+            }
+            if (prefs.isSessionActive()) {
+                Text(
+                    "Session running · ${prefs.remainingMinutes()}m left",
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.primary
+                )
+            }
+            if (activeHabits.isNotEmpty()) {
+                Text(
+                    "On planner: ${activeHabits.joinToString { it.name }}",
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
     }
 }
 

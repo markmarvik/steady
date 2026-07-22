@@ -982,7 +982,12 @@ fun SteadyApp(
                         onAcceptAutoSuggestion = viewModel::acceptAutoSuggestion,
                         onDismissAutoSuggestion = viewModel::dismissAutoSuggestion,
                         onRunAutoLog = { viewModel.runAutoLogNow() },
-                        onCompleteTodo = viewModel::markCaptureProcessed
+                        onCompleteTodo = viewModel::markCaptureProcessed,
+                        onEnsureMitsCarried = viewModel::ensureMitsCarried,
+                        onAddMit = viewModel::addMit,
+                        onCompleteMit = viewModel::completeMit,
+                        onDemoteMit = viewModel::demoteMit,
+                        onPromoteTodoToMit = viewModel::promoteTodoToMit
                     )
                     1 -> PathScreen(
                         appData = appData,
@@ -1051,6 +1056,9 @@ fun SteadyApp(
                         onUpdateSleepPhonePrefs = viewModel::updateSleepPhonePrefs,
                         onEnableSleepPhoneBlock = viewModel::enableSleepPhoneBlock,
                         onDisableSleepPhoneBlock = viewModel::disableSleepPhoneBlock,
+                        onUpdateDeepWorkPrefs = viewModel::updateDeepWorkPrefs,
+                        onEnableDeepWorkBlock = viewModel::enableDeepWorkBlock,
+                        onDisableDeepWorkBlock = viewModel::disableDeepWorkBlock,
                         onAlignRemindersToSchedule = viewModel::alignRemindersToSchedule,
                         onArchiveGroup = { viewModel.deleteGroup(it) },
                         onExportCsv = { exportLauncher.launch("steady_backup_${java.time.LocalDate.now()}.json") },

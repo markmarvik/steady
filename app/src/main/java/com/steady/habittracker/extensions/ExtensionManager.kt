@@ -9,6 +9,7 @@ import com.steady.habittracker.data.HabitEntry
 import com.steady.habittracker.data.OralHygieneSteps
 import com.steady.habittracker.data.SensorKind
 import com.steady.habittracker.data.SensorSnapshot
+import com.steady.habittracker.data.ProductivityDomain
 import com.steady.habittracker.data.SleepPhoneSlots
 import com.steady.habittracker.data.withAddedSensorSnapshot
 import com.steady.habittracker.data.withSleepAudioPrefs
@@ -66,6 +67,7 @@ object ExtensionManager {
                 capturePresetTags = listOf(CaptureTags.CHECKIN)
             )
             ExtensionType.POMODORO -> handlePomodoro(data, habit, entry, date)
+            ExtensionType.DEEP_WORK -> handleDeepWork(data, habit, entry, date)
             ExtensionType.GADGETBRIDGE_SYNC -> LogResult(data)
             ExtensionType.ORAL_HYGIENE -> handleOralHygiene(data, habit, entry, date, groupId)
             ExtensionType.SLEEP_PHONE -> handleSleepPhone(context, data, habit, entry, date)
@@ -230,6 +232,32 @@ object ExtensionManager {
         return LogResult(next, summaryNote = "Pomodoro ${work}m logged")
     }
 
+    private fun handleDeepWork(
+        data: AppData,
+        habit: Habit,
+        entry: HabitEntry,
+        date: String
+    ): LogResult {
+        val (afterSession, finish) = ProductivityDomain.finishDeepWorkSession(data)
+        val mins = finish?.minutes
+            ?: habit.extensionConfig.pomodoroWorkMin.coerceIn(15, 240)
+            .takeIf { it > 0 }
+            ?: data.deepWorkPrefs.effectiveDefaultMinutes()
+        val intent = finish?.intent?.takeIf { it.isNotBlank() }
+            ?: data.deepWorkPrefs.lastIntent.takeIf { it.isNotBlank() }
+        val note = listOfNotNull(
+            entry.note.takeIf { it.isNotBlank() },
+            "Deep work ${mins}m",
+            intent
+        ).joinToString(" · ")
+        val next = afterSession.withUpdatedEntry(
+            date,
+            habit.id,
+            entry.copy(note = note.take(500))
+        )
+        return LogResult(next, summaryNote = listOfNotNull("Deep work ${mins}m", intent).joinToString(" · "))
+    }
+
     private fun triggerChained(
         context: Context,
         data: AppData,
@@ -282,6 +310,7 @@ object ExtensionManager {
                 val w = habit.extensionConfig.pomodoroWorkMin
                 "${w}m focus block"
             }
+            ExtensionType.DEEP_WORK -> ProductivityDomain.deepWorkStatusLine(data)
             ExtensionType.GADGETBRIDGE_SYNC -> {
                 val p = data.gadgetbridgePrefs
                 when {

@@ -86,7 +86,10 @@ import com.steady.habittracker.data.OralHygieneBlock
 import com.steady.habittracker.data.OralHygienePrefs
 import com.steady.habittracker.data.SleepPhoneBlock
 import com.steady.habittracker.data.SleepPhonePrefs
+import com.steady.habittracker.data.DeepWorkPrefs
+import com.steady.habittracker.data.ProductivityDomain
 import com.steady.habittracker.data.entryFor
+import com.steady.habittracker.data.withDeepWorkPrefs
 import com.steady.habittracker.reminders.NotificationHelper
 import com.steady.habittracker.sensors.AutoLogEngine
 import com.steady.habittracker.sensors.AutoLogWorker
@@ -279,6 +282,23 @@ class SteadyViewModel(
     fun toggleCheckbox(habitId: String, groupId: String? = null) {
         val current = appData.value
         val habit = current.habits.find { it.id == habitId }
+        // Deep Work: first tap starts session; second tap finishes + logs
+        if (habit?.extensionType == ExtensionType.DEEP_WORK) {
+            val entry = current.entryFor(today, habit, groupId)
+            val done = entry != null && !entry.skipped && entry.value >= 0.5
+            if (done) {
+                // Untoggle clears the log only
+                logEntry(habitId, 0.0, entry?.note.orEmpty(), today, groupId)
+                return
+            }
+            if (!current.deepWorkPrefs.isSessionActive()) {
+                startDeepWorkSession(habitId = habitId, intent = "")
+                return
+            }
+            // Active session → complete
+            finishDeepWorkSession(habitId = habitId, groupId = groupId)
+            return
+        }
         val currentEntry = if (habit != null) {
             current.entryFor(today, habit, groupId)
         } else {
@@ -927,6 +947,147 @@ class SteadyViewModel(
             )
             repository.saveData(applied)
             refreshWidget(applied)
+        }
+    }
+
+    // —— Deep Work + MITs (productivity hybrid) ——
+
+    /** Carry unfinished MITs into the current logical day (idempotent). */
+    fun ensureMitsCarried() {
+        viewModelScope.launch {
+            val current = appData.value
+            val today = HabitDomain.logicalToday(current)
+            val next = ProductivityDomain.withCarriedMits(current, today)
+            if (next != current) {
+                repository.saveData(next)
+                refreshWidget(next)
+            }
+        }
+    }
+
+    fun addMit(title: String) {
+        viewModelScope.launch {
+            val current = appData.value
+            val day = HabitDomain.logicalToday(current)
+            val next = ProductivityDomain.addMit(current, title, day)
+            if (next != current) {
+                repository.saveData(next)
+                refreshWidget(next)
+            }
+        }
+    }
+
+    fun completeMit(mitId: String) {
+        viewModelScope.launch {
+            val next = ProductivityDomain.completeMit(appData.value, mitId)
+            repository.saveData(next)
+            refreshWidget(next)
+        }
+    }
+
+    fun demoteMit(mitId: String) {
+        viewModelScope.launch {
+            val next = ProductivityDomain.demoteMit(appData.value, mitId)
+            repository.saveData(next)
+            refreshWidget(next)
+        }
+    }
+
+    fun promoteTodoToMit(captureId: String) {
+        viewModelScope.launch {
+            val current = appData.value
+            val day = HabitDomain.logicalToday(current)
+            val next = ProductivityDomain.promoteCaptureToMit(current, captureId, day)
+            if (next != current) {
+                repository.saveData(next)
+                refreshWidget(next)
+            }
+        }
+    }
+
+    fun updateDeepWorkPrefs(prefs: DeepWorkPrefs) {
+        viewModelScope.launch {
+            val updated = appData.value.withDeepWorkPrefs(prefs)
+            repository.saveData(updated)
+        }
+    }
+
+    fun enableDeepWorkBlock() {
+        viewModelScope.launch {
+            val next = ProductivityDomain.ensureDeepWorkHabit(appData.value)
+            repository.saveData(next)
+            refreshWidget(next)
+        }
+    }
+
+    fun disableDeepWorkBlock() {
+        viewModelScope.launch {
+            val next = ProductivityDomain.disableDeepWorkHabit(appData.value)
+            repository.saveData(next)
+            refreshWidget(next)
+        }
+    }
+
+    fun startDeepWorkSession(habitId: String? = null, intent: String = "", minutes: Int? = null) {
+        viewModelScope.launch {
+            var data = appData.value
+            if (habitId == null &&
+                data.habits.none { !it.archived && it.extensionType == ExtensionType.DEEP_WORK }
+            ) {
+                data = ProductivityDomain.ensureDeepWorkHabit(data)
+            }
+            val hid = habitId
+                ?: data.habits.firstOrNull { !it.archived && it.extensionType == ExtensionType.DEEP_WORK }?.id
+            val next = ProductivityDomain.startDeepWorkSession(data, hid, intent, minutes)
+            repository.saveData(next)
+            refreshWidget(next)
+        }
+    }
+
+    fun finishDeepWorkSession(habitId: String? = null, groupId: String? = null) {
+        viewModelScope.launch {
+            val current = appData.value
+            val (after, finish) = ProductivityDomain.finishDeepWorkSession(current)
+            if (finish == null) {
+                repository.saveData(after)
+                return@launch
+            }
+            val hid = habitId ?: finish.habitId
+                ?: after.habits.firstOrNull { !it.archived && it.extensionType == ExtensionType.DEEP_WORK }?.id
+            if (hid == null) {
+                repository.saveData(after)
+                refreshWidget(after)
+                return@launch
+            }
+            val note = listOfNotNull(
+                "Deep work ${finish.minutes}m",
+                finish.intent.takeIf { it.isNotBlank() }
+            ).joinToString(" · ")
+            val entry = HabitEntry(
+                value = 1.0,
+                note = note,
+                loggedAt = System.currentTimeMillis()
+            )
+            var updated = after.withUpdatedEntry(today, hid, entry, groupId)
+            val habit = updated.habits.find { it.id == hid }
+            val ctx = appContext
+            if (habit != null && ctx != null) {
+                val result = com.steady.habittracker.extensions.ExtensionManager.onHabitLogged(
+                    ctx, updated, habit, entry, today, groupId
+                )
+                updated = result.data
+                if (result.summaryNote.isNotBlank()) lastExtensionSummary.value = result.summaryNote
+            }
+            repository.saveData(updated)
+            refreshWidget(updated)
+        }
+    }
+
+    fun cancelDeepWorkSession() {
+        viewModelScope.launch {
+            val next = ProductivityDomain.cancelDeepWorkSession(appData.value)
+            repository.saveData(next)
+            refreshWidget(next)
         }
     }
 

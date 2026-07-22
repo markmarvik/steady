@@ -55,6 +55,8 @@ import com.steady.habittracker.data.Habit
 import com.steady.habittracker.data.HabitDomain
 import com.steady.habittracker.data.HabitEntry
 import com.steady.habittracker.data.HabitType
+import com.steady.habittracker.data.MitItem
+import com.steady.habittracker.data.ProductivityDomain
 import com.steady.habittracker.data.TimelineSection
 import com.steady.habittracker.data.displayGlyph
 import com.steady.habittracker.data.defaultLogNote
@@ -77,7 +79,10 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.input.ImeAction
 
 @Composable
 fun TodayScreen(
@@ -111,7 +116,13 @@ fun TodayScreen(
     onDismissAutoSuggestion: (AutoSuggestion) -> Unit = {},
     onRunAutoLog: () -> Unit = {},
     /** Mark a Todo capture done (process). */
-    onCompleteTodo: (String) -> Unit = {}
+    onCompleteTodo: (String) -> Unit = {},
+    /** Carry unfinished MITs into the logical day (once per open). */
+    onEnsureMitsCarried: () -> Unit = {},
+    onAddMit: (String) -> Unit = {},
+    onCompleteMit: (String) -> Unit = {},
+    onDemoteMit: (String) -> Unit = {},
+    onPromoteTodoToMit: (String) -> Unit = {}
 ) {
     if (appData.habits.none { !it.archived } || appData.groups.isEmpty()) {
         Text(
@@ -237,8 +248,60 @@ fun TodayScreen(
     val openTodos = remember(appData.captures, appData.capturePrefs) {
         appData.openTodoCaptures()
     }
+    val openMits = remember(appData.mits, dateKey) {
+        ProductivityDomain.openMitsForDate(appData, dateKey)
+    }
+    val doneMitsToday = remember(appData.mits, dateKey) {
+        ProductivityDomain.doneMitsForDate(appData, dateKey)
+    }
+    val canAddMit = openMits.size < ProductivityDomain.MAX_MITS_PER_DAY
     val enabledBlocks = remember(appData.habits) {
         ExtensionCatalog.enabledBlockHabitsForToday(appData)
+    }
+    LaunchedEffect(dateKey) {
+        onEnsureMitsCarried()
+    }
+    var showAddMit by remember { mutableStateOf(false) }
+    var mitDraft by remember { mutableStateOf("") }
+    if (showAddMit) {
+        AlertDialog(
+            onDismissRequest = { showAddMit = false; mitDraft = "" },
+            title = { Text("Today’s priority") },
+            text = {
+                OutlinedTextField(
+                    value = mitDraft,
+                    onValueChange = { mitDraft = it.take(120) },
+                    placeholder = { Text("What matters most?") },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                    keyboardActions = KeyboardActions(
+                        onDone = {
+                            if (mitDraft.isNotBlank()) {
+                                onAddMit(mitDraft.trim())
+                                mitDraft = ""
+                                showAddMit = false
+                            }
+                        }
+                    ),
+                    modifier = Modifier.fillMaxWidth()
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        if (mitDraft.isNotBlank()) {
+                            onAddMit(mitDraft.trim())
+                            mitDraft = ""
+                            showAddMit = false
+                        }
+                    },
+                    enabled = mitDraft.isNotBlank()
+                ) { Text("Add") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showAddMit = false; mitDraft = "" }) { Text("Cancel") }
+            }
+        )
     }
     // Per-section row models so items don't re-run domain / string work while scrolling
     val sectionRows = remember(
@@ -605,6 +668,19 @@ fun TodayScreen(
                 DayProgressionBanner(cue = cue, colors = colors)
             }
 
+            // —— MITs (Most Important Tasks) — always visible near top ——
+            item(key = "mits_strip", contentType = "mits") {
+                MitStrip(
+                    openMits = openMits,
+                    doneCount = doneMitsToday.size,
+                    canAdd = canAddMit,
+                    colors = colors,
+                    onComplete = onCompleteMit,
+                    onDemote = onDemoteMit,
+                    onAddClick = { if (canAddMit) showAddMit = true }
+                )
+            }
+
             if (todayRoutines.isNotEmpty()) {
                 item(key = "workouts_header", contentType = "workouts") {
                     Surface(
@@ -747,7 +823,9 @@ fun TodayScreen(
                                 TodoHabitSquare(
                                     cap = todo,
                                     colors = colors,
+                                    canPromoteMit = canAddMit,
                                     onComplete = { onCompleteTodo(todo.id) },
+                                    onPromoteMit = { onPromoteTodoToMit(todo.id) },
                                     modifier = Modifier.weight(1f)
                                 )
                             }
@@ -1143,13 +1221,116 @@ private fun isWorkGroup(timeHint: String, name: String): Boolean {
         n.contains("office")
 }
 
+/** Priorities strip — up to 3 MITs for the logical day. */
+@Composable
+@OptIn(ExperimentalFoundationApi::class)
+private fun MitStrip(
+    openMits: List<MitItem>,
+    doneCount: Int,
+    canAdd: Boolean,
+    colors: TodayListColors,
+    onComplete: (String) -> Unit,
+    onDemote: (String) -> Unit,
+    onAddClick: () -> Unit
+) {
+    val haptics = rememberSteadyHaptics()
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        color = colors.surface,
+        shape = RoundedCornerShape(12.dp)
+    ) {
+        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    "Priorities · ${openMits.size}/3" +
+                        if (doneCount > 0) " · $doneCount done" else "",
+                    color = colors.primary,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.SemiBold
+                )
+                if (canAdd) {
+                    Text(
+                        "+ Add",
+                        color = colors.primary,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier
+                            .clickable {
+                                haptics(SteadyHaptics.Kind.TICK)
+                                onAddClick()
+                            }
+                            .padding(4.dp)
+                    )
+                }
+            }
+            if (openMits.isEmpty()) {
+                Text(
+                    "Set 1–3 outcomes for today — not endless todos",
+                    color = colors.onSurfaceVariant,
+                    fontSize = 11.sp
+                )
+            } else {
+                openMits.forEach { mit ->
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .background(
+                                colors.surfaceVariant.copy(alpha = 0.45f),
+                                RoundedCornerShape(10.dp)
+                            )
+                            .combinedClickable(
+                                onClick = {
+                                    haptics(SteadyHaptics.Kind.SUCCESS)
+                                    onComplete(mit.id)
+                                },
+                                onLongClick = {
+                                    haptics(SteadyHaptics.Kind.WARN)
+                                    onDemote(mit.id)
+                                }
+                            )
+                            .padding(horizontal = 10.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Text("○", color = colors.primary, fontSize = 16.sp)
+                        Column(Modifier.weight(1f)) {
+                            Text(
+                                mit.title,
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Medium,
+                                color = colors.onSurface,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            if (mit.carriedFrom != null) {
+                                Text(
+                                    "carried",
+                                    fontSize = 10.sp,
+                                    color = colors.onSurfaceVariant
+                                )
+                            }
+                        }
+                        Text("done", fontSize = 11.sp, color = colors.primary)
+                    }
+                }
+            }
+        }
+    }
+}
+
 /** Todo capture rendered like a habit square inside the Work section. */
 @Composable
 @OptIn(ExperimentalFoundationApi::class)
 private fun TodoHabitSquare(
     cap: CaptureItem,
     colors: TodayListColors,
+    canPromoteMit: Boolean = false,
     onComplete: () -> Unit,
+    onPromoteMit: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val haptics = rememberSteadyHaptics()
@@ -1163,8 +1344,13 @@ private fun TodoHabitSquare(
                     onComplete()
                 },
                 onLongClick = {
-                    haptics(SteadyHaptics.Kind.SUCCESS)
-                    onComplete()
+                    if (canPromoteMit) {
+                        haptics(SteadyHaptics.Kind.TICK)
+                        onPromoteMit()
+                    } else {
+                        haptics(SteadyHaptics.Kind.SUCCESS)
+                        onComplete()
+                    }
                 }
             )
             .padding(8.dp),
@@ -1183,21 +1369,11 @@ private fun TodoHabitSquare(
             maxLines = 2,
             overflow = TextOverflow.Ellipsis
         )
-        if (cap.note.isNotBlank()) {
-            Spacer(Modifier.height(2.dp))
-            BasicText(
-                text = cap.note,
-                style = TextStyle(color = colors.onSurfaceVariant, fontSize = 9.sp),
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-        } else {
-            Spacer(Modifier.height(2.dp))
-            BasicText(
-                text = "tap to done",
-                style = TextStyle(color = colors.primary, fontSize = 9.sp)
-            )
-        }
+        Spacer(Modifier.height(2.dp))
+        BasicText(
+            text = if (canPromoteMit) "hold → MIT" else "tap to done",
+            style = TextStyle(color = colors.primary, fontSize = 9.sp)
+        )
     }
 }
 

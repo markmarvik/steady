@@ -78,6 +78,12 @@ fun buildWidgetRows(data: AppData, now: LocalTime = LocalTime.now()): List<Widge
                 ExtensionType.WORKOUT_SESSION -> "workout"
                 ExtensionType.ESM_CHECKIN -> "check-in"
                 ExtensionType.POMODORO -> "${h.extensionConfig.pomodoroWorkMin}m"
+                ExtensionType.DEEP_WORK ->
+                    if (data.deepWorkPrefs.isSessionActive()) {
+                        "${data.deepWorkPrefs.remainingMinutes()}m left"
+                    } else {
+                        "${h.extensionConfig.pomodoroWorkMin.coerceAtLeast(data.deepWorkPrefs.defaultMinutes)}m"
+                    }
                 ExtensionType.GADGETBRIDGE_SYNC ->
                     data.wearableDays.firstOrNull()?.steps?.let { "${it} steps" } ?: "sync"
                 ExtensionType.ORAL_HYGIENE -> when (h.extensionConfig.oralStepKey) {

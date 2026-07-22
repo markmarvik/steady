@@ -80,11 +80,22 @@ object ExtensionCatalog {
         Template(
             type = ExtensionType.POMODORO,
             title = "Pomodoro / Focus Timer",
-            description = "Focus block with work/break minutes; pairs with local web timer.",
+            description = "Classic work/break cycles; pairs with local web timer.",
             defaultName = "Focus Session",
             defaultIcon = "🍅",
             category = "Focus",
             defaultConfig = ExtensionConfig(pomodoroWorkMin = 25, pomodoroBreakMin = 5),
+            suggestTimeHint = "WORK"
+        ),
+        Template(
+            type = ExtensionType.DEEP_WORK,
+            title = "Deep Work",
+            description = "One intentional focus block (default 90m) with optional intent. " +
+                "Start/finish from Today; minutes go on the log note.",
+            defaultName = "Deep Work",
+            defaultIcon = "🎯",
+            category = "Focus",
+            defaultConfig = ExtensionConfig(pomodoroWorkMin = 90, pomodoroBreakMin = 0),
             suggestTimeHint = "WORK"
         ),
         Template(
@@ -132,6 +143,7 @@ object ExtensionCatalog {
         ExtensionType.WORKOUT_SESSION -> "Workout"
         ExtensionType.ESM_CHECKIN -> "Check-in"
         ExtensionType.POMODORO -> "Pomodoro"
+        ExtensionType.DEEP_WORK -> "Deep Work"
         ExtensionType.GADGETBRIDGE_SYNC -> "Gadgetbridge"
         ExtensionType.ORAL_HYGIENE -> "Oral hygiene"
         ExtensionType.SLEEP_PHONE -> "Phone guard"
@@ -147,7 +159,9 @@ object ExtensionCatalog {
         ExtensionType.NONE -> true
         ExtensionType.ORAL_HYGIENE -> true
         ExtensionType.SLEEP_PHONE -> true
-        // Everything else is an “enabled block” strip under Today’s habits
+        ExtensionType.DEEP_WORK -> true
+        ExtensionType.POMODORO -> true
+        // Tool strip: wearables, screen audit, sensors, snore, …
         else -> false
     }
 

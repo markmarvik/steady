@@ -1245,7 +1245,10 @@ object HabitDomain {
         val solid = if (slots.isNotEmpty() && isSolidDay(data, date)) SOLID_DAY_BONUS else 0
         val path = if (hasPathCheckOn(data, dateStr)) PATH_CHECK_BONUS else 0
         val screenPen = screenOveragePenalty(data, dateStr)
-        val raw = habitPoints + targetBonuses + qualityBonuses + fullClear + solid + path - screenPen
+        val mitPts = ProductivityDomain.doneMitsForDate(data, dateStr).size *
+            ProductivityDomain.MIT_POINT_VALUE
+        val raw = habitPoints + targetBonuses + qualityBonuses + fullClear + solid + path +
+            mitPts - screenPen
         val total = raw.coerceIn(0, DAILY_POINTS_CAP)
         return DayPointsBreakdown(
             habitPoints = habitPoints,
