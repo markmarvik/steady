@@ -100,6 +100,9 @@ fun ManageScreen(
     onRunGadgetbridgeSyncNow: () -> Unit = {},
     onEnableGadgetbridgeFromLocation: (String, (String?) -> Unit) -> Unit = { _, _ -> },
     onDisableGadgetbridgeBlock: () -> Unit = {},
+    onUpdateOralHygienePrefs: (com.steady.habittracker.data.OralHygienePrefs) -> Unit = {},
+    onEnableOralHygieneBlock: () -> Unit = {},
+    onDisableOralHygieneBlock: () -> Unit = {},
     onAlignRemindersToSchedule: () -> Unit = {},
     onArchiveGroup: (String) -> Unit = {},
     onExportCsv: () -> Unit = {},
@@ -656,6 +659,9 @@ fun ManageScreen(
                     onRunGadgetbridgeSyncNow = onRunGadgetbridgeSyncNow,
                     onEnableGadgetbridgeFromLocation = onEnableGadgetbridgeFromLocation,
                     onDisableGadgetbridgeBlock = onDisableGadgetbridgeBlock,
+                    onUpdateOralHygienePrefs = onUpdateOralHygienePrefs,
+                    onEnableOralHygieneBlock = onEnableOralHygieneBlock,
+                    onDisableOralHygieneBlock = onDisableOralHygieneBlock,
                     onLoadBlueprintRoutines = onLoadBlueprintRoutines,
                     onSaveRoutine = onSaveRoutine,
                     onStartRoutine = onStartRoutine
@@ -2201,6 +2207,9 @@ private fun BlocksConfigSection(
     onRunGadgetbridgeSyncNow: () -> Unit = {},
     onEnableGadgetbridgeFromLocation: (String, (String?) -> Unit) -> Unit = { _, _ -> },
     onDisableGadgetbridgeBlock: () -> Unit = {},
+    onUpdateOralHygienePrefs: (com.steady.habittracker.data.OralHygienePrefs) -> Unit = {},
+    onEnableOralHygieneBlock: () -> Unit = {},
+    onDisableOralHygieneBlock: () -> Unit = {},
     onLoadBlueprintRoutines: () -> Unit = {},
     onSaveRoutine: (com.steady.habittracker.data.ExerciseRoutine) -> Unit = {},
     onStartRoutine: (com.steady.habittracker.data.ExerciseRoutine) -> Unit = {}
@@ -2249,6 +2258,8 @@ private fun BlocksConfigSection(
                     appData.habits.any {
                         !it.archived && it.extensionType == type
                     }
+            com.steady.habittracker.data.ExtensionType.ORAL_HYGIENE ->
+                com.steady.habittracker.data.OralHygieneBlock.isEnabled(appData)
             else -> appData.habits.any { !it.archived && it.extensionType == type }
         }
 
@@ -2256,6 +2267,16 @@ private fun BlocksConfigSection(
         appData.habits.filter { !it.archived && it.extensionType == type }
 
     fun setTypeEnabled(type: com.steady.habittracker.data.ExtensionType, enabled: Boolean) {
+        if (type == com.steady.habittracker.data.ExtensionType.ORAL_HYGIENE) {
+            if (enabled) {
+                onEnableOralHygieneBlock()
+                expandedKey = type.name
+            } else {
+                onDisableOralHygieneBlock()
+                if (expandedKey == type.name) expandedKey = null
+            }
+            return
+        }
         // Gadgetbridge: pick/validate file first; never leave a half-enabled race
         if (type == com.steady.habittracker.data.ExtensionType.GADGETBRIDGE_SYNC) {
             if (enabled) {
@@ -2479,49 +2500,63 @@ private fun BlocksConfigSection(
                                 }
                             )
                         }
+                        com.steady.habittracker.data.ExtensionType.ORAL_HYGIENE -> {
+                            OralHygieneBlockPanel(
+                                prefs = appData.oralHygienePrefs,
+                                activeHabits = active,
+                                groups = groups,
+                                onUpdate = onUpdateOralHygienePrefs
+                            )
+                        }
                         else -> Unit
                     }
 
-                    if (active.isNotEmpty()) {
-                        Text(
-                            "On planner",
-                            fontWeight = FontWeight.SemiBold,
-                            fontSize = 12.sp,
-                            color = MaterialTheme.colorScheme.primary
-                        )
-                        active.forEach { h ->
-                            Card(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clickable { onEditHabit(h) },
-                                colors = CardDefaults.cardColors(
-                                    containerColor = MaterialTheme.colorScheme.surfaceVariant
-                                ),
-                                shape = RoundedCornerShape(10.dp)
-                            ) {
-                                Column(Modifier.padding(10.dp)) {
-                                    Text(
-                                        "${h.icon.ifBlank { "◆" }} ${h.name}",
-                                        fontWeight = FontWeight.Medium,
-                                        fontSize = 13.sp
-                                    )
-                                    Text(
-                                        groups.find { it.id == h.groupId }?.name ?: h.groupId,
-                                        fontSize = 11.sp,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
+                    // Oral hygiene / Gadgetbridge manage their own planner rows
+                    val managedBlock =
+                        type == com.steady.habittracker.data.ExtensionType.ORAL_HYGIENE ||
+                            type == com.steady.habittracker.data.ExtensionType.GADGETBRIDGE_SYNC
+                    if (!managedBlock) {
+                        if (active.isNotEmpty()) {
+                            Text(
+                                "On planner",
+                                fontWeight = FontWeight.SemiBold,
+                                fontSize = 12.sp,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                            active.forEach { h ->
+                                Card(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable { onEditHabit(h) },
+                                    colors = CardDefaults.cardColors(
+                                        containerColor = MaterialTheme.colorScheme.surfaceVariant
+                                    ),
+                                    shape = RoundedCornerShape(10.dp)
+                                ) {
+                                    Column(Modifier.padding(10.dp)) {
+                                        Text(
+                                            "${h.icon.ifBlank { "◆" }} ${h.name}",
+                                            fontWeight = FontWeight.Medium,
+                                            fontSize = 13.sp
+                                        )
+                                        Text(
+                                            groups.find { it.id == h.groupId }?.name ?: h.groupId,
+                                            fontSize = 11.sp,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
                                 }
                             }
                         }
-                    }
-                    TextButton(
-                        onClick = { onAddExtension(type, null) },
-                        enabled = canAdd
-                    ) {
-                        Text(
-                            if (active.isEmpty()) "Add to planner" else "Add another",
-                            fontSize = 12.sp
-                        )
+                        TextButton(
+                            onClick = { onAddExtension(type, null) },
+                            enabled = canAdd
+                        ) {
+                            Text(
+                                if (active.isEmpty()) "Add to planner" else "Add another",
+                                fontSize = 12.sp
+                            )
+                        }
                     }
                 }
             }
@@ -2711,6 +2746,7 @@ private fun BlockPermissionPanel(type: com.steady.habittracker.data.ExtensionTyp
         )
         com.steady.habittracker.data.ExtensionType.POMODORO -> emptyList()
         com.steady.habittracker.data.ExtensionType.WORKOUT_SESSION -> emptyList()
+        com.steady.habittracker.data.ExtensionType.ORAL_HYGIENE -> emptyList()
         com.steady.habittracker.data.ExtensionType.GADGETBRIDGE_SYNC -> listOf(
             Need("Notifications (special wearable events)", notifOk) {
                 if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
@@ -3908,5 +3944,174 @@ private fun GadgetbridgeBlockPanel(
                 Text("Sync now", fontSize = 12.sp)
             }
         }
+    }
+}
+
+
+@Composable
+private fun OralHygieneBlockPanel(
+    prefs: com.steady.habittracker.data.OralHygienePrefs,
+    activeHabits: List<Habit>,
+    groups: List<Group>,
+    onUpdate: (com.steady.habittracker.data.OralHygienePrefs) -> Unit
+) {
+    val groupNames = groups.associate { it.id to it.name }
+    fun set(p: com.steady.habittracker.data.OralHygienePrefs) {
+        onUpdate(p.copy(enabled = true))
+    }
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        shape = RoundedCornerShape(12.dp)
+    ) {
+        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(
+                "Oral care steps",
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.primary,
+                fontSize = 13.sp
+            )
+            Text(
+                "Each enabled step is a Today habit in morning and evening. " +
+                    "Toggle options below — they apply immediately.",
+                fontSize = 11.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
+            OralStepSwitch("🪥  Brushing", prefs.brush) { set(prefs.copy(brush = it)) }
+            OralStepSwitch("🧵  Flossing", prefs.floss) { set(prefs.copy(floss = it)) }
+            OralStepSwitch("👅  Tongue scraping", prefs.tongueScrape) {
+                set(prefs.copy(tongueScrape = it))
+            }
+            OralStepSwitch("💦  Water floss / flush", prefs.waterFlush) {
+                set(prefs.copy(waterFlush = it))
+            }
+            OralStepSwitch("🧴  Mouthwash", prefs.mouthwash) { set(prefs.copy(mouthwash = it)) }
+
+            if (prefs.waterFlush) {
+                OutlinedTextField(
+                    value = prefs.waterFlushLabel,
+                    onValueChange = { set(prefs.copy(waterFlushLabel = it.take(40))) },
+                    label = { Text("Water step label") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+
+            Text("Brush target", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                listOf(1, 2, 3).forEach { m ->
+                    FilterChip(
+                        selected = prefs.brushMinutes == m,
+                        onClick = { set(prefs.copy(brushMinutes = m)) },
+                        label = { Text("${m} min", fontSize = 11.sp) }
+                    )
+                }
+            }
+
+            Text("Points per step", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                listOf(5, 10, 15, 20).forEach { pts ->
+                    FilterChip(
+                        selected = prefs.pointValue == pts,
+                        onClick = { set(prefs.copy(pointValue = pts)) },
+                        label = { Text("$pts", fontSize = 11.sp) }
+                    )
+                }
+            }
+
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text("Essential (harder to skip)", fontSize = 12.sp)
+                    Text(
+                        "Hygiene foundations",
+                        fontSize = 10.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Switch(
+                    checked = prefs.essential,
+                    onCheckedChange = { set(prefs.copy(essential = it)) }
+                )
+            }
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text("Stack order", fontSize = 12.sp)
+                    Text(
+                        "Brush → floss → tongue → …",
+                        fontSize = 10.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Switch(
+                    checked = prefs.stackOrder,
+                    onCheckedChange = { set(prefs.copy(stackOrder = it)) }
+                )
+            }
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text("Morning + evening", fontSize = 12.sp)
+                    Text(
+                        "Required: each step on both routines",
+                        fontSize = 10.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Switch(
+                    checked = prefs.morningAndEvening,
+                    onCheckedChange = { set(prefs.copy(morningAndEvening = it)) }
+                )
+            }
+
+            if (activeHabits.isNotEmpty()) {
+                Text(
+                    "On planner (${activeHabits.size})",
+                    fontWeight = FontWeight.SemiBold,
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.primary
+                )
+                activeHabits.forEach { h ->
+                    val places = buildList {
+                        add(groupNames[h.groupId] ?: h.groupId)
+                        h.additionalGroupIds.forEach { gid ->
+                            add(groupNames[gid] ?: gid)
+                        }
+                    }.distinct().joinToString(" + ")
+                    Text(
+                        "${h.icon.ifBlank { "◆" }} ${h.name} · $places",
+                        fontSize = 11.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun OralStepSwitch(
+    label: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit
+) {
+    Row(
+        Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(label, fontSize = 13.sp)
+        Switch(checked = checked, onCheckedChange = onCheckedChange)
     }
 }

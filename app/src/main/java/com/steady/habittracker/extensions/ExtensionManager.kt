@@ -61,6 +61,7 @@ object ExtensionManager {
             )
             ExtensionType.POMODORO -> handlePomodoro(data, habit, entry, date)
             ExtensionType.GADGETBRIDGE_SYNC -> LogResult(data)
+            ExtensionType.ORAL_HYGIENE -> handleOralHygiene(data, habit, entry, date)
         }.let { result ->
             // Chain: trigger child SENSOR_AUTO_READ / others with chainAfterHabitId
             val chained = triggerChained(context, result.data, habit.id, date)
@@ -279,6 +280,45 @@ object ExtensionManager {
                     else -> "Polling Gadgetbridge export"
                 }
             }
+            ExtensionType.ORAL_HYGIENE -> oralHygieneStatus(habit, data)
+        }
+    }
+
+    private fun handleOralHygiene(
+        data: AppData,
+        habit: Habit,
+        entry: HabitEntry,
+        date: String
+    ): LogResult {
+        val step = habit.extensionConfig.oralStepKey.ifBlank { "care" }
+        val prefs = data.oralHygienePrefs
+        val noteExtra = when (step) {
+            com.steady.habittracker.data.OralHygieneSteps.BRUSH ->
+                "Brushed ${prefs.brushMinutes.coerceIn(1, 5)} min"
+            com.steady.habittracker.data.OralHygieneSteps.FLOSS -> "Flossed"
+            com.steady.habittracker.data.OralHygieneSteps.TONGUE -> "Tongue scraped"
+            com.steady.habittracker.data.OralHygieneSteps.WATER -> prefs.waterFlushLabel.ifBlank { "Water rinse" }
+            com.steady.habittracker.data.OralHygieneSteps.MOUTHWASH -> "Mouthwash"
+            else -> "Oral care"
+        }
+        val note = listOfNotNull(entry.note.takeIf { it.isNotBlank() }, noteExtra)
+            .joinToString(" · ")
+        val next = data.withUpdatedEntry(date, habit.id, entry.copy(note = note.take(500)))
+        return LogResult(next, summaryNote = noteExtra)
+    }
+
+    private fun oralHygieneStatus(habit: Habit, data: AppData): String {
+        val step = habit.extensionConfig.oralStepKey
+        val prefs = data.oralHygienePrefs
+        return when (step) {
+            com.steady.habittracker.data.OralHygieneSteps.BRUSH ->
+                "${prefs.brushMinutes.coerceIn(1, 5)} min · AM & PM"
+            com.steady.habittracker.data.OralHygieneSteps.FLOSS -> "Floss · AM & PM"
+            com.steady.habittracker.data.OralHygieneSteps.TONGUE -> "Tongue · AM & PM"
+            com.steady.habittracker.data.OralHygieneSteps.WATER ->
+                "${prefs.waterFlushLabel.ifBlank { "Water" }} · AM & PM"
+            com.steady.habittracker.data.OralHygieneSteps.MOUTHWASH -> "Mouthwash · AM & PM"
+            else -> "Oral hygiene · AM & PM"
         }
     }
 }

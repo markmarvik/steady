@@ -96,6 +96,16 @@ object ExtensionCatalog {
             defaultIcon = "⌚",
             category = "Wearables",
             suggestTimeHint = "MORNING"
+        ),
+        Template(
+            type = ExtensionType.ORAL_HYGIENE,
+            title = "Oral Hygiene",
+            description = "Universal dental care — brush, floss, tongue scrape, water flush & more. " +
+                "Always placed in morning and evening routines.",
+            defaultName = "Oral Hygiene",
+            defaultIcon = "🪥",
+            category = "Hygiene",
+            suggestTimeHint = "MORNING"
         )
     )
 
@@ -112,6 +122,7 @@ object ExtensionCatalog {
         ExtensionType.ESM_CHECKIN -> "Check-in"
         ExtensionType.POMODORO -> "Pomodoro"
         ExtensionType.GADGETBRIDGE_SYNC -> "Gadgetbridge"
+        ExtensionType.ORAL_HYGIENE -> "Oral hygiene"
     }
 
     fun isSpecial(habit: Habit): Boolean = habit.extensionType != ExtensionType.NONE

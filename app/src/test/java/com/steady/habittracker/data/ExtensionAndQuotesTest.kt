@@ -37,6 +37,7 @@ class ExtensionAndQuotesTest {
         assertTrue(ExtensionType.ESM_CHECKIN in types)
         assertTrue(ExtensionType.POMODORO in types)
         assertTrue(ExtensionType.GADGETBRIDGE_SYNC in types)
+        assertTrue(ExtensionType.ORAL_HYGIENE in types)
         assertFalse(ExtensionType.NONE in types)
     }
 

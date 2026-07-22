@@ -76,6 +76,14 @@ fun buildWidgetRows(data: AppData, now: LocalTime = LocalTime.now()): List<Widge
                 ExtensionType.POMODORO -> "${h.extensionConfig.pomodoroWorkMin}m"
                 ExtensionType.GADGETBRIDGE_SYNC ->
                     data.wearableDays.firstOrNull()?.steps?.let { "${it} steps" } ?: "sync"
+                ExtensionType.ORAL_HYGIENE -> when (h.extensionConfig.oralStepKey) {
+                    "brush" -> "brush"
+                    "floss" -> "floss"
+                    "tongue" -> "tongue"
+                    "water" -> "water"
+                    "mouthwash" -> "rinse"
+                    else -> "oral"
+                }
             }
             rows.add(
                 WidgetRow(

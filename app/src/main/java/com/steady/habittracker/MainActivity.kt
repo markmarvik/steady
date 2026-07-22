@@ -1038,6 +1038,9 @@ fun SteadyApp(
                             viewModel.enableGadgetbridgeFromLocation(loc, cb)
                         },
                         onDisableGadgetbridgeBlock = viewModel::disableGadgetbridgeBlock,
+                        onUpdateOralHygienePrefs = viewModel::updateOralHygienePrefs,
+                        onEnableOralHygieneBlock = viewModel::enableOralHygieneBlock,
+                        onDisableOralHygieneBlock = viewModel::disableOralHygieneBlock,
                         onAlignRemindersToSchedule = viewModel::alignRemindersToSchedule,
                         onArchiveGroup = { viewModel.deleteGroup(it) },
                         onExportCsv = { exportLauncher.launch("steady_backup_${java.time.LocalDate.now()}.json") },

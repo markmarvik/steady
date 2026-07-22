@@ -837,6 +837,41 @@ class SteadyViewModel(
      * Merge Gadgetbridge settings without clobbering concurrent habit adds.
      * Always re-reads [appData] immediately before save.
      */
+    fun updateOralHygienePrefs(prefs: com.steady.habittracker.data.OralHygienePrefs) {
+        viewModelScope.launch {
+            val current = appData.value
+            val applied = com.steady.habittracker.data.OralHygieneBlock.apply(current, prefs)
+            repository.saveData(applied)
+            refreshWidget(applied)
+        }
+    }
+
+    fun enableOralHygieneBlock() {
+        viewModelScope.launch {
+            val current = appData.value
+            var p = current.oralHygienePrefs.copy(enabled = true)
+            // First enable: brush + floss + tongue by default
+            if (!p.brush && !p.floss && !p.tongueScrape && !p.waterFlush && !p.mouthwash) {
+                p = p.copy(brush = true, floss = true, tongueScrape = true)
+            }
+            val applied = com.steady.habittracker.data.OralHygieneBlock.apply(current, p)
+            repository.saveData(applied)
+            refreshWidget(applied)
+        }
+    }
+
+    fun disableOralHygieneBlock() {
+        viewModelScope.launch {
+            val current = appData.value
+            val applied = com.steady.habittracker.data.OralHygieneBlock.apply(
+                current,
+                current.oralHygienePrefs.copy(enabled = false)
+            )
+            repository.saveData(applied)
+            refreshWidget(applied)
+        }
+    }
+
     fun updateGadgetbridgePrefs(prefs: com.steady.habittracker.data.GadgetbridgePrefs) {
         viewModelScope.launch {
             val current = appData.value

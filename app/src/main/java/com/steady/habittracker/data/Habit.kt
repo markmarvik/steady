@@ -122,7 +122,12 @@ enum class ExtensionType {
      * Poll Gadgetbridge auto-export DB (hourly / configurable) and unify
      * steps, sleep, and heart-rate into [WearableDayMetrics].
      */
-    GADGETBRIDGE_SYNC
+    GADGETBRIDGE_SYNC,
+    /**
+     * Universal oral hygiene steps (brush, floss, tongue scrape, water flush, …).
+     * Placed in morning + evening routines when the block is enabled.
+     */
+    ORAL_HYGIENE
 }
 
 /** Notification / habit reminder intensity (#30). */
@@ -169,8 +174,59 @@ data class ExtensionConfig(
     /** Pomodoro break minutes. */
     val pomodoroBreakMin: Int = 5,
     /** Optional export path override for [ExtensionType.GADGETBRIDGE_SYNC] (else prefs). */
-    val gadgetbridgePathHint: String = ""
+    val gadgetbridgePathHint: String = "",
+    /**
+     * Oral hygiene step key for [ExtensionType.ORAL_HYGIENE]:
+     * brush | floss | tongue | water | mouthwash
+     */
+    val oralStepKey: String = ""
 )
+
+/**
+ * Universal oral hygiene block settings (Manage → Blocks).
+ * Steps become habits in **morning and evening** groups when enabled.
+ */
+@Serializable
+data class OralHygienePrefs(
+    val enabled: Boolean = false,
+    val brush: Boolean = true,
+    val floss: Boolean = true,
+    val tongueScrape: Boolean = true,
+    /** Water flosser / water rinse flush. */
+    val waterFlush: Boolean = false,
+    val mouthwash: Boolean = false,
+    /** Essential = harder to skip (canSkip false). */
+    val essential: Boolean = true,
+    /** Suggested brush duration shown on the habit (minutes). */
+    val brushMinutes: Int = 2,
+    /** Momentum points per completed step. */
+    val pointValue: Int = 10,
+    /** Chain steps (brush → floss → tongue → …) with afterHabitId. */
+    val stackOrder: Boolean = true,
+    /** Always place enabled steps in morning + evening (default true). */
+    val morningAndEvening: Boolean = true,
+    /** Custom label for water step (default “Water floss / rinse”). */
+    val waterFlushLabel: String = "Water floss / rinse"
+) {
+    fun activeStepKeys(): List<String> = buildList {
+        if (brush) add(OralHygieneSteps.BRUSH)
+        if (floss) add(OralHygieneSteps.FLOSS)
+        if (tongueScrape) add(OralHygieneSteps.TONGUE)
+        if (waterFlush) add(OralHygieneSteps.WATER)
+        if (mouthwash) add(OralHygieneSteps.MOUTHWASH)
+    }
+}
+
+/** Stable keys for oral hygiene habits. */
+object OralHygieneSteps {
+    const val BRUSH = "brush"
+    const val FLOSS = "floss"
+    const val TONGUE = "tongue"
+    const val WATER = "water"
+    const val MOUTHWASH = "mouthwash"
+
+    fun stableHabitId(stepKey: String): String = "oral_$stepKey"
+}
 
 /**
  * Unified daily wearable metrics (Gadgetbridge and future sources).
@@ -1093,7 +1149,9 @@ data class AppData(
      * Unified daily wearable metrics (steps / sleep / HR).
      * Newest-friendly; cap applied on merge.
      */
-    val wearableDays: List<WearableDayMetrics> = emptyList()
+    val wearableDays: List<WearableDayMetrics> = emptyList(),
+    /** Oral hygiene block config (v15+). */
+    val oralHygienePrefs: OralHygienePrefs = OralHygienePrefs()
 )
 
 /**
@@ -1261,6 +1319,7 @@ fun AppData.withUpdatedCapture(updated: CaptureItem): AppData =
 fun AppData.withoutCapture(id: String): AppData = withoutCapturePermanent(id)
 fun AppData.withCapturePrefs(prefs: CapturePrefs): AppData = copy(capturePrefs = prefs)
 fun AppData.withGadgetbridgePrefs(prefs: GadgetbridgePrefs): AppData = copy(gadgetbridgePrefs = prefs)
+fun AppData.withOralHygienePrefs(prefs: OralHygienePrefs): AppData = copy(oralHygienePrefs = prefs)
 
 /**
  * Merge wearable day rows by date (no duplicates). Prefer richer / newer rows.
