@@ -60,6 +60,7 @@ object ExtensionManager {
                 capturePresetTags = listOf(com.steady.habittracker.data.CaptureTags.CHECKIN)
             )
             ExtensionType.POMODORO -> handlePomodoro(data, habit, entry, date)
+            ExtensionType.GADGETBRIDGE_SYNC -> LogResult(data)
         }.let { result ->
             // Chain: trigger child SENSOR_AUTO_READ / others with chainAfterHabitId
             val chained = triggerChained(context, result.data, habit.id, date)
@@ -269,6 +270,14 @@ object ExtensionManager {
             ExtensionType.POMODORO -> {
                 val w = habit.extensionConfig.pomodoroWorkMin
                 "${w}m focus block"
+            }
+            ExtensionType.GADGETBRIDGE_SYNC -> {
+                val p = data.gadgetbridgePrefs
+                when {
+                    !p.enabled -> "Enable in Blocks"
+                    p.lastStatus.isNotBlank() -> p.lastStatus
+                    else -> "Polling Gadgetbridge export"
+                }
             }
         }
     }

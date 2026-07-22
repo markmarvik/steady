@@ -80,6 +80,19 @@ fun HistoryScreen(
         val vals = screenDaily.mapNotNull { it.second }.filter { it >= 0 }
         if (vals.isEmpty()) null else vals.average()
     }
+    val showWearableFrames = remember(appData) {
+        appData.gadgetbridgePrefs.showHistoryFrames &&
+            (appData.gadgetbridgePrefs.enabled ||
+                appData.habits.any {
+                    !it.archived &&
+                        it.extensionType == com.steady.habittracker.data.ExtensionType.GADGETBRIDGE_SYNC
+                } ||
+                appData.wearableDays.isNotEmpty())
+    }
+    val wearableRecent = remember(appData.wearableDays) {
+        appData.wearableDays.sortedByDescending { it.date }.take(28)
+    }
+    var wearableExpanded by remember { mutableStateOf(true) }
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -207,6 +220,121 @@ fun HistoryScreen(
                         modifier = Modifier.padding(bottom = 4.dp)
                     )
                     HabitSquareGrid(metrics = habitSquares, accent = accent)
+                }
+            }
+        }
+
+        // —— Wearable (Gadgetbridge) frames: steps / sleep / HR ——
+        if (showWearableFrames) {
+            item {
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { wearableExpanded = !wearableExpanded },
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Row(
+                            Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                "Wearables · steps · sleep · HR",
+                                fontWeight = FontWeight.SemiBold,
+                                fontSize = 13.sp,
+                                color = accent
+                            )
+                            Text(
+                                if (wearableExpanded) "Collapse" else "Expand",
+                                fontSize = 11.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        val latest = wearableRecent.firstOrNull()
+                        if (latest == null) {
+                            Text(
+                                "No Gadgetbridge data yet. Enable the block and set the export path in Manage → Blocks.",
+                                fontSize = 11.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        } else {
+                            Text(
+                                "Latest ${latest.date}: " +
+                                    listOfNotNull(
+                                        latest.steps?.let { "$it steps" },
+                                        latest.sleepMinutes?.let { "${it / 60}h ${it % 60}m sleep" },
+                                        latest.avgHeartRate?.let { "HR ${it} avg" },
+                                        latest.restingHeartRate?.let { "rest ~$it" }
+                                    ).joinToString(" · "),
+                                fontSize = 12.sp,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            // Steps heatstrip
+                            WearableMetricHeatstrip(
+                                values = wearableRecent.asReversed().map { it.date to (it.steps?.toFloat()) },
+                                accent = accent,
+                                empty = MaterialTheme.colorScheme.surfaceVariant,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(28.dp)
+                            )
+                            if (wearableExpanded) {
+                                Text("Daily (newest first)", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                wearableRecent.take(14).forEach { d ->
+                                    Row(
+                                        Modifier
+                                            .fillMaxWidth()
+                                            .padding(vertical = 2.dp),
+                                        horizontalArrangement = Arrangement.SpaceBetween
+                                    ) {
+                                        Text(d.date, fontSize = 12.sp)
+                                        Text(
+                                            listOfNotNull(
+                                                d.steps?.let { "$it st" },
+                                                d.sleepMinutes?.let { "${it / 60}h${it % 60}m" },
+                                                d.avgHeartRate?.let { "♥$it" },
+                                                d.maxHeartRate?.let { "max${it}" }
+                                            ).joinToString(" · ").ifBlank { "—" },
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.Medium,
+                                            color = accent
+                                        )
+                                    }
+                                }
+                                // Mini sleep + HR rows
+                                val sleepVals = wearableRecent.asReversed().map {
+                                    it.date to it.sleepMinutes?.toFloat()
+                                }
+                                if (sleepVals.any { it.second != null }) {
+                                    Text("Sleep (minutes)", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    WearableMetricHeatstrip(
+                                        values = sleepVals,
+                                        accent = Color(0xFF60A5FA),
+                                        empty = MaterialTheme.colorScheme.surfaceVariant,
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .height(22.dp)
+                                    )
+                                }
+                                val hrVals = wearableRecent.asReversed().map {
+                                    it.date to it.avgHeartRate?.toFloat()
+                                }
+                                if (hrVals.any { it.second != null }) {
+                                    Text("Avg heart rate", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    WearableMetricHeatstrip(
+                                        values = hrVals,
+                                        accent = Color(0xFFF87171),
+                                        empty = MaterialTheme.colorScheme.surfaceVariant,
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .height(22.dp)
+                                    )
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -943,6 +1071,37 @@ private fun ScreenUsageHeatstrip(
                 min == null || min < 0 -> empty.copy(alpha = 0.4f)
                 min == 0L -> empty.copy(alpha = 0.55f)
                 else -> accent.copy(alpha = (0.25f + (min / maxMin) * 0.75f).coerceIn(0.25f, 1f))
+            }
+            drawRoundRect(
+                color = color,
+                topLeft = Offset(x, 0f),
+                size = Size(cellW, cellH),
+                cornerRadius = CornerRadius(2.dp.toPx())
+            )
+        }
+    }
+}
+
+/** Compact heatstrip for wearable metrics (steps / sleep / HR series). */
+@Composable
+private fun WearableMetricHeatstrip(
+    values: List<Pair<String, Float?>>,
+    accent: Color,
+    empty: Color,
+    modifier: Modifier = Modifier
+) {
+    val maxV = values.mapNotNull { it.second }.filter { it > 0f }.maxOrNull() ?: 1f
+    Canvas(modifier = modifier) {
+        val n = values.size.coerceAtLeast(1)
+        val gap = 2.dp.toPx()
+        val cellW = ((size.width - gap * (n - 1)) / n).coerceAtLeast(2f)
+        val cellH = size.height
+        values.forEachIndexed { i, (_, v) ->
+            val x = i * (cellW + gap)
+            val color = when {
+                v == null -> empty.copy(alpha = 0.4f)
+                v <= 0f -> empty.copy(alpha = 0.55f)
+                else -> accent.copy(alpha = (0.25f + (v / maxV) * 0.75f).coerceIn(0.25f, 1f))
             }
             drawRoundRect(
                 color = color,

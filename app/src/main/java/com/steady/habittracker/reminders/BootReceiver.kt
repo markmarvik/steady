@@ -25,6 +25,8 @@ class BootReceiver : BroadcastReceiver() {
                         AutoLogWorker.enqueue(appContext)
                     }
                     SleepAudioScheduler.reschedule(appContext, data)
+                    com.steady.habittracker.sensors.gadgetbridge.GadgetbridgeWorker
+                        .syncSchedule(appContext, data)
                 } finally {
                     pendingResult.finish()
                 }

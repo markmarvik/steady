@@ -1028,6 +1028,12 @@ fun SteadyApp(
                             }
                         },
                         onStopSleepAudio = viewModel::stopSleepAudioRecording,
+                        onUpdateGadgetbridgePrefs = viewModel::updateGadgetbridgePrefs,
+                        onRunGadgetbridgeSyncNow = {
+                            viewModel.runGadgetbridgeSyncNow { msg ->
+                                Toast.makeText(context, msg.ifBlank { "Sync finished" }, Toast.LENGTH_SHORT).show()
+                            }
+                        },
                         onAlignRemindersToSchedule = viewModel::alignRemindersToSchedule,
                         onArchiveGroup = { viewModel.deleteGroup(it) },
                         onExportCsv = { exportLauncher.launch("steady_backup_${java.time.LocalDate.now()}.json") },

@@ -73,6 +73,7 @@ import com.steady.habittracker.data.CapturePrefs
 import com.steady.habittracker.data.GrokPreset
 import com.steady.habittracker.data.defaultLogNote
 import com.steady.habittracker.data.withCapturePrefs
+import com.steady.habittracker.data.withGadgetbridgePrefs
 import com.steady.habittracker.data.withTodayGridColumns
 import com.steady.habittracker.data.withUpsertedGrokPreset
 import com.steady.habittracker.data.withoutGrokPreset
@@ -771,6 +772,8 @@ class SteadyViewModel(
                         AutoLogWorker.enqueue(ctx)
                     }
                     SleepAudioScheduler.reschedule(ctx, restored)
+                    com.steady.habittracker.sensors.gadgetbridge.GadgetbridgeWorker
+                        .syncSchedule(ctx, restored)
                 }
                 onResult(null)
             } catch (e: Exception) {
@@ -826,6 +829,54 @@ class SteadyViewModel(
             AutoLogWorker.enqueue(ctx)
         }
         SleepAudioScheduler.reschedule(ctx, appData.value)
+        com.steady.habittracker.sensors.gadgetbridge.GadgetbridgeWorker
+            .syncSchedule(ctx, appData.value)
+    }
+
+    fun updateGadgetbridgePrefs(prefs: com.steady.habittracker.data.GadgetbridgePrefs) {
+        viewModelScope.launch {
+            val current = appData.value
+            val updated = current.withGadgetbridgePrefs(prefs)
+            repository.saveData(updated)
+            val ctx = appContext
+            if (ctx != null) {
+                com.steady.habittracker.sensors.gadgetbridge.GadgetbridgeWorker
+                    .syncSchedule(ctx, updated)
+            }
+        }
+    }
+
+    fun runGadgetbridgeSyncNow(onDone: ((String) -> Unit)? = null) {
+        viewModelScope.launch {
+            val ctx = appContext ?: return@launch
+            val current = appData.value
+            val enabled = current.gadgetbridgePrefs.copy(
+                enabled = true,
+                showHistoryFrames = true
+            )
+            val base = current.withGadgetbridgePrefs(enabled)
+            val result = com.steady.habittracker.sensors.gadgetbridge.GadgetbridgeImporter
+                .importIfNeeded(ctx, base, force = true)
+            if (result.data != current) {
+                repository.saveData(result.data)
+                refreshWidget(result.data)
+            }
+            if (result.events.isNotEmpty() && result.data.gadgetbridgePrefs.notifyEvents) {
+                val top = result.events.take(4)
+                val title = if (result.events.size == 1) top.first().title
+                else "Wearable updates (${result.events.size})"
+                val body = top.joinToString("\n") { "• ${it.body}" }
+                com.steady.habittracker.reminders.NotificationHelper.showReminder(
+                    context = ctx,
+                    title = title,
+                    text = body,
+                    notificationId = 8840
+                )
+            }
+            com.steady.habittracker.sensors.gadgetbridge.GadgetbridgeWorker
+                .syncSchedule(ctx, result.data)
+            onDone?.invoke(result.message)
+        }
     }
 
     fun updateSleepAudioPrefs(prefs: SleepAudioPrefs) {

@@ -119,7 +119,14 @@ object AutoLogEngine {
             AutoSource.PHONE_STEPS ->
                 phoneSteps?.let { AutoLogMapper.Reading(AutoSource.PHONE_STEPS, it) }
             AutoSource.GADGETBRIDGE_STEPS -> {
-                val steps = ExternalMetricsStore.getSteps(context, today) ?: return null
+                // Prefer unified wearable metrics (DB import), then external broadcast cache
+                val fromWearable = try {
+                    // AppData not passed here — use ExternalMetricsStore (filled by importer)
+                    ExternalMetricsStore.getSteps(context, today)
+                } catch (_: Exception) {
+                    null
+                }
+                val steps = fromWearable ?: return null
                 AutoLogMapper.Reading(AutoSource.GADGETBRIDGE_STEPS, steps)
             }
             AutoSource.EXTERNAL_METRIC -> {

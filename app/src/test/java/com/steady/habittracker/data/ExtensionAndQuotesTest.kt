@@ -36,6 +36,7 @@ class ExtensionAndQuotesTest {
         assertTrue(ExtensionType.SCREEN_USAGE in types)
         assertTrue(ExtensionType.ESM_CHECKIN in types)
         assertTrue(ExtensionType.POMODORO in types)
+        assertTrue(ExtensionType.GADGETBRIDGE_SYNC in types)
         assertFalse(ExtensionType.NONE in types)
     }
 
@@ -119,12 +120,14 @@ class ExtensionAndQuotesTest {
     }
 
     @Test
-    fun appDataSchemaV14() {
-        assertEquals(14, AppData().schemaVersion)
+    fun appDataSchemaV15() {
+        assertEquals(15, AppData().schemaVersion)
         assertNotNull(AppData().localWebPrefs)
         assertNotNull(AppData().pomodoroPrefs)
         assertTrue(AppData().grokPresets.isEmpty())
         assertEquals(3, AppData().todayGridColumns)
+        assertFalse(AppData().gadgetbridgePrefs.enabled)
+        assertTrue(AppData().wearableDays.isEmpty())
     }
 
     @Test

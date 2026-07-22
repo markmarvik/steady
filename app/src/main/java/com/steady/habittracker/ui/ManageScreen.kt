@@ -92,6 +92,8 @@ fun ManageScreen(
     onUpdateSleepAudioPrefs: (SleepAudioPrefs) -> Unit = {},
     onStartSleepAudio: () -> Unit = {},
     onStopSleepAudio: () -> Unit = {},
+    onUpdateGadgetbridgePrefs: (com.steady.habittracker.data.GadgetbridgePrefs) -> Unit = {},
+    onRunGadgetbridgeSyncNow: () -> Unit = {},
     onAlignRemindersToSchedule: () -> Unit = {},
     onArchiveGroup: (String) -> Unit = {},
     onExportCsv: () -> Unit = {},
@@ -644,6 +646,8 @@ fun ManageScreen(
                     onUpdateSleepAudioPrefs = onUpdateSleepAudioPrefs,
                     onStartSleepAudio = onStartSleepAudio,
                     onStopSleepAudio = onStopSleepAudio,
+                    onUpdateGadgetbridgePrefs = onUpdateGadgetbridgePrefs,
+                    onRunGadgetbridgeSyncNow = onRunGadgetbridgeSyncNow,
                     onLoadBlueprintRoutines = onLoadBlueprintRoutines,
                     onSaveRoutine = onSaveRoutine,
                     onStartRoutine = onStartRoutine
@@ -2159,6 +2163,8 @@ private fun BlocksConfigSection(
     onUpdateSleepAudioPrefs: (SleepAudioPrefs) -> Unit = {},
     onStartSleepAudio: () -> Unit = {},
     onStopSleepAudio: () -> Unit = {},
+    onUpdateGadgetbridgePrefs: (com.steady.habittracker.data.GadgetbridgePrefs) -> Unit = {},
+    onRunGadgetbridgeSyncNow: () -> Unit = {},
     onLoadBlueprintRoutines: () -> Unit = {},
     onSaveRoutine: (com.steady.habittracker.data.ExerciseRoutine) -> Unit = {},
     onStartRoutine: (com.steady.habittracker.data.ExerciseRoutine) -> Unit = {}
@@ -2193,6 +2199,15 @@ private fun BlocksConfigSection(
                 com.steady.habittracker.data.ExtensionType.SCREEN_USAGE -> {
                     if (!appData.autoLogMasterEnabled) onSetAutoLogMasterEnabled(true)
                 }
+                com.steady.habittracker.data.ExtensionType.GADGETBRIDGE_SYNC -> {
+                    val p = appData.gadgetbridgePrefs
+                    onUpdateGadgetbridgePrefs(
+                        p.copy(
+                            enabled = true,
+                            showHistoryFrames = true
+                        )
+                    )
+                }
                 else -> Unit
             }
             expandedKey = type.name
@@ -2213,6 +2228,11 @@ private fun BlocksConfigSection(
                     if (!otherSnore && appData.sleepAudioPrefs.enabled) {
                         onUpdateSleepAudioPrefs(appData.sleepAudioPrefs.copy(enabled = false))
                     }
+                }
+                com.steady.habittracker.data.ExtensionType.GADGETBRIDGE_SYNC -> {
+                    onUpdateGadgetbridgePrefs(
+                        appData.gadgetbridgePrefs.copy(enabled = false)
+                    )
                 }
                 else -> Unit
             }
@@ -2323,6 +2343,14 @@ private fun BlocksConfigSection(
                                 onNewRoutine = { showNewRoutineEditor = true },
                                 onEditRoutine = { routineEditor = it },
                                 onStart = onStartRoutine
+                            )
+                        }
+                        com.steady.habittracker.data.ExtensionType.GADGETBRIDGE_SYNC -> {
+                            GadgetbridgeBlockPanel(
+                                prefs = appData.gadgetbridgePrefs,
+                                wearableDays = appData.wearableDays,
+                                onUpdate = onUpdateGadgetbridgePrefs,
+                                onSyncNow = onRunGadgetbridgeSyncNow
                             )
                         }
                         else -> Unit
@@ -2557,6 +2585,13 @@ private fun BlockPermissionPanel(type: com.steady.habittracker.data.ExtensionTyp
         )
         com.steady.habittracker.data.ExtensionType.POMODORO -> emptyList()
         com.steady.habittracker.data.ExtensionType.WORKOUT_SESSION -> emptyList()
+        com.steady.habittracker.data.ExtensionType.GADGETBRIDGE_SYNC -> listOf(
+            Need("Notifications (special wearable events)", notifOk) {
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+                    notifLauncher.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+                }
+            }
+        )
         else -> emptyList()
     }
     if (needs.isEmpty()) return
@@ -3538,6 +3573,203 @@ private fun TimePanel(
         }
         if (expanded) {
             content()
+        }
+    }
+}
+
+@Composable
+private fun GadgetbridgeBlockPanel(
+    prefs: com.steady.habittracker.data.GadgetbridgePrefs,
+    wearableDays: List<com.steady.habittracker.data.WearableDayMetrics>,
+    onUpdate: (com.steady.habittracker.data.GadgetbridgePrefs) -> Unit,
+    onSyncNow: () -> Unit
+) {
+    var path by remember(prefs.exportLocation) { mutableStateOf(prefs.exportLocation) }
+    val today = wearableDays.maxByOrNull { it.date }
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        shape = RoundedCornerShape(12.dp)
+    ) {
+        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(
+                "Gadgetbridge export",
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.primary,
+                fontSize = 13.sp
+            )
+            Text(
+                "Point this at Gadgetbridge’s auto-export file (often Download/Gadgetbridge). " +
+                    "Steady polls on an interval, merges steps / sleep / HR into one standard History system, " +
+                    "and skips unchanged files for speed.",
+                fontSize = 11.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            OutlinedTextField(
+                value = path,
+                onValueChange = { path = it },
+                label = { Text("Export path or content URI") },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                TextButton(onClick = {
+                    onUpdate(prefs.copy(exportLocation = path.trim(), enabled = true, showHistoryFrames = true))
+                }) {
+                    Text("Save path", fontSize = 12.sp)
+                }
+                TextButton(onClick = {
+                    val def = com.steady.habittracker.sensors.gadgetbridge.GadgetbridgeImporter
+                        .defaultExportCandidates().first()
+                    path = def
+                    onUpdate(prefs.copy(exportLocation = def, enabled = true, showHistoryFrames = true))
+                }) {
+                    Text("Use Download default", fontSize = 12.sp)
+                }
+            }
+            Text("Check interval", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                listOf(15, 30, 60, 120, 180).forEach { m ->
+                    FilterChip(
+                        selected = prefs.pollIntervalMinutes == m,
+                        onClick = { onUpdate(prefs.copy(pollIntervalMinutes = m, enabled = true)) },
+                        label = { Text(if (m < 60) "${m}m" else "${m / 60}h", fontSize = 11.sp) }
+                    )
+                }
+            }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                Text("Import steps", fontSize = 12.sp)
+                Switch(
+                    checked = prefs.importSteps,
+                    onCheckedChange = { onUpdate(prefs.copy(importSteps = it, enabled = true)) }
+                )
+            }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                Text("Import sleep", fontSize = 12.sp)
+                Switch(
+                    checked = prefs.importSleep,
+                    onCheckedChange = { onUpdate(prefs.copy(importSleep = it, enabled = true)) }
+                )
+            }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                Text("Import heart rate", fontSize = 12.sp)
+                Switch(
+                    checked = prefs.importHeartRate,
+                    onCheckedChange = { onUpdate(prefs.copy(importHeartRate = it, enabled = true)) }
+                )
+            }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                Column(Modifier.weight(1f)) {
+                    Text("History frames", fontSize = 12.sp)
+                    Text(
+                        "Steps · sleep · HR charts in History",
+                        fontSize = 10.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Switch(
+                    checked = prefs.showHistoryFrames,
+                    onCheckedChange = { onUpdate(prefs.copy(showHistoryFrames = it, enabled = true)) }
+                )
+            }
+            Text("Special event alerts", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                Text("Notify on events", fontSize = 12.sp)
+                Switch(
+                    checked = prefs.notifyEvents,
+                    onCheckedChange = { onUpdate(prefs.copy(notifyEvents = it, enabled = true)) }
+                )
+            }
+            if (prefs.notifyEvents) {
+                OutlinedTextField(
+                    value = prefs.stepGoal.toString(),
+                    onValueChange = { v ->
+                        v.filter { it.isDigit() }.toIntOrNull()?.let {
+                            onUpdate(prefs.copy(stepGoal = it.coerceIn(1000, 50000)))
+                        }
+                    },
+                    label = { Text("Step goal") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true
+                )
+                OutlinedTextField(
+                    value = prefs.sleepMinHours.toString(),
+                    onValueChange = { v ->
+                        v.toFloatOrNull()?.let {
+                            onUpdate(prefs.copy(sleepMinHours = it.coerceIn(3f, 12f)))
+                        }
+                    },
+                    label = { Text("Min sleep hours (short alert)") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true
+                )
+                OutlinedTextField(
+                    value = prefs.hrHighThreshold.toString(),
+                    onValueChange = { v ->
+                        v.filter { it.isDigit() }.toIntOrNull()?.let {
+                            onUpdate(prefs.copy(hrHighThreshold = it.coerceIn(100, 220)))
+                        }
+                    },
+                    label = { Text("High HR threshold (bpm)") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true
+                )
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text("Step goal alerts", fontSize = 11.sp)
+                    Switch(
+                        checked = prefs.notifyStepGoal,
+                        onCheckedChange = { onUpdate(prefs.copy(notifyStepGoal = it)) }
+                    )
+                }
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text("Personal best steps", fontSize = 11.sp)
+                    Switch(
+                        checked = prefs.notifyPersonalBest,
+                        onCheckedChange = { onUpdate(prefs.copy(notifyPersonalBest = it)) }
+                    )
+                }
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text("Short sleep", fontSize = 11.sp)
+                    Switch(
+                        checked = prefs.notifySleepShort,
+                        onCheckedChange = { onUpdate(prefs.copy(notifySleepShort = it)) }
+                    )
+                }
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text("High HR", fontSize = 11.sp)
+                    Switch(
+                        checked = prefs.notifyHrHigh,
+                        onCheckedChange = { onUpdate(prefs.copy(notifyHrHigh = it)) }
+                    )
+                }
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text("Resting HR range", fontSize = 11.sp)
+                    Switch(
+                        checked = prefs.notifyRestingHr,
+                        onCheckedChange = { onUpdate(prefs.copy(notifyRestingHr = it)) }
+                    )
+                }
+            }
+            val status = buildString {
+                append(prefs.lastStatus.ifBlank { "Not synced yet" })
+                if (prefs.lastError.isNotBlank()) append(" · ${prefs.lastError}")
+            }
+            Text(status, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            if (today != null) {
+                Text(
+                    "Latest ${today.date}: " +
+                        listOfNotNull(
+                            today.steps?.let { "$it steps" },
+                            today.sleepMinutes?.let { "${it / 60}h ${it % 60}m sleep" },
+                            today.avgHeartRate?.let { "HR avg $it" }
+                        ).joinToString(" · ").ifBlank { "no metrics" },
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.primary
+                )
+            }
+            TextButton(onClick = onSyncNow) {
+                Text("Sync now", fontSize = 12.sp)
+            }
         }
     }
 }

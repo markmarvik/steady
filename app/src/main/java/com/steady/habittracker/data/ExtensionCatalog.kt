@@ -86,6 +86,16 @@ object ExtensionCatalog {
             category = "Focus",
             defaultConfig = ExtensionConfig(pomodoroWorkMin = 25, pomodoroBreakMin = 5),
             suggestTimeHint = "WORK"
+        ),
+        Template(
+            type = ExtensionType.GADGETBRIDGE_SYNC,
+            title = "Gadgetbridge Wearables",
+            description = "Poll Gadgetbridge auto-export for steps, sleep & heart rate from any " +
+                "supported gadget into one standard History system.",
+            defaultName = "Wearable Sync",
+            defaultIcon = "⌚",
+            category = "Wearables",
+            suggestTimeHint = "MORNING"
         )
     )
 
@@ -101,6 +111,7 @@ object ExtensionCatalog {
         ExtensionType.WORKOUT_SESSION -> "Workout"
         ExtensionType.ESM_CHECKIN -> "Check-in"
         ExtensionType.POMODORO -> "Pomodoro"
+        ExtensionType.GADGETBRIDGE_SYNC -> "Gadgetbridge"
     }
 
     fun isSpecial(habit: Habit): Boolean = habit.extensionType != ExtensionType.NONE

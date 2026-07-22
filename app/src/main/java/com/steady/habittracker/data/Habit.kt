@@ -117,7 +117,12 @@ enum class ExtensionType {
     /** ESM-style awareness check-in window (#36). */
     ESM_CHECKIN,
     /** Focus / Pomodoro timer block (#38). */
-    POMODORO
+    POMODORO,
+    /**
+     * Poll Gadgetbridge auto-export DB (hourly / configurable) and unify
+     * steps, sleep, and heart-rate into [WearableDayMetrics].
+     */
+    GADGETBRIDGE_SYNC
 }
 
 /** Notification / habit reminder intensity (#30). */
@@ -162,8 +167,82 @@ data class ExtensionConfig(
     /** Pomodoro work minutes. */
     val pomodoroWorkMin: Int = 25,
     /** Pomodoro break minutes. */
-    val pomodoroBreakMin: Int = 5
+    val pomodoroBreakMin: Int = 5,
+    /** Optional export path override for [ExtensionType.GADGETBRIDGE_SYNC] (else prefs). */
+    val gadgetbridgePathHint: String = ""
 )
+
+/**
+ * Unified daily wearable metrics (Gadgetbridge and future sources).
+ * One row per local calendar day; importer merges without duplicates.
+ */
+@Serializable
+data class WearableDayMetrics(
+    val date: String,
+    val steps: Int? = null,
+    val sleepMinutes: Int? = null,
+    val avgHeartRate: Int? = null,
+    val minHeartRate: Int? = null,
+    val maxHeartRate: Int? = null,
+    /** Approx resting HR: lowest sustained overnight / early-morning average. */
+    val restingHeartRate: Int? = null,
+    val activeMinutes: Int? = null,
+    val source: String = "gadgetbridge",
+    val deviceIds: List<Int> = emptyList(),
+    val sampleCount: Int = 0,
+    val updatedAt: Long = 0L,
+    /** Highest sample TIMESTAMP (unix seconds) contributing to this day. */
+    val maxSampleTs: Long = 0L
+)
+
+/**
+ * Gadgetbridge auto-export poll + special-event notification settings.
+ * Stored at app level so the background worker does not need a habit id.
+ */
+@Serializable
+data class GadgetbridgePrefs(
+    val enabled: Boolean = false,
+    /**
+     * Absolute filesystem path or content:// URI to the Gadgetbridge export
+     * file (often named `Gadgetbridge` with no extension) or a directory
+     * containing it.
+     */
+    val exportLocation: String = "",
+    /** How often to check for a newer export (minutes). Default hourly. */
+    val pollIntervalMinutes: Int = 60,
+    val importSteps: Boolean = true,
+    val importSleep: Boolean = true,
+    val importHeartRate: Boolean = true,
+    /** Full re-aggregate window on each successful file change (days). */
+    val lookbackDays: Int = 14,
+    /** When true (and block on), History shows steps / sleep / HR frames. */
+    val showHistoryFrames: Boolean = true,
+    val notifyEvents: Boolean = true,
+    val stepGoal: Int = 8000,
+    val sleepMinHours: Float = 6f,
+    val sleepMaxHours: Float = 10f,
+    val hrHighThreshold: Int = 140,
+    val restingHrHigh: Int = 80,
+    val restingHrLow: Int = 40,
+    val notifyStepGoal: Boolean = true,
+    val notifySleepShort: Boolean = true,
+    val notifySleepLong: Boolean = false,
+    val notifyHrHigh: Boolean = true,
+    val notifyRestingHr: Boolean = true,
+    val notifyPersonalBest: Boolean = true,
+    val lastSyncAt: Long = 0L,
+    val lastFileMtime: Long = 0L,
+    val lastFileSize: Long = 0L,
+    val lastMaxSampleTs: Long = 0L,
+    val lastStatus: String = "",
+    val lastError: String = "",
+    /** Days with step-goal notifications already fired (yyyy-MM-dd). */
+    val notifiedStepGoalDates: List<String> = emptyList(),
+    val lastNotifiedPersonalBest: Int = 0
+) {
+    fun effectivePollMinutes(): Int = pollIntervalMinutes.coerceIn(15, 360)
+    fun effectiveLookbackDays(): Int = lookbackDays.coerceIn(1, 90)
+}
 
 /** Per-habit reminder settings when configuring a habit (#30). */
 @Serializable
@@ -944,7 +1023,7 @@ data class AppData(
     // date (yyyy-MM-dd) -> habitId -> entry
     val entries: Map<String, Map<String, HabitEntry>> = emptyMap(),
     val reminders: List<Reminder> = emptyList(),
-    val schemaVersion: Int = 14,
+    val schemaVersion: Int = 15,
     val onboarded: Boolean = false,
     val colorScheme: String = "default",   // accent id from accentSchemes() (green, rose, blush, …)
     val backgroundMode: String = "dark",   // id from backgroundModes() (dark, amoled, light, forest, …)
@@ -996,7 +1075,14 @@ data class AppData(
      * Today habit square columns (2–4). More columns = denser grid.
      * Matches Manage-style squares with user density control.
      */
-    val todayGridColumns: Int = 3
+    val todayGridColumns: Int = 3,
+    /** Gadgetbridge export poll + event thresholds (v15). */
+    val gadgetbridgePrefs: GadgetbridgePrefs = GadgetbridgePrefs(),
+    /**
+     * Unified daily wearable metrics (steps / sleep / HR).
+     * Newest-friendly; cap applied on merge.
+     */
+    val wearableDays: List<WearableDayMetrics> = emptyList()
 )
 
 /**
@@ -1163,6 +1249,61 @@ fun AppData.withUpdatedCapture(updated: CaptureItem): AppData =
 /** @deprecated Prefer [withCaptureTrashed] for user deletes; this permanently removes. */
 fun AppData.withoutCapture(id: String): AppData = withoutCapturePermanent(id)
 fun AppData.withCapturePrefs(prefs: CapturePrefs): AppData = copy(capturePrefs = prefs)
+fun AppData.withGadgetbridgePrefs(prefs: GadgetbridgePrefs): AppData = copy(gadgetbridgePrefs = prefs)
+
+/**
+ * Merge wearable day rows by date (no duplicates). Prefer richer / newer rows.
+ * Caps list size for backup size.
+ */
+fun AppData.withMergedWearableDays(
+    incoming: List<WearableDayMetrics>,
+    maxDays: Int = 400
+): AppData {
+    if (incoming.isEmpty()) return this
+    val byDate = wearableDays.associateBy { it.date }.toMutableMap()
+    for (row in incoming) {
+        val prev = byDate[row.date]
+        byDate[row.date] = if (prev == null) row else mergeWearableDay(prev, row)
+    }
+    val merged = byDate.values.sortedByDescending { it.date }.take(maxDays)
+    return copy(wearableDays = merged)
+}
+
+fun mergeWearableDay(a: WearableDayMetrics, b: WearableDayMetrics): WearableDayMetrics {
+    // Prefer the row with newer maxSampleTs / updatedAt; fill nulls from the other.
+    val preferB = b.maxSampleTs > a.maxSampleTs ||
+        (b.maxSampleTs == a.maxSampleTs && b.updatedAt >= a.updatedAt)
+    val primary = if (preferB) b else a
+    val secondary = if (preferB) a else b
+    return primary.copy(
+        steps = primary.steps ?: secondary.steps,
+        sleepMinutes = primary.sleepMinutes ?: secondary.sleepMinutes,
+        avgHeartRate = primary.avgHeartRate ?: secondary.avgHeartRate,
+        minHeartRate = when {
+            primary.minHeartRate != null && secondary.minHeartRate != null ->
+                minOf(primary.minHeartRate, secondary.minHeartRate)
+            else -> primary.minHeartRate ?: secondary.minHeartRate
+        },
+        maxHeartRate = when {
+            primary.maxHeartRate != null && secondary.maxHeartRate != null ->
+                maxOf(primary.maxHeartRate, secondary.maxHeartRate)
+            else -> primary.maxHeartRate ?: secondary.maxHeartRate
+        },
+        restingHeartRate = primary.restingHeartRate ?: secondary.restingHeartRate,
+        activeMinutes = primary.activeMinutes ?: secondary.activeMinutes,
+        deviceIds = (primary.deviceIds + secondary.deviceIds).distinct().sorted(),
+        sampleCount = maxOf(primary.sampleCount, secondary.sampleCount),
+        maxSampleTs = maxOf(primary.maxSampleTs, secondary.maxSampleTs),
+        updatedAt = maxOf(primary.updatedAt, secondary.updatedAt)
+    )
+}
+
+fun AppData.wearableFor(date: String): WearableDayMetrics? =
+    wearableDays.firstOrNull { it.date == date }
+
+fun AppData.hasGadgetbridgeBlock(): Boolean =
+    gadgetbridgePrefs.enabled ||
+        habits.any { !it.archived && it.extensionType == ExtensionType.GADGETBRIDGE_SYNC }
 
 fun AppData.withGrokPresets(presets: List<GrokPreset>, lastId: String? = lastGrokPresetId): AppData =
     copy(grokPresets = presets, lastGrokPresetId = lastId)
