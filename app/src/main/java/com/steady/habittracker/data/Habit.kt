@@ -204,10 +204,13 @@ data class GadgetbridgePrefs(
     val enabled: Boolean = false,
     /**
      * Absolute filesystem path or content:// URI to the Gadgetbridge export
-     * file (often named `Gadgetbridge` with no extension) or a directory
-     * containing it.
+     * SQLite file (often `Gadgetbridge` / `Gadgetbridge.db`).
      */
     val exportLocation: String = "",
+    /** Friendly file name shown in UI (from document picker). */
+    val exportDisplayName: String = "",
+    /** Last successful schema validation timestamp (0 = never). */
+    val schemaValidatedAt: Long = 0L,
     /** How often to check for a newer export (minutes). Default hourly. */
     val pollIntervalMinutes: Int = 60,
     val importSteps: Boolean = true,

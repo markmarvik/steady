@@ -34,6 +34,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.platform.LocalContext
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import android.widget.Toast
 import com.steady.habittracker.data.AppData
 import com.steady.habittracker.data.AutoLogMode
 import com.steady.habittracker.data.AutoSource
@@ -94,6 +98,8 @@ fun ManageScreen(
     onStopSleepAudio: () -> Unit = {},
     onUpdateGadgetbridgePrefs: (com.steady.habittracker.data.GadgetbridgePrefs) -> Unit = {},
     onRunGadgetbridgeSyncNow: () -> Unit = {},
+    onEnableGadgetbridgeFromLocation: (String, (String?) -> Unit) -> Unit = { _, _ -> },
+    onDisableGadgetbridgeBlock: () -> Unit = {},
     onAlignRemindersToSchedule: () -> Unit = {},
     onArchiveGroup: (String) -> Unit = {},
     onExportCsv: () -> Unit = {},
@@ -648,6 +654,8 @@ fun ManageScreen(
                     onStopSleepAudio = onStopSleepAudio,
                     onUpdateGadgetbridgePrefs = onUpdateGadgetbridgePrefs,
                     onRunGadgetbridgeSyncNow = onRunGadgetbridgeSyncNow,
+                    onEnableGadgetbridgeFromLocation = onEnableGadgetbridgeFromLocation,
+                    onDisableGadgetbridgeBlock = onDisableGadgetbridgeBlock,
                     onLoadBlueprintRoutines = onLoadBlueprintRoutines,
                     onSaveRoutine = onSaveRoutine,
                     onStartRoutine = onStartRoutine
@@ -2191,6 +2199,8 @@ private fun BlocksConfigSection(
     onStopSleepAudio: () -> Unit = {},
     onUpdateGadgetbridgePrefs: (com.steady.habittracker.data.GadgetbridgePrefs) -> Unit = {},
     onRunGadgetbridgeSyncNow: () -> Unit = {},
+    onEnableGadgetbridgeFromLocation: (String, (String?) -> Unit) -> Unit = { _, _ -> },
+    onDisableGadgetbridgeBlock: () -> Unit = {},
     onLoadBlueprintRoutines: () -> Unit = {},
     onSaveRoutine: (com.steady.habittracker.data.ExerciseRoutine) -> Unit = {},
     onStartRoutine: (com.steady.habittracker.data.ExerciseRoutine) -> Unit = {}
@@ -2204,14 +2214,94 @@ private fun BlocksConfigSection(
     val prefs = appData.notificationPrefs
     val web = appData.localWebPrefs
     val canAdd = groups.isNotEmpty()
+    val context = LocalContext.current
+
+    val gadgetbridgePicker = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri == null) {
+            Toast.makeText(context, "No file selected — Gadgetbridge stays off", Toast.LENGTH_SHORT).show()
+            return@rememberLauncherForActivityResult
+        }
+        // Persistable read so hourly sync keeps working after reboot
+        try {
+            context.contentResolver.takePersistableUriPermission(
+                uri,
+                android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION
+            )
+        } catch (_: SecurityException) {
+            // Some providers only grant temporary access; still try import
+        }
+        onEnableGadgetbridgeFromLocation(uri.toString()) { err ->
+            if (err != null) {
+                Toast.makeText(context, err, Toast.LENGTH_LONG).show()
+            } else {
+                Toast.makeText(context, "Gadgetbridge export linked", Toast.LENGTH_SHORT).show()
+            }
+        }
+        expandedKey = com.steady.habittracker.data.ExtensionType.GADGETBRIDGE_SYNC.name
+    }
 
     fun isTypeEnabled(type: com.steady.habittracker.data.ExtensionType): Boolean =
-        appData.habits.any { !it.archived && it.extensionType == type }
+        when (type) {
+            com.steady.habittracker.data.ExtensionType.GADGETBRIDGE_SYNC ->
+                appData.gadgetbridgePrefs.enabled ||
+                    appData.habits.any {
+                        !it.archived && it.extensionType == type
+                    }
+            else -> appData.habits.any { !it.archived && it.extensionType == type }
+        }
 
     fun habitsOf(type: com.steady.habittracker.data.ExtensionType): List<Habit> =
         appData.habits.filter { !it.archived && it.extensionType == type }
 
     fun setTypeEnabled(type: com.steady.habittracker.data.ExtensionType, enabled: Boolean) {
+        // Gadgetbridge: pick/validate file first; never leave a half-enabled race
+        if (type == com.steady.habittracker.data.ExtensionType.GADGETBRIDGE_SYNC) {
+            if (enabled) {
+                val existing = appData.gadgetbridgePrefs.exportLocation
+                if (existing.isNotBlank() && appData.gadgetbridgePrefs.schemaValidatedAt > 0L) {
+                    onEnableGadgetbridgeFromLocation(existing) { err ->
+                        if (err != null) {
+                            // Re-pick if stored path no longer valid
+                            Toast.makeText(context, err, Toast.LENGTH_LONG).show()
+                            gadgetbridgePicker.launch(
+                                arrayOf(
+                                    "application/x-sqlite3",
+                                    "application/vnd.sqlite3",
+                                    "application/octet-stream",
+                                    "application/*",
+                                    "*/*"
+                                )
+                            )
+                        } else {
+                            Toast.makeText(context, "Gadgetbridge on", Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                } else {
+                    Toast.makeText(
+                        context,
+                        "Choose your Gadgetbridge export database",
+                        Toast.LENGTH_SHORT
+                    ).show()
+                    gadgetbridgePicker.launch(
+                        arrayOf(
+                            "application/x-sqlite3",
+                            "application/vnd.sqlite3",
+                            "application/octet-stream",
+                            "application/*",
+                            "*/*"
+                        )
+                    )
+                }
+                expandedKey = type.name
+            } else {
+                onDisableGadgetbridgeBlock()
+                if (expandedKey == type.name) expandedKey = null
+            }
+            return
+        }
+
         if (enabled) {
             if (!isTypeEnabled(type) && canAdd) onAddExtension(type, null)
             when (type) {
@@ -2224,15 +2314,6 @@ private fun BlocksConfigSection(
                 com.steady.habittracker.data.ExtensionType.SENSOR_AUTO_READ,
                 com.steady.habittracker.data.ExtensionType.SCREEN_USAGE -> {
                     if (!appData.autoLogMasterEnabled) onSetAutoLogMasterEnabled(true)
-                }
-                com.steady.habittracker.data.ExtensionType.GADGETBRIDGE_SYNC -> {
-                    val p = appData.gadgetbridgePrefs
-                    onUpdateGadgetbridgePrefs(
-                        p.copy(
-                            enabled = true,
-                            showHistoryFrames = true
-                        )
-                    )
                 }
                 else -> Unit
             }
@@ -2254,11 +2335,6 @@ private fun BlocksConfigSection(
                     if (!otherSnore && appData.sleepAudioPrefs.enabled) {
                         onUpdateSleepAudioPrefs(appData.sleepAudioPrefs.copy(enabled = false))
                     }
-                }
-                com.steady.habittracker.data.ExtensionType.GADGETBRIDGE_SYNC -> {
-                    onUpdateGadgetbridgePrefs(
-                        appData.gadgetbridgePrefs.copy(enabled = false)
-                    )
                 }
                 else -> Unit
             }
@@ -2376,7 +2452,31 @@ private fun BlocksConfigSection(
                                 prefs = appData.gadgetbridgePrefs,
                                 wearableDays = appData.wearableDays,
                                 onUpdate = onUpdateGadgetbridgePrefs,
-                                onSyncNow = onRunGadgetbridgeSyncNow
+                                onSyncNow = onRunGadgetbridgeSyncNow,
+                                onPickFile = {
+                                    gadgetbridgePicker.launch(
+                                        arrayOf(
+                                            "application/x-sqlite3",
+                                            "application/vnd.sqlite3",
+                                            "application/octet-stream",
+                                            "application/*",
+                                            "*/*"
+                                        )
+                                    )
+                                },
+                                onRelink = { loc ->
+                                    onEnableGadgetbridgeFromLocation(loc) { err ->
+                                        if (err != null) {
+                                            Toast.makeText(context, err, Toast.LENGTH_LONG).show()
+                                        } else {
+                                            Toast.makeText(
+                                                context,
+                                                "Export verified",
+                                                Toast.LENGTH_SHORT
+                                            ).show()
+                                        }
+                                    }
+                                }
                             )
                         }
                         else -> Unit
@@ -3608,10 +3708,14 @@ private fun GadgetbridgeBlockPanel(
     prefs: com.steady.habittracker.data.GadgetbridgePrefs,
     wearableDays: List<com.steady.habittracker.data.WearableDayMetrics>,
     onUpdate: (com.steady.habittracker.data.GadgetbridgePrefs) -> Unit,
-    onSyncNow: () -> Unit
+    onSyncNow: () -> Unit,
+    onPickFile: () -> Unit = {},
+    onRelink: (String) -> Unit = {}
 ) {
-    var path by remember(prefs.exportLocation) { mutableStateOf(prefs.exportLocation) }
     val today = wearableDays.maxByOrNull { it.date }
+    val fileLabel = prefs.exportDisplayName.ifBlank {
+        prefs.exportLocation.substringAfterLast('/').ifBlank { "No file linked" }
+    }
     Card(
         modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
@@ -3625,32 +3729,37 @@ private fun GadgetbridgeBlockPanel(
                 fontSize = 13.sp
             )
             Text(
-                "Point this at Gadgetbridge’s auto-export file (often Download/Gadgetbridge). " +
-                    "Steady polls on an interval, merges steps / sleep / HR into one standard History system, " +
-                    "and skips unchanged files for speed.",
+                "Pick the SQLite export from Gadgetbridge (auto-export file, often named " +
+                    "Gadgetbridge or Gadgetbridge.db). Steady validates the schema, remembers the path, " +
+                    "and polls on your interval for steps / sleep / HR.",
                 fontSize = 11.sp,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
-            OutlinedTextField(
-                value = path,
-                onValueChange = { path = it },
-                label = { Text("Export path or content URI") },
-                modifier = Modifier.fillMaxWidth(),
-                singleLine = true
+            Text(
+                if (prefs.schemaValidatedAt > 0L) "Linked · $fileLabel" else "Not linked · $fileLabel",
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Medium,
+                color = if (prefs.schemaValidatedAt > 0L) MaterialTheme.colorScheme.primary
+                else MaterialTheme.colorScheme.onSurfaceVariant
             )
+            if (prefs.exportLocation.startsWith("content://")) {
+                Text(
+                    prefs.exportLocation.take(64) + if (prefs.exportLocation.length > 64) "…" else "",
+                    fontSize = 9.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                TextButton(onClick = {
-                    onUpdate(prefs.copy(exportLocation = path.trim(), enabled = true, showHistoryFrames = true))
-                }) {
-                    Text("Save path", fontSize = 12.sp)
+                TextButton(onClick = onPickFile) {
+                    Text(
+                        if (prefs.exportLocation.isBlank()) "Choose database…" else "Change file…",
+                        fontSize = 12.sp
+                    )
                 }
-                TextButton(onClick = {
-                    val def = com.steady.habittracker.sensors.gadgetbridge.GadgetbridgeImporter
-                        .defaultExportCandidates().first()
-                    path = def
-                    onUpdate(prefs.copy(exportLocation = def, enabled = true, showHistoryFrames = true))
-                }) {
-                    Text("Use Download default", fontSize = 12.sp)
+                if (prefs.exportLocation.isNotBlank()) {
+                    TextButton(onClick = { onRelink(prefs.exportLocation) }) {
+                        Text("Re-validate", fontSize = 12.sp)
+                    }
                 }
             }
             Text("Check interval", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
@@ -3658,7 +3767,9 @@ private fun GadgetbridgeBlockPanel(
                 listOf(15, 30, 60, 120, 180).forEach { m ->
                     FilterChip(
                         selected = prefs.pollIntervalMinutes == m,
-                        onClick = { onUpdate(prefs.copy(pollIntervalMinutes = m, enabled = true)) },
+                        onClick = {
+                            onUpdate(prefs.copy(pollIntervalMinutes = m))
+                        },
                         label = { Text(if (m < 60) "${m}m" else "${m / 60}h", fontSize = 11.sp) }
                     )
                 }
@@ -3667,21 +3778,21 @@ private fun GadgetbridgeBlockPanel(
                 Text("Import steps", fontSize = 12.sp)
                 Switch(
                     checked = prefs.importSteps,
-                    onCheckedChange = { onUpdate(prefs.copy(importSteps = it, enabled = true)) }
+                    onCheckedChange = { onUpdate(prefs.copy(importSteps = it)) }
                 )
             }
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                 Text("Import sleep", fontSize = 12.sp)
                 Switch(
                     checked = prefs.importSleep,
-                    onCheckedChange = { onUpdate(prefs.copy(importSleep = it, enabled = true)) }
+                    onCheckedChange = { onUpdate(prefs.copy(importSleep = it)) }
                 )
             }
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                 Text("Import heart rate", fontSize = 12.sp)
                 Switch(
                     checked = prefs.importHeartRate,
-                    onCheckedChange = { onUpdate(prefs.copy(importHeartRate = it, enabled = true)) }
+                    onCheckedChange = { onUpdate(prefs.copy(importHeartRate = it)) }
                 )
             }
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
@@ -3695,7 +3806,7 @@ private fun GadgetbridgeBlockPanel(
                 }
                 Switch(
                     checked = prefs.showHistoryFrames,
-                    onCheckedChange = { onUpdate(prefs.copy(showHistoryFrames = it, enabled = true)) }
+                    onCheckedChange = { onUpdate(prefs.copy(showHistoryFrames = it)) }
                 )
             }
             Text("Special event alerts", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
@@ -3703,7 +3814,7 @@ private fun GadgetbridgeBlockPanel(
                 Text("Notify on events", fontSize = 12.sp)
                 Switch(
                     checked = prefs.notifyEvents,
-                    onCheckedChange = { onUpdate(prefs.copy(notifyEvents = it, enabled = true)) }
+                    onCheckedChange = { onUpdate(prefs.copy(notifyEvents = it)) }
                 )
             }
             if (prefs.notifyEvents) {

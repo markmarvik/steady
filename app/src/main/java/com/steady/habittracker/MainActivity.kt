@@ -1034,6 +1034,10 @@ fun SteadyApp(
                                 Toast.makeText(context, msg.ifBlank { "Sync finished" }, Toast.LENGTH_SHORT).show()
                             }
                         },
+                        onEnableGadgetbridgeFromLocation = { loc, cb ->
+                            viewModel.enableGadgetbridgeFromLocation(loc, cb)
+                        },
+                        onDisableGadgetbridgeBlock = viewModel::disableGadgetbridgeBlock,
                         onAlignRemindersToSchedule = viewModel::alignRemindersToSchedule,
                         onArchiveGroup = { viewModel.deleteGroup(it) },
                         onExportCsv = { exportLauncher.launch("steady_backup_${java.time.LocalDate.now()}.json") },

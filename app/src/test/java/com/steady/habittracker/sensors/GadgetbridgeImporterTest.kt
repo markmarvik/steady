@@ -85,4 +85,17 @@ class GadgetbridgeImporterTest {
             }
         )
     }
+
+    @Test
+    fun prefsRememberDisplayNameAndValidationStamp() {
+        val p = GadgetbridgePrefs(
+            enabled = true,
+            exportLocation = "content://com.android.providers.downloads.documents/document/42",
+            exportDisplayName = "Gadgetbridge.db",
+            schemaValidatedAt = 1_700_000_000_000L
+        )
+        assertTrue(p.enabled)
+        assertTrue(p.exportDisplayName.endsWith(".db") || p.exportDisplayName.contains("Gadgetbridge"))
+        assertTrue(p.schemaValidatedAt > 0L)
+    }
 }

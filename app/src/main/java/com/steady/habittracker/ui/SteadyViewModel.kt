@@ -833,10 +833,54 @@ class SteadyViewModel(
             .syncSchedule(ctx, appData.value)
     }
 
+    /**
+     * Merge Gadgetbridge settings without clobbering concurrent habit adds.
+     * Always re-reads [appData] immediately before save.
+     */
     fun updateGadgetbridgePrefs(prefs: com.steady.habittracker.data.GadgetbridgePrefs) {
         viewModelScope.launch {
             val current = appData.value
-            val updated = current.withGadgetbridgePrefs(prefs)
+            // Preserve enable + path if a half-built enable is racing — never drop a valid path
+            val merged = current.gadgetbridgePrefs.copy(
+                enabled = prefs.enabled,
+                exportLocation = prefs.exportLocation.ifBlank { current.gadgetbridgePrefs.exportLocation },
+                exportDisplayName = prefs.exportDisplayName.ifBlank {
+                    current.gadgetbridgePrefs.exportDisplayName
+                },
+                schemaValidatedAt = if (prefs.schemaValidatedAt > 0) {
+                    prefs.schemaValidatedAt
+                } else {
+                    current.gadgetbridgePrefs.schemaValidatedAt
+                },
+                pollIntervalMinutes = prefs.pollIntervalMinutes,
+                importSteps = prefs.importSteps,
+                importSleep = prefs.importSleep,
+                importHeartRate = prefs.importHeartRate,
+                lookbackDays = prefs.lookbackDays,
+                showHistoryFrames = prefs.showHistoryFrames,
+                notifyEvents = prefs.notifyEvents,
+                stepGoal = prefs.stepGoal,
+                sleepMinHours = prefs.sleepMinHours,
+                sleepMaxHours = prefs.sleepMaxHours,
+                hrHighThreshold = prefs.hrHighThreshold,
+                restingHrHigh = prefs.restingHrHigh,
+                restingHrLow = prefs.restingHrLow,
+                notifyStepGoal = prefs.notifyStepGoal,
+                notifySleepShort = prefs.notifySleepShort,
+                notifySleepLong = prefs.notifySleepLong,
+                notifyHrHigh = prefs.notifyHrHigh,
+                notifyRestingHr = prefs.notifyRestingHr,
+                notifyPersonalBest = prefs.notifyPersonalBest,
+                lastSyncAt = prefs.lastSyncAt,
+                lastFileMtime = prefs.lastFileMtime,
+                lastFileSize = prefs.lastFileSize,
+                lastMaxSampleTs = prefs.lastMaxSampleTs,
+                lastStatus = prefs.lastStatus,
+                lastError = prefs.lastError,
+                notifiedStepGoalDates = prefs.notifiedStepGoalDates,
+                lastNotifiedPersonalBest = prefs.lastNotifiedPersonalBest
+            )
+            val updated = current.withGadgetbridgePrefs(merged)
             repository.saveData(updated)
             val ctx = appContext
             if (ctx != null) {
@@ -846,15 +890,158 @@ class SteadyViewModel(
         }
     }
 
+    /**
+     * Enable Gadgetbridge from a picked file/URI in one atomic save (habit + prefs).
+     * Validates SQLite + Gadgetbridge schema; refuses to stay on if invalid.
+     * @return null on success, else a short error for Toast.
+     */
+    fun enableGadgetbridgeFromLocation(
+        location: String,
+        onResult: (error: String?) -> Unit = {}
+    ) {
+        viewModelScope.launch {
+            val ctx = appContext
+            if (ctx == null) {
+                onResult("No context")
+                return@launch
+            }
+            val loc = location.trim()
+            if (loc.isBlank()) {
+                onResult("Choose a Gadgetbridge export file")
+                return@launch
+            }
+            com.steady.habittracker.sensors.gadgetbridge.GadgetbridgeImporter
+                .takePersistableReadPermission(ctx, loc)
+            val validation = com.steady.habittracker.sensors.gadgetbridge.GadgetbridgeImporter
+                .validateLocation(ctx, loc)
+            if (!validation.ok) {
+                // Keep block off; surface error
+                val current = appData.value
+                val failed = current.gadgetbridgePrefs.copy(
+                    enabled = false,
+                    exportLocation = loc,
+                    exportDisplayName = com.steady.habittracker.sensors.gadgetbridge.GadgetbridgeImporter
+                        .displayNameForUri(ctx, loc),
+                    lastError = validation.message,
+                    lastStatus = "Validation failed",
+                    schemaValidatedAt = 0L
+                )
+                repository.saveData(current.withGadgetbridgePrefs(failed))
+                onResult(validation.message)
+                return@launch
+            }
+
+            val display = com.steady.habittracker.sensors.gadgetbridge.GadgetbridgeImporter
+                .displayNameForUri(ctx, loc)
+            var data = appData.value
+            val prefs = data.gadgetbridgePrefs.copy(
+                enabled = true,
+                showHistoryFrames = true,
+                exportLocation = loc,
+                exportDisplayName = display,
+                schemaValidatedAt = System.currentTimeMillis(),
+                lastError = "",
+                lastStatus = validation.message
+            )
+            data = data.withGadgetbridgePrefs(prefs)
+
+            // Ensure planner habit exists in the same write (avoids race with addHabit)
+            val hasBlock = data.habits.any {
+                !it.archived && it.extensionType == com.steady.habittracker.data.ExtensionType.GADGETBRIDGE_SYNC
+            }
+            if (!hasBlock) {
+                val template = com.steady.habittracker.data.ExtensionCatalog
+                    .templateFor(com.steady.habittracker.data.ExtensionType.GADGETBRIDGE_SYNC)
+                val gid = com.steady.habittracker.data.ExtensionCatalog
+                    .suggestGroupId(data, template?.suggestTimeHint ?: "MORNING")
+                if (gid != null && template != null) {
+                    val order = data.habits.filter { it.groupId == gid }.size
+                    val habit = Habit(
+                        id = "h_${UUID.randomUUID().toString().take(8)}",
+                        name = template.defaultName,
+                        groupId = gid,
+                        type = HabitType.CHECKBOX,
+                        order = order,
+                        icon = template.defaultIcon,
+                        extensionType = com.steady.habittracker.data.ExtensionType.GADGETBRIDGE_SYNC,
+                        extensionConfig = template.defaultConfig
+                    )
+                    data = data.withAddedHabit(habit)
+                }
+            }
+
+            repository.saveData(data)
+            refreshWidget(data)
+            com.steady.habittracker.sensors.gadgetbridge.GadgetbridgeWorker.syncSchedule(ctx, data)
+            // Kick an immediate import
+            val imported = com.steady.habittracker.sensors.gadgetbridge.GadgetbridgeImporter
+                .importIfNeeded(ctx, data, force = true)
+            if (imported.data != data) {
+                repository.saveData(imported.data)
+                refreshWidget(imported.data)
+            }
+            onResult(null)
+        }
+    }
+
+    /** Turn off Gadgetbridge prefs and archive block habits in one write. */
+    fun disableGadgetbridgeBlock() {
+        viewModelScope.launch {
+            var data = appData.value
+            val archived = data.habits.map { h ->
+                if (!h.archived &&
+                    h.extensionType == com.steady.habittracker.data.ExtensionType.GADGETBRIDGE_SYNC
+                ) {
+                    h.copy(archived = true)
+                } else h
+            }
+            data = data.copy(
+                habits = archived,
+                gadgetbridgePrefs = data.gadgetbridgePrefs.copy(
+                    enabled = false,
+                    lastStatus = "Disabled"
+                )
+            )
+            repository.saveData(data)
+            refreshWidget(data)
+            val ctx = appContext
+            if (ctx != null) {
+                com.steady.habittracker.sensors.gadgetbridge.GadgetbridgeWorker.cancel(ctx)
+            }
+        }
+    }
+
     fun runGadgetbridgeSyncNow(onDone: ((String) -> Unit)? = null) {
         viewModelScope.launch {
             val ctx = appContext ?: return@launch
             val current = appData.value
-            val enabled = current.gadgetbridgePrefs.copy(
-                enabled = true,
-                showHistoryFrames = true
+            val loc = current.gadgetbridgePrefs.exportLocation
+            if (loc.isBlank()) {
+                onDone?.invoke("Choose a Gadgetbridge export file first")
+                return@launch
+            }
+            val validation = com.steady.habittracker.sensors.gadgetbridge.GadgetbridgeImporter
+                .validateLocation(ctx, loc)
+            if (!validation.ok) {
+                val failed = current.withGadgetbridgePrefs(
+                    current.gadgetbridgePrefs.copy(
+                        lastError = validation.message,
+                        lastStatus = "Validation failed"
+                    )
+                )
+                repository.saveData(failed)
+                onDone?.invoke(validation.message)
+                return@launch
+            }
+            val base = current.withGadgetbridgePrefs(
+                current.gadgetbridgePrefs.copy(
+                    enabled = true,
+                    showHistoryFrames = true,
+                    schemaValidatedAt = System.currentTimeMillis(),
+                    lastError = "",
+                    lastStatus = validation.message
+                )
             )
-            val base = current.withGadgetbridgePrefs(enabled)
             val result = com.steady.habittracker.sensors.gadgetbridge.GadgetbridgeImporter
                 .importIfNeeded(ctx, base, force = true)
             if (result.data != current) {
@@ -875,7 +1062,7 @@ class SteadyViewModel(
             }
             com.steady.habittracker.sensors.gadgetbridge.GadgetbridgeWorker
                 .syncSchedule(ctx, result.data)
-            onDone?.invoke(result.message)
+            onDone?.invoke(result.message.ifBlank { validation.message })
         }
     }
 

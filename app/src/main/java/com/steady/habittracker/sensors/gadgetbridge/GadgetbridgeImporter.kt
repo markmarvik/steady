@@ -225,7 +225,170 @@ object GadgetbridgeImporter {
         "/storage/emulated/0/Android/data/nodomain.freeyourgadget.gadgetbridge/files/Gadgetbridge"
     )
 
-    private fun resolveExportFile(context: Context, location: String): File? {
+    data class ValidationResult(
+        val ok: Boolean,
+        val message: String,
+        /** ACTIVITY_SAMPLE-like table names found. */
+        val activityTables: List<String> = emptyList(),
+        val hasDeviceTable: Boolean = false,
+        val fileBytes: Long = 0L
+    )
+
+    /**
+     * Resolve [location], open as SQLite, and confirm Gadgetbridge-like schema
+     * (DEVICE and/or *ACTIVITY_SAMPLE* with STEPS/HEART_RATE/TIMESTAMP).
+     */
+    fun validateLocation(context: Context, location: String): ValidationResult {
+        val loc = location.trim()
+        if (loc.isBlank()) {
+            return ValidationResult(false, "No file selected")
+        }
+        val resolved = resolveExportFile(context, loc)
+            ?: return ValidationResult(false, "Cannot open file (missing permission or path)")
+        if (resolved.length() < 100) {
+            return ValidationResult(false, "File too small to be a Gadgetbridge database")
+        }
+        // SQLite header: "SQLite format 3\u0000"
+        try {
+            resolved.inputStream().use { input ->
+                val header = ByteArray(16)
+                val n = input.read(header)
+                if (n < 16 || !header.decodeToString().startsWith("SQLite format 3")) {
+                    return ValidationResult(
+                        false,
+                        "Not a SQLite database. Pick Gadgetbridge’s export (.db / Gadgetbridge file)."
+                    )
+                }
+            }
+        } catch (e: Exception) {
+            return ValidationResult(false, "Cannot read file: ${e.message}")
+        }
+        return try {
+            validateDbFile(resolved.absolutePath, resolved.length())
+        } catch (e: Exception) {
+            ValidationResult(false, "Invalid SQLite: ${e.message}")
+        }
+    }
+
+    fun validateDbFile(dbPath: String, fileBytes: Long = File(dbPath).length()): ValidationResult {
+        val db = SQLiteDatabase.openDatabase(
+            dbPath,
+            null,
+            SQLiteDatabase.OPEN_READONLY or SQLiteDatabase.NO_LOCALIZED_COLLATORS
+        )
+        try {
+            val allTables = mutableListOf<String>()
+            db.rawQuery(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'",
+                null
+            ).use { c ->
+                while (c.moveToNext()) {
+                    val n = c.getString(0) ?: continue
+                    allTables.add(n)
+                }
+            }
+            if (allTables.isEmpty()) {
+                return ValidationResult(false, "Empty database (no tables)", fileBytes = fileBytes)
+            }
+            val hasDevice = allTables.any { it.equals("DEVICE", ignoreCase = true) }
+            val activityTables = allTables.filter {
+                val u = it.uppercase()
+                u.contains("ACTIVITY_SAMPLE") || u == "ACTIVITY_SAMPLE"
+            }
+            val sampleLike = if (activityTables.isEmpty()) {
+                allTables.filter { name ->
+                    val u = name.uppercase()
+                    (u.endsWith("_SAMPLE") || u.contains("ACTIVITY")) &&
+                        run {
+                            val cols = columnNames(db, name)
+                            "TIMESTAMP" in cols && ("STEPS" in cols || "HEART_RATE" in cols)
+                        }
+                }
+            } else {
+                activityTables
+            }
+
+            if (sampleLike.isEmpty() && !hasDevice) {
+                return ValidationResult(
+                    false,
+                    "Not a Gadgetbridge export — missing DEVICE / ACTIVITY_SAMPLE tables " +
+                        "(found: ${allTables.take(6).joinToString()})",
+                    fileBytes = fileBytes
+                )
+            }
+            if (sampleLike.isEmpty() && hasDevice) {
+                return ValidationResult(
+                    false,
+                    "Gadgetbridge DEVICE table found, but no activity sample tables with steps/HR yet. " +
+                        "Sync your gadget in Gadgetbridge, then re-export.",
+                    hasDeviceTable = true,
+                    fileBytes = fileBytes
+                )
+            }
+            val usable = sampleLike.filter { name ->
+                val cols = columnNames(db, name)
+                "TIMESTAMP" in cols && ("STEPS" in cols || "HEART_RATE" in cols)
+            }
+            if (usable.isEmpty()) {
+                return ValidationResult(
+                    false,
+                    "Activity tables found but missing TIMESTAMP/STEPS/HEART_RATE columns",
+                    activityTables = sampleLike,
+                    hasDeviceTable = hasDevice,
+                    fileBytes = fileBytes
+                )
+            }
+            val summary = buildString {
+                append("Valid Gadgetbridge DB · ")
+                append(usable.size)
+                append(" activity table(s)")
+                if (hasDevice) append(" · DEVICE")
+                append(" · ")
+                append(fileBytes / 1024)
+                append(" KB")
+            }
+            return ValidationResult(
+                ok = true,
+                message = summary,
+                activityTables = usable,
+                hasDeviceTable = hasDevice,
+                fileBytes = fileBytes
+            )
+        } finally {
+            db.close()
+        }
+    }
+
+    /** Persistable read access for a content:// export URI. */
+    fun takePersistableReadPermission(context: Context, location: String) {
+        if (!location.startsWith("content://", ignoreCase = true)) return
+        try {
+            val uri = Uri.parse(location)
+            context.contentResolver.takePersistableUriPermission(
+                uri,
+                android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION
+            )
+        } catch (e: Exception) {
+            Log.w(TAG, "takePersistableUriPermission failed", e)
+        }
+    }
+
+    fun displayNameForUri(context: Context, location: String): String {
+        if (!location.startsWith("content://", ignoreCase = true)) {
+            return File(location).name.ifBlank { location }
+        }
+        return try {
+            val uri = Uri.parse(location)
+            context.contentResolver.query(uri, null, null, null, null)?.use { c ->
+                val idx = c.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+                if (c.moveToFirst() && idx >= 0) c.getString(idx) else null
+            } ?: uri.lastPathSegment ?: "Gadgetbridge export"
+        } catch (_: Exception) {
+            "Gadgetbridge export"
+        }
+    }
+
+    fun resolveExportFile(context: Context, location: String): File? {
         return try {
             when {
                 location.startsWith("content://", ignoreCase = true) -> {
