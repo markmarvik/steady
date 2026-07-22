@@ -12,134 +12,133 @@ Native Android app built with **Kotlin** and **Jetpack Compose**. Local-first: n
 
 ## What Steady is for
 
-Steady helps you run a **daily routine** (sleep-anchored morning → focus → wind-down) and stay pointed at **longer-term goals** (Dreamline / Path). Log flexibly, see trends, get gentle reminders when a group starts, and keep a home-screen widget that shows *what to do right now*. Complex capabilities like overnight monitoring are surfaced the same way — as routine blocks you control.
+Steady helps you run a **daily routine** (sleep-anchored morning → focus → wind-down) and stay pointed at **longer-term goals** (Dreamline / Path). Log flexibly, see trends, get gentle reminders when a group starts, and keep a home-screen widget that shows *what to do right now*.
+
+Complex capabilities — wearables, snore watch, deep work, oral hygiene, screen audit — are **special habit blocks** you place on your day, not separate mini-apps.
+
+The planner day rolls over at **04:00 by default** (configurable), so late-night logging still counts for “today.”
 
 ---
 
-## Design Philosophy: Special Habit Blocks & Extensions
+## Design philosophy: special habit blocks
 
-**All features in Steady are (or will be) expressed as special habit blocks or extensions** that appear in the Today timeline and home widget. This is the unifying principle that keeps the app simple, cohesive, and true to its routine-centered design.
+**Features are (or become) blocks / extensions** on the Today timeline or the **Enabled blocks** strip:
 
-Instead of separate screens or background-only services, complex capabilities (overnight snoring detection, sensor sessions, timers, etc.) are modeled as schedulable blocks you place in your Daily Planner groups:
+| Placement | Examples |
+|-----------|----------|
+| **Day timeline** (Morning / Work / Bedtime grids) | Standard habits, oral hygiene (AM+PM slots), sleep phone guard, Deep Work, Pomodoro, snore start/stop |
+| **Enabled blocks strip** (below habits on Today) | Wearable Sync (Gadgetbridge), Screen Usage, Sensor Auto-Read, other tool-style blocks |
 
-- **Evening / Bedtime Routine**: "Activate Snoring Recording" block
-- **Morning Routine**: "Stop Snoring Recording & Review" block
+Logging a block runs side-effects (timers, imports, sensors) while still counting for streaks, Momentum, reminders, and the widget.
 
-Logging these blocks triggers the underlying rich behavior (start/stop services, analysis, summaries) while still participating fully in streaks, momentum scoring, reminders, widget visibility, and history.
+**Multi-group habits** (same habit in morning *and* evening) log **independently per section** — finishing brush in the morning does not close the evening instance.
 
-**Benefits**:
-- One mental model for the entire app
-- Today + Widget become the complete daily command center
-- Future features follow the exact same uniform pattern
-- Maximum user control and intentionality (features are explicitly part of *your* routines)
-
-See Manage → **Blocks** to add templates (sensor auto-read, screen usage, snore watch, ESM check-ins, Pomodoro) and architecture issue #33 for the full design.
+See **Manage → Blocks** for templates.
 
 ---
 
 ## Features
 
 ### Today
-- Timeline groups ordered by your **Daily Planner** (24h schedule)
-- Current period highlighted; past / now / next sections
-- **Square habit grid** — two-finger horizontal pinch to densify (2–4 columns); tap to log, long-press to skip
-- Habit types: checkbox, counter, duration, scale, notes
-- Multi-group habits, stacking (“after …”), skip when needed
-- **Write** & **Journal** full screens (not popups) for ideas, notes, search, filters, and inbox management
+- Timeline groups from your **Daily Planner** (24h schedule); past / now / next
+- **Logical day** (default 4am rollover) for logs, show/hide done, and completion
+- **Square habit grid** — two-finger horizontal pinch (2–4 columns); tap to log, long-press to skip
+- Habit types: checkbox, counter, duration, scale, notes; stacks (“after …”); point weights
+- **Priorities (MITs)** — up to **3 Most Important Tasks** per day; carry unfinished to the next logical day; promote from Work todos (long-press)
+- Work **todos** as squares in the Work section
+- **Deep Work** — start/finish focus sessions from the timeline; minutes + intent on the log note
+- **Write** & **Journal** full screens; Chat with Grok entry
 - Workout session logger for exercise routines
+- **Enabled blocks** strip under the grids for tools that are not morning/evening checklists
 
 ### Path
-- **Dreamline wizard** — Having / Being / Doing across 6- and 12-month horizons
-- Goal cards with progress, confidence, first steps, and notes
+- **Dreamline wizard** — Having / Being / Doing (6- and 12-month horizons)
+- Goal cards: progress, confidence, first steps, notes
 - **“Am I on path?”** alignment check-ins (vision · energy · identity)
 - Mindset anchors tied to Being goals
 
 ### History
+- Open via the **top progress bar** (not a main tab)
 - Streaks, weekly bars, Anki-style heatmap
-- **Momentum** — Steady points, level, lifetime, 30-day points chart
-- Tag-based trends (Supplements, Movement, Sleep, …)
-- Habit squares sized by 30-day completion; expandable **screen usage** when enabled
-- Workout session history
-- **Chat with Grok** — multi-select notes/categories, time scope, stats tools; **save presets** for common commands; deep-link or copy; paste replies back as notes
-- Tap the top **progress bar** to open History (long-press for progress details)
+- **Momentum** — points, level, lifetime, 30-day chart; MIT completions add points
+- Tag trends; habit squares by 30-day completion
+- **Screen usage** frames when the block is on (wall-clock screen-on, capped)
+- **Wearables** frames (steps / sleep / HR min·avg·max) when Gadgetbridge is enabled
+- Workout history; sleep-audio nights
+- **Chat with Grok** — multi-select notes/tags, time scope, stats tools, **saved presets**
 
-### Manage
-Four focused sub-tabs:
+### Manage (four sub-tabs)
 
 | Sub-tab | What it does |
 |--------|----------------|
-| **Habits** | Flat catalog: create, edit, archive habits; **tags** for History; **exercise routines** |
-| **Groups** | Timeline groups (Morning, Focus, Bedtime…); **attach existing habits**, order, move primary |
-| **Blocks** | Special extensions: snore watch, sensor snapshot, screen usage, check-ins, Pomodoro, **local web UI** |
-| **Time** | Sleep spine + **24h timeline**, **reminders**, sensors / auto-log, sleep audio, **backup** |
+| **Habits** | Catalog, tags, archive / restore, exercise routines |
+| **Groups** | Timeline groups; multi-group membership; order |
+| **Blocks** | Extensions: Deep Work, Pomodoro, oral hygiene, sleep phone guard, snore watch, sensors, screen usage, Gadgetbridge, ESM check-ins, local web |
+| **Time** | Sleep spine, 24h timeline, reminders, sensors / auto-log, day start hour, full JSON **backup** |
+
+### Productivity
+- **Deep Work block** — default 50/90/120m sessions; start then finish on Today; status on widget
+- **Daily MITs** — 1–3 outcomes, not an infinite todo list; +5 Momentum each when done
+- **Pomodoro** still available for classic cycles; pairs with LAN Focus UI
+- Work todos from Capture tags; long-press → MIT when room
 
 ### Momentum (scoring)
-- **Steady points** for due habits completed today (base + target/quality bonuses)
-- Day bonuses for solid days, full clears, and Path check-ins
-- **Levels** from lifetime points (calm titles: Steady → Anchored → …)
-- Shown on the Today header and History Momentum section
+- Points for due **slots** completed (multi-group AM/PM count separately)
+- Target / quality bonuses; solid day, full clear, Path check-in bonuses
+- MIT completion points; optional habit **point weights**
+- Soft screen-overage penalty when a Screen Usage limit is set
+- Levels from lifetime points (calm titles)
+
+### Wearables (Gadgetbridge)
+- **Wearable Sync** block: pick export DB (document picker + schema validation)
+- Hourly (configurable) import of steps, sleep, heart rate into unified day metrics
+- History heatstrips; optional notifications (step goal, personal best, sleep/HR thresholds)
+- Appears under **Enabled blocks**, not in morning habits
+
+### Hygiene & sleep helpers
+- **Oral Hygiene** — brush / floss / tongue / water / mouthwash; morning + evening (independent completions)
+- **Sleep · Phone guard** — “Phone parked” (evening) + “Phone later” (morning); optional screen minutes on the note
+- **Snore Watch** — activate at bedtime, stop & review in the morning; charging gate optional
 
 ### Auto-log (sensors & external)
-- Opt-in per habit: **Suggest** or **Auto-apply**
-- **Screen time** (usage access) · **evening screen after wind-down**
-- **Bedtime light** (lux) · dark-room check
-- **Ambient noise** (mic, short samples)
-- **Phone steps** (optional) · **Gadgetbridge / external steps** via broadcast
-- Manage → Time → Sensors; edit habit → Auto-log source
-
-### Sleep audio / snore watch (Special habit block extension)
-- **Implemented as special habit blocks** (see Design Philosophy / #33):
-  - "Activate Snoring Recording" in **Evening / Bedtime**
-  - "Stop & Review Night" in **Morning**
-- Overnight recording, loud-event + snore heuristic detection, OGG/Opus segments, last-N-nights retention, charging gate unchanged
-- Control and status via Today / widget; review nights from History
-- Fully integrated with momentum, streaks, and routine reminders
-
-### Sensor & screen extensions
-- **Sensor Auto-Read** blocks: GPS (one-shot), steps, light/noise/screen snapshots linked to the log
-- **Screen Usage** blocks: daily total + top-app breakdown (usage access)
-- Snapshots stored locally and included in backup
+- Opt-in per habit: Suggest or Auto-apply
+- Screen time · evening screen after wind-down · bedtime light · ambient noise · phone / external steps
+- Respects logical day (`dayStartHour`)
 
 ### Widget & notifications
-- Home-screen widget: current group, missed items, what’s next
-- Exact alarms for group / daily-review reminders (reschedule on boot)
-- **Smart & gentle**: adaptive timing from your log history, quiet hours, daily cap, streak-risk copy, skip empty groups
-- **Daily motivational quotes** and **random awareness check-ins** (opt-in, Manage → Blocks / Planner)
-- Per-habit reminders, missed-habit evening nudge, reminder strength
-- Deep links from notifications and widget into the app
-- Special extension blocks receive tailored status lines on Today
+- Current group, pending habits (slot-aware multi-group toggles), deep work remaining
+- Exact alarms; smart & gentle: adaptive timing, quiet hours, daily cap, streak-risk copy
+- Quotes and awareness check-ins (opt-in)
+- Deep links from notifications and widget
 
 ### Local web UI (LAN)
-- Opt-in server on the phone (`Manage → Blocks`) — runs as a **foreground service** (notification while on)
-- **HTTP** on port 8787 (default): open `http://PHONE_IP:8787` — do **not** type `https://` on this port
-- **HTTPS** (optional, default on) on port **8788** with a bundled self-signed cert; accept the browser warning once
-- Same Wi‑Fi as your PC; phone firewall / VPN / **GrapheneOS network permission** can block access — allow Steady network access
-- Full desktop dashboard: **Today** (all habit types, skip/undo), **Inbox + Journal**, **Path** (goals + check-in), **History** (momentum, heatmap, tags, sleep nights), **Habits** CRUD, **Focus** (Pomodoro), workouts / sensors / reminders
-- Configurable **auto turn-off** (15m–4h or never) and **trusted Wi‑Fi whitelist**: auto-start on home SSID with longer session (1–12h / never) and a **mandatory secure PIN** (min 4) when auto-start is on
-- Fully local, no cloud
+- Foreground service; **HTTP** `:8787`, optional **HTTPS** `:8788` (self-signed)
+- Desktop: Today, inbox/journal, Path, History, habits, Focus (Pomodoro), workouts
+- Auto turn-off; trusted Wi‑Fi + PIN for auto-start
+- Fully local — no cloud
 
 ### Appearance
-- **Theme packs** inspired by Linux rice palettes: Nord, Catppuccin, Tokyo Night, Gruvbox, Dracula, Rosé Pine, Everforest, One Dark, OLED, Latte
-- Compact accent swatches + custom HSV accent
-- Guided tour + welcome guide from **Settings**
+- Theme packs (Nord, Catppuccin, Tokyo Night, Gruvbox, Dracula, Rosé Pine, Everforest, …)
+- Accent swatches + custom HSV; guided tour from Settings
 
 ---
 
 ## Using Steady
 
-1. **First run** — short onboarding; starter high-ROI habits are preloaded.
-2. **Today** — tap to log; expand the header for weekly trends and per-group averages.
-3. **Path** — run **Start Dreamline** to define dreams; check in with **Am I on path?**
-4. **Manage → Time** — set wake/bed, edit the 24h timeline, enable reminders.
-5. **Manage → Habits / Groups** — catalog habits and timeline membership.
-6. **Manage → Blocks** — add special extensions and enable LAN web / quotes / check-ins.
+1. **First run** — onboarding; starter high-ROI habits preloaded.
+2. **Today** — set **Priorities**, log habits, run **Deep Work** if enabled; pinch to densify the grid.
+3. **Path** — Dreamline for long goals; **Am I on path?** check-ins.
+4. **Manage → Time** — wake/bed, 24h timeline, **day starts at** hour, reminders, backup.
+5. **Manage → Blocks** — Deep Work, oral hygiene, phone guard, Gadgetbridge, LAN web, etc.
+6. **Progress bar** — tap for History; long-press for quick progress details.
 7. **Settings (gear)** — theme + help/tour.
-7. **Backup** — Manage → Backup → Export / Import Backup (full JSON: habits, logs, Momentum, reminders, Path).
 
 Tips:
 - Grant **notifications** and **exact alarms** (Android 12+) for reliable reminders.
-- Add the **Steady widget** from your launcher’s widget picker.
+- **Usage access** for screen / phone-guard minutes; optional location/mic for sensor & snore blocks.
+- Add the **Steady widget** from your launcher.
 - Archive instead of delete so history stays intact.
+- Full backup: Manage → Time → Export / Import JSON.
 
 ---
 
@@ -173,14 +172,18 @@ Or with Gradle directly:
 
 ```
 app/src/main/java/com/steady/habittracker/
-  data/          # models, HabitDomain (pure), repository / DataStore
+  data/          # models, HabitDomain, ProductivityDomain, blocks, repository / DataStore
+  extensions/    # ExtensionManager side-effects on log
+  sensors/       # auto-log, screen time, Gadgetbridge import
+  sleepaudio/    # snore / overnight capture
   reminders/     # AlarmManager, BootReceiver, notifications
-  ui/            # Compose screens (Today, Path, History, Manage, wizards)
-  widget/        # App widget models + rendering
+  ui/            # Compose (Today, Path, History, Manage, Write, Journal, Grok)
+  widget/        # app widget models + rendering
+  web/           # LAN LocalWebServer
 ```
 
-- **Schema** versioned JSON in DataStore (current schema v12: sleep-audio nights + auto-log).
-- **Domain** logic is unit-tested under `app/src/test/`.
+- **Schema** — versioned JSON in DataStore (v15+ fields: wearables, oral hygiene, sleep phone, deep work, MITs, day start hour).
+- **Domain** — unit-tested under `app/src/test/`.
 
 ---
 
@@ -192,7 +195,7 @@ All data stays on device. No analytics SDKs, no accounts. Export is a local JSON
 
 ## Portability
 
-Core models (`Group`, `Habit`, `HabitEntry`, `Schedule`, `GoalStory`, `AppData`) and domain helpers are intentionally platform-light. Android-specific pieces (AlarmManager, widgets, DataStore) sit in Android modules so a KMP shared core can be extracted later.
+Core models (`Group`, `Habit`, `HabitEntry`, `Schedule`, `GoalStory`, `AppData`, MITs, wearable days) and domain helpers are platform-light. Android-specific pieces (AlarmManager, widgets, DataStore, UsageStats) sit outside pure domain so a shared core can be extracted later.
 
 ---
 
