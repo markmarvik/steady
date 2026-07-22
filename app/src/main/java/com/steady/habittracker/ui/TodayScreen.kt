@@ -49,6 +49,8 @@ import com.steady.habittracker.data.AppData
 import com.steady.habittracker.data.AutoSuggestion
 import com.steady.habittracker.data.CaptureItem
 import com.steady.habittracker.data.CaptureTags
+import com.steady.habittracker.data.ExtensionCatalog
+import com.steady.habittracker.data.ExtensionType
 import com.steady.habittracker.data.Habit
 import com.steady.habittracker.data.HabitDomain
 import com.steady.habittracker.data.HabitEntry
@@ -61,6 +63,7 @@ import com.steady.habittracker.data.effectiveDescription
 import com.steady.habittracker.data.inboxCaptures
 import com.steady.habittracker.data.journalCaptures
 import com.steady.habittracker.data.openTodoCaptures
+import com.steady.habittracker.extensions.ExtensionManager
 import com.steady.habittracker.sensors.AutoLogEngine
 import com.steady.habittracker.sensors.AutoLogMapper
 import com.steady.habittracker.util.SteadyHaptics
@@ -73,6 +76,7 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
+import androidx.compose.ui.platform.LocalContext
 
 @Composable
 fun TodayScreen(
@@ -228,12 +232,12 @@ fun TodayScreen(
             e != null && !e.skipped && e.value >= 0.5
         }
     }
-    val androidContext = androidx.compose.ui.platform.LocalContext.current
+    val androidContext = LocalContext.current
     val openTodos = remember(appData.captures, appData.capturePrefs) {
         appData.openTodoCaptures()
     }
-    val enabledBlocks = remember(appData.habits, appData.gadgetbridgePrefs, appData.sleepAudioPrefs) {
-        com.steady.habittracker.data.ExtensionCatalog.enabledBlockHabitsForToday(appData)
+    val enabledBlocks = remember(appData.habits) {
+        ExtensionCatalog.enabledBlockHabitsForToday(appData)
     }
     // Per-section row models so items don't re-run domain / string work while scrolling
     val sectionRows = remember(
@@ -262,10 +266,9 @@ fun TodayScreen(
                 val streak = HabitDomain.computeHabitStreak(appData, habit.id)
                 val meta = buildList {
                     if (desc.isNotBlank()) add(desc)
-                    if (habit.extensionType != com.steady.habittracker.data.ExtensionType.NONE) {
-                        add(com.steady.habittracker.data.ExtensionCatalog.label(habit.extensionType))
-                        com.steady.habittracker.extensions.ExtensionManager
-                            .statusLine(habit, appData, androidContext)?.let { add(it) }
+                    if (habit.extensionType != ExtensionType.NONE) {
+                        add(ExtensionCatalog.label(habit.extensionType))
+                        ExtensionManager.statusLine(habit, appData, androidContext)?.let { add(it) }
                     }
                     tagLabels[habit.id]?.takeIf { it.isNotBlank() }?.let { add(it) }
                     habit.afterHabitId?.let { nameById[it] }?.let { add("after $it") }
@@ -812,6 +815,7 @@ fun TodayScreen(
                         appData = appData,
                         entry = effectiveEntriesForDay[habit.id],
                         colors = colors,
+                        statusContext = androidContext,
                         onOpen = { onRequestLog(habit) },
                         onToggle = { onToggle(habit.id) }
                     )
@@ -1198,19 +1202,19 @@ private fun EnabledBlockRow(
     appData: AppData,
     entry: HabitEntry?,
     colors: TodayListColors,
+    statusContext: android.content.Context?,
     onOpen: () -> Unit,
     onToggle: () -> Unit
 ) {
-    val status = remember(habit, appData, entry) {
-        com.steady.habittracker.extensions.ExtensionManager.statusLine(habit, appData, null)
-            ?: com.steady.habittracker.data.ExtensionCatalog.label(habit.extensionType)
+    val typeLabel = ExtensionCatalog.label(habit.extensionType)
+    val status = remember(habit.id, habit.extensionType, appData.gadgetbridgePrefs, appData.sleepAudioPrefs, entry) {
+        ExtensionManager.statusLine(habit, appData, statusContext) ?: typeLabel
     }
     val isDone = entry != null && !entry.skipped && entry.value >= 0.5
     Card(
         modifier = Modifier
             .fillMaxWidth()
             .clickable {
-                // Checkbox-style blocks: one-tap toggle; others open log / side-effect
                 if (habit.type == HabitType.CHECKBOX) onToggle() else onOpen()
             },
         colors = CardDefaults.cardColors(
@@ -1225,10 +1229,7 @@ private fun EnabledBlockRow(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            Text(
-                habit.icon.ifBlank { "◆" },
-                fontSize = 22.sp
-            )
+            Text(habit.icon.ifBlank { "◆" }, fontSize = 22.sp)
             Column(Modifier.weight(1f)) {
                 Text(
                     habit.name,
@@ -1245,7 +1246,7 @@ private fun EnabledBlockRow(
                 )
             }
             Text(
-                if (isDone) "✓" else com.steady.habittracker.data.ExtensionCatalog.label(habit.extensionType),
+                if (isDone) "✓" else typeLabel,
                 fontSize = 11.sp,
                 fontWeight = FontWeight.SemiBold,
                 color = colors.primary

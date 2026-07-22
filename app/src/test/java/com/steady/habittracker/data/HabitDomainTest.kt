@@ -25,7 +25,9 @@ class HabitDomainTest {
             groups = groups,
             habits = habits,
             entries = entries,
-            schemaVersion = 5
+            schemaVersion = 5,
+            // Calendar midnight in tests — avoid flaky 4am logical-day rollover
+            dayStartHour = 0
         )
     }
 
@@ -761,6 +763,7 @@ class HabitDomainTest {
             mapOf(today to mapOf("h1" to HabitEntry(value = 1.0), "h2" to HabitEntry(value = 1.0)))
         )
         val data = base.copy(
+            dayStartHour = 0,
             habits = base.habits + screenHabit,
             sensorSnapshots = listOf(
                 SensorSnapshot(
@@ -774,8 +777,9 @@ class HabitDomainTest {
         assertEquals(8, HabitDomain.screenOveragePenalty(data, today))
         val b = HabitDomain.computeDayPointsBreakdown(data, today)
         assertEquals(8, b.screenPenalty)
-        // Screen block is also due → 2/4 completed is not solid; just base − penalty
-        assertEquals(20 - 8, b.total)
+        // Screen is a strip tool (not due). h1+h2 of 3 due → habit 20 + solid 10 − pen 8
+        assertEquals(20 + HabitDomain.SOLID_DAY_BONUS - 8, b.total)
+        assertFalse(ExtensionCatalog.livesOnDayTimeline(screenHabit))
     }
 
     @Test

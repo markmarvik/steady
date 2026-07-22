@@ -81,7 +81,7 @@ class ToggleReceiver : BroadcastReceiver() {
                     return@launch
                 }
 
-                val today = HabitDomain.getToday()
+                val today = HabitDomain.logicalToday(data)
                 val currentEntry = data.entries[today]?.get(habitId)
                 val alreadyDone =
                     (currentEntry?.value ?: 0.0) >= 0.5 && currentEntry?.skipped != true

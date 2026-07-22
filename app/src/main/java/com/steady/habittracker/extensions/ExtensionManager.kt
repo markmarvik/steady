@@ -2,9 +2,11 @@ package com.steady.habittracker.extensions
 
 import android.content.Context
 import com.steady.habittracker.data.AppData
+import com.steady.habittracker.data.CaptureTags
 import com.steady.habittracker.data.ExtensionType
 import com.steady.habittracker.data.Habit
 import com.steady.habittracker.data.HabitEntry
+import com.steady.habittracker.data.OralHygieneSteps
 import com.steady.habittracker.data.SensorKind
 import com.steady.habittracker.data.SensorSnapshot
 import com.steady.habittracker.data.withAddedSensorSnapshot
@@ -57,7 +59,7 @@ object ExtensionManager {
             ExtensionType.ESM_CHECKIN -> LogResult(
                 data,
                 openCapture = true,
-                capturePresetTags = listOf(com.steady.habittracker.data.CaptureTags.CHECKIN)
+                capturePresetTags = listOf(CaptureTags.CHECKIN)
             )
             ExtensionType.POMODORO -> handlePomodoro(data, habit, entry, date)
             ExtensionType.GADGETBRIDGE_SYNC -> LogResult(data)
@@ -263,8 +265,11 @@ object ExtensionManager {
             ExtensionType.SCREEN_USAGE -> {
                 if (context != null) {
                     val min = ScreenTimeReader.screenOnMinutes(context)
-                    if (min != null) "Screen so far: ${min / 60}h ${min % 60}m" else "Grant usage access"
-                } else "Screen usage block"
+                    if (min != null) "Screen so far: ${ScreenTimeReader.formatMinutes(min)}"
+                    else "Grant usage access"
+                } else {
+                    "Screen usage block"
+                }
             }
             ExtensionType.WORKOUT_SESSION -> "Start workout session"
             ExtensionType.ESM_CHECKIN -> "What are you doing right now?"
@@ -293,12 +298,11 @@ object ExtensionManager {
         val step = habit.extensionConfig.oralStepKey.ifBlank { "care" }
         val prefs = data.oralHygienePrefs
         val noteExtra = when (step) {
-            com.steady.habittracker.data.OralHygieneSteps.BRUSH ->
-                "Brushed ${prefs.brushMinutes.coerceIn(1, 5)} min"
-            com.steady.habittracker.data.OralHygieneSteps.FLOSS -> "Flossed"
-            com.steady.habittracker.data.OralHygieneSteps.TONGUE -> "Tongue scraped"
-            com.steady.habittracker.data.OralHygieneSteps.WATER -> prefs.waterFlushLabel.ifBlank { "Water rinse" }
-            com.steady.habittracker.data.OralHygieneSteps.MOUTHWASH -> "Mouthwash"
+            OralHygieneSteps.BRUSH -> "Brushed ${prefs.brushMinutes.coerceIn(1, 5)} min"
+            OralHygieneSteps.FLOSS -> "Flossed"
+            OralHygieneSteps.TONGUE -> "Tongue scraped"
+            OralHygieneSteps.WATER -> prefs.waterFlushLabel.ifBlank { "Water rinse" }
+            OralHygieneSteps.MOUTHWASH -> "Mouthwash"
             else -> "Oral care"
         }
         val note = listOfNotNull(entry.note.takeIf { it.isNotBlank() }, noteExtra)
@@ -311,13 +315,11 @@ object ExtensionManager {
         val step = habit.extensionConfig.oralStepKey
         val prefs = data.oralHygienePrefs
         return when (step) {
-            com.steady.habittracker.data.OralHygieneSteps.BRUSH ->
-                "${prefs.brushMinutes.coerceIn(1, 5)} min · AM & PM"
-            com.steady.habittracker.data.OralHygieneSteps.FLOSS -> "Floss · AM & PM"
-            com.steady.habittracker.data.OralHygieneSteps.TONGUE -> "Tongue · AM & PM"
-            com.steady.habittracker.data.OralHygieneSteps.WATER ->
-                "${prefs.waterFlushLabel.ifBlank { "Water" }} · AM & PM"
-            com.steady.habittracker.data.OralHygieneSteps.MOUTHWASH -> "Mouthwash · AM & PM"
+            OralHygieneSteps.BRUSH -> "${prefs.brushMinutes.coerceIn(1, 5)} min · AM & PM"
+            OralHygieneSteps.FLOSS -> "Floss · AM & PM"
+            OralHygieneSteps.TONGUE -> "Tongue · AM & PM"
+            OralHygieneSteps.WATER -> "${prefs.waterFlushLabel.ifBlank { "Water" }} · AM & PM"
+            OralHygieneSteps.MOUTHWASH -> "Mouthwash · AM & PM"
             else -> "Oral hygiene · AM & PM"
         }
     }

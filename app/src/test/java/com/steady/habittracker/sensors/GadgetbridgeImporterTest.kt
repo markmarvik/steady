@@ -22,6 +22,34 @@ class GadgetbridgeImporterTest {
     }
 
     @Test
+    fun mergePreservingPathsKeepsValidatedExport() {
+        val stored = GadgetbridgePrefs(
+            enabled = true,
+            exportLocation = "content://gb/export",
+            exportDisplayName = "Gadgetbridge",
+            schemaValidatedAt = 99L,
+            lastSyncAt = 50L,
+            lastStatus = "OK · 12 days"
+        )
+        val fromForm = GadgetbridgePrefs(
+            enabled = true,
+            exportLocation = "",
+            exportDisplayName = "",
+            schemaValidatedAt = 0L,
+            stepGoal = 9000,
+            lastSyncAt = 0L,
+            lastStatus = ""
+        )
+        val merged = stored.mergePreservingPaths(fromForm)
+        assertEquals("content://gb/export", merged.exportLocation)
+        assertEquals("Gadgetbridge", merged.exportDisplayName)
+        assertEquals(99L, merged.schemaValidatedAt)
+        assertEquals(50L, merged.lastSyncAt)
+        assertEquals("OK · 12 days", merged.lastStatus)
+        assertEquals(9000, merged.stepGoal)
+    }
+
+    @Test
     fun mergeWearableDaysDedupesByDate() {
         val a = WearableDayMetrics(date = "2026-07-01", steps = 1000, maxSampleTs = 10, updatedAt = 1)
         val b = WearableDayMetrics(

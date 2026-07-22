@@ -83,7 +83,8 @@ object OralHygieneBlock {
                 }
             }
         }
-        return next to (morning.id to evening!!.id)
+        val eveningGroup = evening ?: return null
+        return next to (morning.id to eveningGroup.id)
     }
 
     /**

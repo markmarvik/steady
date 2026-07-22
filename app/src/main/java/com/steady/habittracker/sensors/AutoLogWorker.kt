@@ -25,7 +25,11 @@ class AutoLogWorker(
             val repo = AndroidHabitRepository(applicationContext)
             val data = repo.appDataFlow.first()
             if (!data.autoLogMasterEnabled) return Result.success()
-            val result = AutoLogEngine.run(applicationContext, data, HabitDomain.getToday())
+            val result = AutoLogEngine.run(
+                applicationContext,
+                data,
+                HabitDomain.logicalToday(data)
+            )
             if (result.data != data) {
                 repo.saveData(result.data)
                 WidgetRenderer.updateAll(applicationContext, result.data)

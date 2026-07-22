@@ -5,6 +5,7 @@ import com.steady.habittracker.data.ExtensionCatalog
 import com.steady.habittracker.data.ExtensionType
 import com.steady.habittracker.data.HabitDomain
 import com.steady.habittracker.data.HabitType
+import com.steady.habittracker.data.OralHygieneSteps
 import com.steady.habittracker.data.displayLabel
 import kotlinx.serialization.Serializable
 import java.time.LocalDate
@@ -37,7 +38,8 @@ data class WidgetRow(
  * and current group is **not** moved to the top.
  */
 fun buildWidgetRows(data: AppData, now: LocalTime = LocalTime.now()): List<WidgetRow> {
-    val sections = HabitDomain.timelineSectionsForToday(data, LocalDate.now(), now)
+    val day = HabitDomain.logicalTodayDate(data)
+    val sections = HabitDomain.timelineSectionsForToday(data, day, now)
     if (sections.isEmpty()) return emptyList()
 
     val rows = mutableListOf<WidgetRow>()
@@ -77,11 +79,11 @@ fun buildWidgetRows(data: AppData, now: LocalTime = LocalTime.now()): List<Widge
                 ExtensionType.GADGETBRIDGE_SYNC ->
                     data.wearableDays.firstOrNull()?.steps?.let { "${it} steps" } ?: "sync"
                 ExtensionType.ORAL_HYGIENE -> when (h.extensionConfig.oralStepKey) {
-                    "brush" -> "brush"
-                    "floss" -> "floss"
-                    "tongue" -> "tongue"
-                    "water" -> "water"
-                    "mouthwash" -> "rinse"
+                    OralHygieneSteps.BRUSH -> "brush"
+                    OralHygieneSteps.FLOSS -> "floss"
+                    OralHygieneSteps.TONGUE -> "tongue"
+                    OralHygieneSteps.WATER -> "water"
+                    OralHygieneSteps.MOUTHWASH -> "rinse"
                     else -> "oral"
                 }
             }
@@ -133,9 +135,9 @@ fun pendingRowIcon(habitType: String, isCheckbox: Boolean): String {
 }
 
 fun pendingCountToday(data: AppData): Int {
-    val today = LocalDate.now()
-    val entries = data.entries[HabitDomain.getToday()] ?: emptyMap()
-    return HabitDomain.habitsDueOn(data, today).count { h ->
+    val day = HabitDomain.logicalTodayDate(data)
+    val entries = data.entries[day.toString()] ?: emptyMap()
+    return HabitDomain.habitsDueOn(data, day).count { h ->
         HabitDomain.isPendingEntry(entries[h.id])
     }
 }

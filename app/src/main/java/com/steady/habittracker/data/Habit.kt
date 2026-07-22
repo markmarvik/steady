@@ -301,6 +301,29 @@ data class GadgetbridgePrefs(
 ) {
     fun effectivePollMinutes(): Int = pollIntervalMinutes.coerceIn(15, 360)
     fun effectiveLookbackDays(): Int = lookbackDays.coerceIn(1, 90)
+
+    /**
+     * Apply UI prefs without dropping a validated path or wiping runtime status
+     * when the form omits empty/zero fields.
+     */
+    fun mergePreservingPaths(from: GadgetbridgePrefs): GadgetbridgePrefs = from.copy(
+        exportLocation = from.exportLocation.ifBlank { exportLocation },
+        exportDisplayName = from.exportDisplayName.ifBlank { exportDisplayName },
+        schemaValidatedAt = if (from.schemaValidatedAt > 0L) {
+            from.schemaValidatedAt
+        } else {
+            schemaValidatedAt
+        },
+        // Keep last-sync bookkeeping if the form still has defaults
+        lastSyncAt = maxOf(from.lastSyncAt, lastSyncAt),
+        lastFileMtime = if (from.lastFileMtime > 0L) from.lastFileMtime else lastFileMtime,
+        lastFileSize = if (from.lastFileSize > 0L) from.lastFileSize else lastFileSize,
+        lastMaxSampleTs = maxOf(from.lastMaxSampleTs, lastMaxSampleTs),
+        lastStatus = from.lastStatus.ifBlank { lastStatus },
+        lastError = from.lastError,
+        notifiedStepGoalDates = from.notifiedStepGoalDates.ifEmpty { notifiedStepGoalDates },
+        lastNotifiedPersonalBest = maxOf(from.lastNotifiedPersonalBest, lastNotifiedPersonalBest)
+    )
 }
 
 /** Per-habit reminder settings when configuring a habit (#30). */

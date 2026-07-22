@@ -370,7 +370,7 @@ object HabitDomain {
     fun computeStreak(data: AppData): Int {
         if (data.habits.none { !it.archived }) return 0
         var streak = 0
-        var checkDate = LocalDate.parse(getToday())
+        var checkDate = logicalTodayDate(data)
 
         while (true) {
             val due = habitsDueOn(data, checkDate)
@@ -400,7 +400,8 @@ object HabitDomain {
     fun computeHabitStreak(data: AppData, habitId: String): Int {
         val habit = data.habits.find { it.id == habitId && !it.archived } ?: return 0
         var streak = 0
-        var checkDate = LocalDate.parse(getToday())
+        val today = logicalTodayDate(data)
+        var checkDate = today
         var started = false
         repeat(400) {
             val dueToday = isDueOn(habit, checkDate)
@@ -413,7 +414,7 @@ object HabitDomain {
                     started = true
                 } else {
                     // Today still open: don't break yet — look at prior days.
-                    if (started || checkDate != LocalDate.parse(getToday())) {
+                    if (started || checkDate != today) {
                         return streak
                     }
                 }
@@ -1376,7 +1377,7 @@ object HabitDomain {
      * Lifetime = max(previous lifetime, sum of rebuilt window) so we never erase older prestige
      * if the window alone is smaller.
      */
-    fun rebuildScoreFromEntries(data: AppData, today: String = getToday()): AppData {
+    fun rebuildScoreFromEntries(data: AppData, today: String = logicalToday(data)): AppData {
         val todayDate = try {
             LocalDate.parse(today)
         } catch (_: Exception) {

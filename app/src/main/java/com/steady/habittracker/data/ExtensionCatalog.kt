@@ -95,7 +95,8 @@ object ExtensionCatalog {
             defaultName = "Wearable Sync",
             defaultIcon = "⌚",
             category = "Wearables",
-            suggestTimeHint = "MORNING"
+            // Tool strip under Today — group id is storage only, not day timeline
+            suggestTimeHint = "ANY"
         ),
         Template(
             type = ExtensionType.ORAL_HYGIENE,
@@ -146,14 +147,14 @@ object ExtensionCatalog {
         data.habits.filter { !it.archived && it.extensionType != ExtensionType.NONE }
 
     /** One representative habit per extension type for the Today blocks strip. */
-    fun enabledBlockHabitsForToday(data: AppData): List<Habit> {
-        return activeExtensionHabits(data)
+    fun enabledBlockHabitsForToday(data: AppData): List<Habit> =
+        data.habits
+            .asSequence()
             .filter { isBlockStripHabit(it) }
             .groupBy { it.extensionType }
             .values
-            .map { group -> group.minByOrNull { it.order } ?: group.first() }
+            .map { group -> group.minBy { it.order } }
             .sortedBy { label(it.extensionType) }
-    }
 
     fun habitsOfType(data: AppData, type: ExtensionType): List<Habit> =
         data.habits.filter { !it.archived && it.extensionType == type }

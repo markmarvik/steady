@@ -30,10 +30,7 @@ class ExternalMetricsReceiver : BroadcastReceiver() {
         if (intent?.action != ACTION && intent?.action != ACTION_LEGACY) return
         val key = intent.getStringExtra(EXTRA_KEY) ?: "steps"
         val value = readValue(intent) ?: return
-        val date = intent.getStringExtra(EXTRA_DATE)?.takeIf { it.isNotBlank() }
-            ?: HabitDomain.getToday()
-
-        ExternalMetricsStore.put(context, date, key, value)
+        val dateExtra = intent.getStringExtra(EXTRA_DATE)?.takeIf { it.isNotBlank() }
 
         val pending = goAsync()
         val appContext = context.applicationContext
@@ -42,6 +39,8 @@ class ExternalMetricsReceiver : BroadcastReceiver() {
                 val repo = AndroidHabitRepository(appContext)
                 val data = repo.appDataFlow.first()
                 if (!data.autoLogMasterEnabled) return@launch
+                val date = dateExtra ?: HabitDomain.logicalToday(data)
+                ExternalMetricsStore.put(appContext, date, key, value)
                 val result = AutoLogEngine.run(appContext, data, date)
                 if (result.data != data) {
                     repo.saveData(result.data)
