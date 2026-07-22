@@ -73,23 +73,19 @@ fun TodayScreen(
     onRequestLog: (Habit) -> Unit = { h -> onLogEntry(h.id, 1.0, "", java.time.LocalDate.now().toString()) },  // preferred for dialog popup + keyboard
     onSkip: (String) -> Unit,
     onShowSkipPrompt: (habitId: String) -> Unit = {},
-    onQuickCapture: (title: String, note: String, tags: List<String>) -> Unit = { _, _, _ -> },  // #10 quick capture
+    onQuickCapture: (title: String, note: String, tags: List<String>) -> Unit = { _, _, _ -> },
     onUpdateCapture: (id: String, title: String, note: String, tags: List<String>) -> Unit = { _, _, _, _ -> },
     onProcessCapture: (id: String) -> Unit = {},
     onDeleteCapture: (id: String) -> Unit = {},
     onReopenCapture: (id: String) -> Unit = {},
+    onOpenWrite: () -> Unit = {},
+    onOpenJournal: () -> Unit = {},
     onChatWithGrok: () -> Unit = {},
     onSetTodayGridColumns: (Int) -> Unit = {},
     // manual metric logging support (#19)
     onCreateMetric: (name: String) -> Unit = {},
     onLogMetric: (habitId: String, value: Double, note: String, date: String) -> Unit = { _, _, _, _ -> },
     onStartRoutine: (com.steady.habittracker.data.ExerciseRoutine) -> Unit = {},
-    /** Widget / deep-link: open + Capture dialog once. */
-    openCaptureRequest: Boolean = false,
-    /** Optional tags to pre-select (and force on save) when opened from check-in. */
-    openCapturePresetTags: List<String> = emptyList(),
-    openCaptureDialogTitle: String? = null,
-    onOpenCaptureConsumed: () -> Unit = {},
     /** Widget / deep-link: open + Log dialog once. */
     openLogRequest: Boolean = false,
     onOpenLogConsumed: () -> Unit = {},
@@ -106,17 +102,10 @@ fun TodayScreen(
         return
     }
 
-    // Dialog states (must declare before use)
-    var showCaptureDialog by remember { mutableStateOf(false) }
-    var capturePresetTags by remember { mutableStateOf<List<String>>(emptyList()) }
-    var captureDialogTitle by remember { mutableStateOf<String?>(null) }
     var showMetricDialog by remember { mutableStateOf(false) }
-    var showJournalDialog by remember { mutableStateOf(false) }
     // #44: temporary 30s flash for newly created notes/ideas
     var flashCaptureId by remember { mutableStateOf<String?>(null) }
-    var flashCreatedAt by remember { mutableStateOf(0L) }
     var knownCaptureIds by remember { mutableStateOf(appData.captures.map { it.id }.toSet()) }
-    var editFlashCapture by remember { mutableStateOf<com.steady.habittracker.data.CaptureItem?>(null) }
 
     LaunchedEffect(appData.captures) {
         val ids = appData.captures.map { it.id }.toSet()
@@ -124,20 +113,11 @@ fun TodayScreen(
         knownCaptureIds = ids
         if (newId != null) {
             flashCaptureId = newId
-            flashCreatedAt = System.currentTimeMillis()
             delay(30_000)
             if (flashCaptureId == newId) flashCaptureId = null
         }
     }
 
-    LaunchedEffect(openCaptureRequest) {
-        if (openCaptureRequest) {
-            capturePresetTags = openCapturePresetTags
-            captureDialogTitle = openCaptureDialogTitle
-            showCaptureDialog = true
-            onOpenCaptureConsumed()
-        }
-    }
     LaunchedEffect(openLogRequest) {
         if (openLogRequest) {
             showMetricDialog = true
@@ -154,57 +134,6 @@ fun TodayScreen(
                 onCreateMetric(name)
                 showMetricDialog = false
             }
-        )
-    }
-
-    if (showCaptureDialog) {
-        val isCheckIn = capturePresetTags.any {
-            it.equals(com.steady.habittracker.data.CaptureTags.CHECKIN, ignoreCase = true)
-        }
-        CaptureDialog(
-            prefs = appData.capturePrefs,
-            presetTags = capturePresetTags.takeIf { it.isNotEmpty() },
-            dialogTitle = captureDialogTitle ?: if (isCheckIn) "Awareness check-in" else null,
-            forceTags = if (isCheckIn) {
-                listOf(com.steady.habittracker.data.CaptureTags.CHECKIN)
-            } else {
-                emptyList()
-            },
-            onDismiss = {
-                showCaptureDialog = false
-                capturePresetTags = emptyList()
-                captureDialogTitle = null
-            },
-            onCapture = { title, note, tags ->
-                onQuickCapture(title, note, tags)
-                showCaptureDialog = false
-                capturePresetTags = emptyList()
-                captureDialogTitle = null
-            }
-        )
-    }
-    // Re-open Write to edit a just-created flash item (#44)
-    editFlashCapture?.let { cap ->
-        CaptureDialog(
-            prefs = appData.capturePrefs,
-            presetTags = cap.tags,
-            dialogTitle = "Edit note",
-            initialTitle = cap.title,
-            initialNote = cap.note,
-            onDismiss = { editFlashCapture = null },
-            onCapture = { title, note, tags ->
-                onUpdateCapture(cap.id, title, note, tags)
-                editFlashCapture = null
-                flashCaptureId = null
-            }
-        )
-    }
-    if (showJournalDialog) {
-        CaptureJournalDialog(
-            appData = appData,
-            onDismiss = { showJournalDialog = false },
-            onDelete = onDeleteCapture,
-            onReopenToInbox = onReopenCapture
         )
     }
 
@@ -335,7 +264,7 @@ fun TodayScreen(
             Spacer(Modifier.weight(1f))
             // Compact pill actions
             Surface(
-                onClick = { showJournalDialog = true },
+                onClick = onOpenJournal,
                 shape = RoundedCornerShape(20.dp),
                 color = colors.surfaceVariant
             ) {
@@ -348,11 +277,7 @@ fun TodayScreen(
                 )
             }
             Surface(
-                onClick = {
-                    capturePresetTags = emptyList()
-                    captureDialogTitle = null
-                    showCaptureDialog = true
-                },
+                onClick = onOpenWrite,
                 shape = RoundedCornerShape(20.dp),
                 color = colors.primary.copy(alpha = 0.14f)
             ) {
@@ -435,7 +360,7 @@ fun TodayScreen(
                     RecentWriteFlashCard(
                         cap = flashCap,
                         colors = colors,
-                        onEdit = { editFlashCapture = flashCap },
+                        onEdit = onOpenWrite,
                         onDismiss = { flashCaptureId = null }
                     )
                 }
@@ -508,7 +433,7 @@ fun TodayScreen(
                             color = colors.onSurfaceVariant,
                             fontSize = 11.sp,
                             modifier = Modifier
-                                .clickable { showJournalDialog = true }
+                                .clickable(onClick = onOpenJournal)
                                 .padding(4.dp)
                         )
                     }

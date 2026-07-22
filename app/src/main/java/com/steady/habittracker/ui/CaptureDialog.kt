@@ -358,7 +358,7 @@ fun CaptureDialog(
 }
 
 @Composable
-private fun CaptureTagChip(
+internal fun CaptureTagChip(
     label: String,
     glyph: String,
     selected: Boolean,

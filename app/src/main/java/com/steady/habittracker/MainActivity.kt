@@ -58,6 +58,9 @@ import com.steady.habittracker.data.SleepNightSession
 import com.steady.habittracker.ui.AccentHuePicker
 import com.steady.habittracker.ui.AskGrokScreen
 import com.steady.habittracker.ui.HistoryScreen
+import com.steady.habittracker.ui.JournalScreen
+import com.steady.habittracker.ui.WriteScreen
+import com.steady.habittracker.data.CaptureItem
 import com.steady.habittracker.ui.LogEntryDialog
 import com.steady.habittracker.ui.ManageScreen
 import com.steady.habittracker.ui.OnboardingScreen
@@ -212,6 +215,12 @@ fun SteadyApp(
     }
     var showDreamlineWizard by remember { mutableStateOf(false) }
     var showAskGrok by remember { mutableStateOf(false) }
+    var showWrite by remember { mutableStateOf(false) }
+    var showJournal by remember { mutableStateOf(false) }
+    var writeEditItem by remember { mutableStateOf<CaptureItem?>(null) }
+    var writePresetTags by remember { mutableStateOf<List<String>>(emptyList()) }
+    var writeForceTags by remember { mutableStateOf<List<String>>(emptyList()) }
+    var writeScreenTitle by remember { mutableStateOf<String?>(null) }
 
     val context = LocalContext.current
     val activity = context as? MainActivity
@@ -267,7 +276,27 @@ fun SteadyApp(
         }
     }
     LaunchedEffect(deepCapture) {
-        if (deepCapture) selectedTab = 0
+        if (deepCapture) {
+            selectedTab = 0
+            writeEditItem = null
+            writePresetTags = deepCapturePreset
+            writeForceTags = if (deepCapturePreset.any {
+                    it.equals(com.steady.habittracker.data.CaptureTags.CHECKIN, ignoreCase = true)
+                }
+            ) {
+                listOf(com.steady.habittracker.data.CaptureTags.CHECKIN)
+            } else {
+                emptyList()
+            }
+            writeScreenTitle = deepCaptureTitle
+            showWrite = true
+            activity?.deepLinkOpenCapture?.value = false
+            deepCaptureState.value = false
+            activity?.deepLinkCapturePresetTags?.value = emptyList()
+            deepCapturePresetState.value = emptyList()
+            activity?.deepLinkCaptureDialogTitle?.value = null
+            deepCaptureTitleState.value = null
+        }
     }
     LaunchedEffect(deepMetricLog) {
         if (deepMetricLog) selectedTab = 0
@@ -285,16 +314,16 @@ fun SteadyApp(
             val tags = pendingCaptureTags.ifEmpty {
                 listOf(com.steady.habittracker.data.CaptureTags.CHECKIN)
             }
-            activity?.deepLinkCapturePresetTags?.value = tags
-            deepCapturePresetState.value = tags
-            if (tags.any {
+            writeEditItem = null
+            writePresetTags = tags
+            writeForceTags = if (tags.any {
                     it.equals(com.steady.habittracker.data.CaptureTags.CHECKIN, ignoreCase = true)
                 }
             ) {
-                activity?.deepLinkCaptureDialogTitle?.value = "Awareness check-in"
-                deepCaptureTitleState.value = "Awareness check-in"
-            }
-            activity?.deepLinkOpenCapture?.value = true
+                listOf(com.steady.habittracker.data.CaptureTags.CHECKIN)
+            } else emptyList()
+            writeScreenTitle = if (writeForceTags.isNotEmpty()) "Awareness check-in" else null
+            showWrite = true
             viewModel.pendingOpenCapture.value = false
             viewModel.pendingCapturePresetTags.value = emptyList()
         }
@@ -607,6 +636,73 @@ fun SteadyApp(
                 )
             }
         }
+        showWrite -> {
+            Surface(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .safeDrawingPadding(),
+                color = bgColor
+            ) {
+                WriteScreen(
+                    appData = appData,
+                    onBack = {
+                        showWrite = false
+                        writeEditItem = null
+                        writePresetTags = emptyList()
+                        writeForceTags = emptyList()
+                        writeScreenTitle = null
+                    },
+                    onSave = { title, note, tags ->
+                        viewModel.addCapture(title, note, tags)
+                    },
+                    onUpdate = { id, title, note, tags ->
+                        viewModel.updateCapture(id, title, note, tags)
+                    },
+                    onProcess = viewModel::markCaptureProcessed,
+                    onDelete = viewModel::deleteCapture,
+                    onOpenJournal = {
+                        showWrite = false
+                        writeEditItem = null
+                        showJournal = true
+                    },
+                    editItem = writeEditItem,
+                    presetTags = writePresetTags.takeIf { it.isNotEmpty() },
+                    forceTags = writeForceTags,
+                    screenTitle = writeScreenTitle
+                )
+            }
+        }
+        showJournal -> {
+            Surface(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .safeDrawingPadding(),
+                color = bgColor
+            ) {
+                JournalScreen(
+                    appData = appData,
+                    onBack = { showJournal = false },
+                    onDelete = viewModel::deleteCapture,
+                    onReopenToInbox = viewModel::reopenCaptureToInbox,
+                    onEdit = { cap ->
+                        writeEditItem = cap
+                        writePresetTags = emptyList()
+                        writeForceTags = emptyList()
+                        writeScreenTitle = "Edit note"
+                        showJournal = false
+                        showWrite = true
+                    },
+                    onOpenWrite = {
+                        writeEditItem = null
+                        writePresetTags = emptyList()
+                        writeForceTags = emptyList()
+                        writeScreenTitle = null
+                        showJournal = false
+                        showWrite = true
+                    }
+                )
+            }
+        }
         else -> {
     Scaffold(
         containerColor = bgColor,
@@ -861,22 +957,19 @@ fun SteadyApp(
                         onProcessCapture = viewModel::markCaptureProcessed,
                         onDeleteCapture = viewModel::deleteCapture,
                         onReopenCapture = viewModel::reopenCaptureToInbox,
+                        onOpenWrite = {
+                            writeEditItem = null
+                            writePresetTags = emptyList()
+                            writeForceTags = emptyList()
+                            writeScreenTitle = null
+                            showWrite = true
+                        },
+                        onOpenJournal = { showJournal = true },
                         onChatWithGrok = { showAskGrok = true },
                         onSetTodayGridColumns = viewModel::setTodayGridColumns,
                         onCreateMetric = { name -> viewModel.addMetricHabit(name) },
                         onLogMetric = viewModel::logEntry,
                         onStartRoutine = { rt -> activeWorkoutRoutine = rt },
-                        openCaptureRequest = deepCapture,
-                        openCapturePresetTags = deepCapturePreset,
-                        openCaptureDialogTitle = deepCaptureTitle,
-                        onOpenCaptureConsumed = {
-                            activity?.deepLinkOpenCapture?.value = false
-                            deepCaptureState.value = false
-                            activity?.deepLinkCapturePresetTags?.value = emptyList()
-                            deepCapturePresetState.value = emptyList()
-                            activity?.deepLinkCaptureDialogTitle?.value = null
-                            deepCaptureTitleState.value = null
-                        },
                         openLogRequest = deepMetricLog,
                         onOpenLogConsumed = {
                             activity?.deepLinkOpenMetricLog?.value = false

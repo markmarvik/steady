@@ -45,7 +45,8 @@ See Manage → **Blocks** to add templates (sensor auto-read, screen usage, snor
 - **Square habit grid** — two-finger horizontal pinch to densify (2–4 columns); tap to log, long-press to skip
 - Habit types: checkbox, counter, duration, scale, notes
 - Multi-group habits, stacking (“after …”), skip when needed
-- **Write** (pen) for ideas/notes; Journal for archive; workout session logger for exercise routines
+- **Write** & **Journal** full screens (not popups) for ideas, notes, search, filters, and inbox management
+- Workout session logger for exercise routines
 
 ### Path
 - **Dreamline wizard** — Having / Being / Doing across 6- and 12-month horizons
