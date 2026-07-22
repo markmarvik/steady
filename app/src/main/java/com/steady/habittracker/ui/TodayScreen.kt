@@ -22,6 +22,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -30,6 +32,10 @@ import java.time.LocalTime
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.positionChanged
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
@@ -393,46 +399,32 @@ fun TodayScreen(
                 )
             }
         }
-        // Density: 2 / 3 / 4 columns of habit squares
-        val gridCols = appData.todayGridColumns.coerceIn(2, 4)
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(bottom = 6.dp),
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(
-                "Grid",
-                fontSize = 11.sp,
-                color = colors.onSurfaceVariant
-            )
-            listOf(2, 3, 4).forEach { n ->
-                Surface(
-                    onClick = { onSetTodayGridColumns(n) },
-                    shape = RoundedCornerShape(8.dp),
-                    color = if (gridCols == n) colors.primary.copy(alpha = 0.2f) else colors.surfaceVariant
-                ) {
-                    Text(
-                        "${n}×",
-                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
-                        fontSize = 11.sp,
-                        fontWeight = if (gridCols == n) FontWeight.Bold else FontWeight.Medium,
-                        color = if (gridCols == n) colors.primary else colors.onSurface
-                    )
-                }
-            }
-            Text(
-                "more columns = denser",
-                fontSize = 10.sp,
-                color = colors.onSurfaceVariant,
-                modifier = Modifier.padding(start = 4.dp)
-            )
+
+        // Habit square density (2–4 cols): two-finger horizontal pinch — no chrome buttons
+        var gridCols by remember {
+            mutableIntStateOf(appData.todayGridColumns.coerceIn(2, 4))
+        }
+        LaunchedEffect(appData.todayGridColumns) {
+            gridCols = appData.todayGridColumns.coerceIn(2, 4)
         }
 
         LazyColumn(
             state = listState,
-            modifier = Modifier.weight(1f),
+            modifier = Modifier
+                .weight(1f)
+                .pointerInput(Unit) {
+                    detectHorizontalGridZoom { zoomInLargerTiles ->
+                        val next = if (zoomInLargerTiles) {
+                            (gridCols - 1).coerceAtLeast(2)
+                        } else {
+                            (gridCols + 1).coerceAtMost(4)
+                        }
+                        if (next != gridCols) {
+                            gridCols = next
+                            onSetTodayGridColumns(next)
+                        }
+                    }
+                },
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             // #44 ephemeral just-created note with edit + fade/flash
@@ -658,8 +650,8 @@ fun TodayScreen(
                 item(key = "sec_${bundle.section.group.id}", contentType = "sec") {
                     TimelineSectionHeader(section = bundle.section, colors = colors)
                 }
-                // Square habit grid — column count from appData.todayGridColumns (2–4)
-                val cols = appData.todayGridColumns.coerceIn(2, 4)
+                // Square habit grid — pinch horizontally to change columns (2–4)
+                val cols = gridCols
                 val chunks = bundle.rows.chunked(cols)
                 items(
                     chunks.size,
@@ -683,7 +675,7 @@ fun TodayScreen(
                                 modifier = Modifier.weight(1f)
                             )
                         }
-                        repeat(cols - chunk.size) {
+                        repeat(cols - chunk.count()) {
                             Spacer(Modifier.weight(1f))
                         }
                     }
@@ -825,6 +817,54 @@ private fun TimelineSectionHeader(section: TimelineSection, colors: TodayListCol
                 text = "earlier",
                 style = TextStyle(color = colors.onSurfaceVariant, fontSize = 10.sp)
             )
+        }
+    }
+}
+
+/**
+ * Two-finger horizontal pinch on the Today list:
+ * - fingers move apart → fewer columns (larger squares)
+ * - fingers move together → more columns (denser)
+ * One-finger scroll is left alone (only consumes when ≥2 pointers).
+ */
+private suspend fun androidx.compose.ui.input.pointer.PointerInputScope.detectHorizontalGridZoom(
+    onStep: (zoomInLargerTiles: Boolean) -> Unit
+) {
+    awaitEachGesture {
+        awaitFirstDown(requireUnconsumed = false)
+        var lastSpanX: Float? = null
+        var accumRatio = 1f
+        while (true) {
+            val event = awaitPointerEvent()
+            val pressed = event.changes.filter { it.pressed }
+            if (pressed.size < 2) {
+                lastSpanX = null
+                accumRatio = 1f
+                if (pressed.isEmpty()) break
+                continue
+            }
+            val xs = pressed.map { it.position.x }
+            val spanX = (xs.maxOrNull()!! - xs.minOrNull()!!).coerceAtLeast(1f)
+            val prev = lastSpanX
+            lastSpanX = spanX
+            if (prev != null && prev > 24f) {
+                val step = spanX / prev
+                accumRatio *= step
+                when {
+                    accumRatio >= 1.14f -> {
+                        onStep(true)
+                        accumRatio = 1f
+                    }
+                    accumRatio <= 0.88f -> {
+                        onStep(false)
+                        accumRatio = 1f
+                    }
+                }
+            }
+            // Steal the gesture only while pinching so vertical fling still works one-finger
+            pressed.forEach { change ->
+                if (change.positionChanged()) change.consume()
+            }
         }
     }
 }

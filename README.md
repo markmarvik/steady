@@ -42,7 +42,7 @@ See Manage → **Blocks** to add templates (sensor auto-read, screen usage, snor
 ### Today
 - Timeline groups ordered by your **Daily Planner** (24h schedule)
 - Current period highlighted; past / now / next sections
-- **Square habit grid** (2 / 3 / 4 columns) — tap to log, long-press to skip
+- **Square habit grid** — two-finger horizontal pinch to densify (2–4 columns); tap to log, long-press to skip
 - Habit types: checkbox, counter, duration, scale, notes
 - Multi-group habits, stacking (“after …”), skip when needed
 - **Write** (pen) for ideas/notes; Journal for archive; workout session logger for exercise routines
